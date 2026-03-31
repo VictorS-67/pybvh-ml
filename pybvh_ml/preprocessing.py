@@ -12,7 +12,7 @@ from typing import Callable
 import numpy as np
 import numpy.typing as npt
 
-from pybvh import Bvh, read_bvh_directory, compute_normalization_stats
+from pybvh import Bvh, read_bvh_file, read_bvh_directory, compute_normalization_stats
 from pybvh_ml.skeleton import get_skeleton_info
 
 
@@ -48,6 +48,7 @@ def preprocess_directory(
     center_root: bool = True,
     include_quaternions: bool = False,
     label_fn: Callable[[str], int] | None = None,
+    filter_fn: Callable[[str], bool] | None = None,
     file_pattern: str = "*.bvh",
 ) -> dict:
     """Convert a directory of BVH files to an on-disk dataset.
@@ -69,6 +70,10 @@ def preprocess_directory(
     label_fn : callable, optional
         ``label_fn(filename_stem) -> int``.  If provided, stores
         per-clip integer labels.
+    filter_fn : callable, optional
+        ``filter_fn(filename_stem) -> bool``.  If provided, only
+        files for which it returns True are loaded and processed.
+        Applied before loading — skipped files are never parsed.
     file_pattern : str
         Glob pattern for BVH files (default ``"*.bvh"``).
 
@@ -81,12 +86,16 @@ def preprocess_directory(
     bvh_dir = Path(bvh_dir)
     output_path = Path(output_path)
 
-    clips = read_bvh_directory(str(bvh_dir), pattern=file_pattern, sort=True)
-    if len(clips) == 0:
-        raise ValueError(f"No BVH files found in {bvh_dir} with pattern '{file_pattern}'")
+    all_paths = sorted(bvh_dir.glob(file_pattern))
+    if filter_fn is not None:
+        all_paths = [p for p in all_paths if filter_fn(p.stem)]
 
-    filenames = sorted(bvh_dir.glob(file_pattern))
-    stems = [f.stem for f in filenames]
+    if len(all_paths) == 0:
+        raise ValueError(f"No BVH files found in {bvh_dir} with pattern '{file_pattern}'"
+                         + (" after filtering" if filter_fn is not None else ""))
+
+    clips = [read_bvh_file(p) for p in all_paths]
+    stems = [p.stem for p in all_paths]
 
     # Extract data per clip
     all_root_pos: list[npt.NDArray[np.float64]] = []

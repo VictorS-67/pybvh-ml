@@ -5,6 +5,7 @@ or any data loading loop.
 """
 from __future__ import annotations
 
+import inspect
 from typing import Callable
 
 import numpy as np
@@ -22,6 +23,11 @@ class AugmentationPipeline:
     which are resolved at each invocation using the pipeline's rng.
     This enables random parameter sampling per sample (e.g., random
     rotation angles).
+
+    The pipeline automatically forwards its ``rng`` to augmentation
+    functions that accept an ``rng`` parameter (detected via
+    signature inspection).  This ensures reproducibility without
+    requiring ``"rng": lambda rng: rng`` in kwargs.
 
     Parameters
     ----------
@@ -79,6 +85,12 @@ class AugmentationPipeline:
                     k: v(rng) if callable(v) else v
                     for k, v in kwargs.items()
                 }
+                # Forward rng if the function accepts it and the user
+                # didn't already provide it via kwargs.
+                if "rng" not in resolved:
+                    sig = inspect.signature(fn)
+                    if "rng" in sig.parameters:
+                        resolved["rng"] = rng
                 joint_data, root_pos = fn(joint_data, root_pos, **resolved)
 
         return joint_data, root_pos

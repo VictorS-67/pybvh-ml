@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`AugmentationPipeline` now auto-forwards `rng`** to augmentation functions that accept it (via signature inspection). Previously, functions like `add_joint_noise_quaternions` and `dropout_arrays` received `rng=None` and created unseeded generators, breaking reproducibility. User-provided `rng` kwargs still take precedence.
+
+### Added
+
+- **`filter_fn` parameter in `preprocess_directory`** — `filter_fn(filename_stem) -> bool` allows excluding files before they are loaded and processed. Skipped files are never parsed, saving I/O and memory when preprocessing a subset of a large directory.
+
 ## [0.2.0] - 2026-03-31
 
 ### Added

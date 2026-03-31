@@ -103,7 +103,7 @@ pybvh-ml/
 - `convert_arrays(joint_data, from_repr, to_repr, euler_orders)` — unified representation conversion dispatch for `(F, J, C)` arrays, wrapping pybvh's rotation functions
 
 **`pipeline.py`** — Composable augmentation pipeline
-- `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling
+- `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection)
 
 **`sequences.py`** — Sequence length utilities
 - `sliding_window(data, window_size, stride)` → `(num_windows, window_size, ...)` fixed-length windows
@@ -122,6 +122,7 @@ pybvh-ml/
 - Supports output formats: `.npz`, `.hdf5` (if h5py installed)
 - Stores arrays + skeleton metadata + normalization stats in a single file
 - Optional label function `label_fn(filename) → int`
+- Optional filter function `filter_fn(filename_stem) → bool` — applied before loading, skipped files are never parsed
 
 **`metadata.py`** — Feature column descriptors
 - `FeatureDescriptor` — describes which columns correspond to which features in a packed array
@@ -172,8 +173,10 @@ pybvh-ml uses these pybvh entry points:
 ### 5.5 Joint noise is quaternion-only
 `add_joint_noise_quaternions` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma_deg)), converts to quaternion, and composes via Hamilton product. This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. No 6D variant — same rationale as speed perturbation and dropout (the math is naturally quaternion-based).
 
-### 5.6 Callable kwargs in AugmentationPipeline
-Kwargs values can be callables of the form `lambda rng: value`, resolved at each invocation. This enables per-sample random parameter sampling (e.g., random rotation angles) without modifying augmentation function signatures. Static kwargs continue to work unchanged. Functions that need `rng` for their own randomness (like `dropout_arrays`, `add_joint_noise_quaternions`) accept it as an optional kwarg — forward the pipeline's rng via `"rng": lambda rng: rng` if reproducibility is needed.
+### 5.6 Callable kwargs and rng forwarding in AugmentationPipeline
+Kwargs values can be callables of the form `lambda rng: value`, resolved at each invocation. This enables per-sample random parameter sampling (e.g., random rotation angles) without modifying augmentation function signatures. Static kwargs continue to work unchanged.
+
+The pipeline automatically forwards its `rng` to augmentation functions that accept an `rng` parameter (detected via `inspect.signature`). This ensures reproducibility for functions like `dropout_arrays` and `add_joint_noise_quaternions` without requiring explicit `"rng": lambda rng: rng` in kwargs. If the user provides an explicit `rng` kwarg (static or callable), it takes precedence over the auto-forwarded one.
 
 ### 5.7 Uniform temporal sampling matches PySKL
 `uniform_temporal_sample` reproduces the PySKL/MMAction2 `UniformSampleFrames` algorithm as a stateless function. Three regimes:
@@ -215,7 +218,7 @@ Kwargs values can be callables of the form `lambda rng: value`, resolved at each
 
 ## 8. Test Patterns
 
-Tests are in `tests/test_pybvh_ml.py` (191 tests, 14 test classes). Test BVH files are in `bvh_data/` at the project root.
+Tests are in `tests/test_pybvh_ml.py` (201 tests, 16 test classes). Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures**:
 - `bvh_example` — loads `bvh_data/bvh_example.bvh` (24 joints, 56 frames, ZYX)

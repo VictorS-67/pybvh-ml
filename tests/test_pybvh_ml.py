@@ -1551,3 +1551,142 @@ class TestPipelineCallableKwargs:
         ref_q, ref_p = rotate_quaternions_vertical(quats, pos, 90.0, 1)
         np.testing.assert_allclose(new_p, ref_p, atol=1e-12)
         np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
+
+
+# =============================================================================
+# Pipeline rng forwarding (bug fix)
+# =============================================================================
+
+class TestPipelineRngForwarding:
+    """Tests for automatic rng forwarding to augmentation functions."""
+
+    def test_noise_reproducible_via_pipeline(self, bvh_example):
+        """add_joint_noise_quaternions should be deterministic in pipeline."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (add_joint_noise_quaternions, 1.0, {"sigma_deg": 5.0}),
+        ])
+        q1, _ = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        q2, _ = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(q1, q2)
+
+    def test_dropout_reproducible_via_pipeline(self, bvh_example):
+        """dropout_arrays should be deterministic in pipeline."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (dropout_arrays, 1.0, {"drop_rate": 0.3}),
+        ])
+        q1, p1 = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        q2, p2 = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(q1, q2)
+        np.testing.assert_array_equal(p1, p2)
+
+    def test_no_rng_functions_unaffected(self, bvh_example):
+        """Functions without rng param should still work."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_quaternions_vertical, 1.0, {"angle_deg": 90, "up_idx": 1}),
+        ])
+        # Should not raise TypeError
+        new_q, new_p = pipeline(quats, pos, rng=np.random.default_rng(42))
+        ref_q, ref_p = rotate_quaternions_vertical(quats, pos, 90.0, 1)
+        np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
+
+    def test_explicit_rng_kwarg_takes_precedence(self, bvh_example):
+        """User-provided rng kwarg should not be overwritten."""
+        quats, pos = _get_quat_data(bvh_example)
+        custom_rng = np.random.default_rng(999)
+        pipeline = AugmentationPipeline([
+            (add_joint_noise_quaternions, 1.0, {
+                "sigma_deg": 5.0,
+                "rng": lambda rng: custom_rng,  # explicit override
+            }),
+        ])
+        q1, _ = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        # Should use custom_rng(999), not pipeline's rng(42)
+        custom_rng2 = np.random.default_rng(999)
+        q2, _ = add_joint_noise_quaternions(
+            quats.copy(), pos.copy(), sigma_deg=5.0, rng=custom_rng2)
+        np.testing.assert_array_equal(q1, q2)
+
+    def test_mixed_rng_and_no_rng_functions(self, bvh_example):
+        """Pipeline with both rng and non-rng functions should work."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_quaternions_vertical, 1.0, {
+                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "up_idx": 1,
+            }),
+            (add_joint_noise_quaternions, 1.0, {"sigma_deg": 2.0}),
+        ])
+        q1, p1 = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        q2, p2 = pipeline(quats.copy(), pos.copy(), rng=np.random.default_rng(42))
+        np.testing.assert_allclose(q1, q2, atol=1e-12)
+        np.testing.assert_allclose(p1, p2, atol=1e-12)
+
+
+# =============================================================================
+# Preprocessing filter_fn
+# =============================================================================
+
+class TestPreprocessingFilter:
+    """Tests for filter_fn in preprocess_directory."""
+
+    @pytest.fixture
+    def bvh_dir(self):
+        return Path(__file__).parent.parent / "bvh_data"
+
+    def test_filter_reduces_clips(self, bvh_dir, tmp_path):
+        """filter_fn should exclude files before loading."""
+        out = tmp_path / "filtered.npz"
+        # Only include bvh_example
+        result = preprocess_directory(
+            bvh_dir, out,
+            filter_fn=lambda stem: stem == "bvh_example",
+        )
+        assert result["num_clips"] == 1
+        assert result["filenames"] == ["bvh_example"]
+
+    def test_filter_none_includes_all(self, bvh_dir, tmp_path):
+        """filter_fn=None should include all matching files."""
+        out = tmp_path / "all.npz"
+        # Use single-file pattern to avoid mixed-skeleton errors
+        result = preprocess_directory(
+            bvh_dir, out, filter_fn=None, file_pattern="bvh_example.bvh")
+        assert result["num_clips"] == 1
+
+    def test_filter_with_label_fn(self, bvh_dir, tmp_path):
+        """filter_fn and label_fn should compose correctly."""
+        allowed = {"bvh_example", "bvh_test1"}
+        labels_map = {"bvh_example": 0, "bvh_test1": 1}
+        out = tmp_path / "labeled.npz"
+        result = preprocess_directory(
+            bvh_dir, out,
+            filter_fn=lambda stem: stem in allowed,
+            label_fn=lambda stem: labels_map[stem],
+        )
+        assert result["num_clips"] == 2
+        loaded = load_preprocessed(out)
+        np.testing.assert_array_equal(loaded["labels"], [0, 1])
+
+    def test_filter_excludes_all_raises(self, bvh_dir, tmp_path):
+        """Filtering out everything should raise ValueError."""
+        out = tmp_path / "empty.npz"
+        with pytest.raises(ValueError, match="No BVH files found.*after filtering"):
+            preprocess_directory(
+                bvh_dir, out,
+                filter_fn=lambda stem: False,
+            )
+
+    def test_filter_roundtrip(self, bvh_dir, tmp_path):
+        """Filtered output should load correctly."""
+        out = tmp_path / "filtered.npz"
+        preprocess_directory(
+            bvh_dir, out,
+            filter_fn=lambda stem: stem == "bvh_example",
+            representation="quaternion",
+        )
+        loaded = load_preprocessed(out)
+        assert len(loaded["clips"]) == 1
+        assert loaded["representation"] == "quaternion"
+        assert loaded["filenames"] == ["bvh_example"]
