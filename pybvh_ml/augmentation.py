@@ -319,6 +319,75 @@ def dropout_arrays(
     return new_quats, new_root_pos
 
 
+def add_joint_noise_quaternions(
+    joint_quats: npt.NDArray[np.float64],
+    root_pos: npt.NDArray[np.float64],
+    sigma_deg: float,
+    sigma_pos: float = 0.0,
+    rng: np.random.Generator | None = None,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Add Gaussian noise to quaternion joint rotations.
+
+    For each joint at each frame, generates a small random rotation
+    (axis uniformly random on the unit sphere, angle sampled from
+    ``N(0, sigma_deg)`` in degrees) and composes it with the original
+    quaternion: ``q_noisy = q_noise * q_original``.
+
+    Optionally adds Gaussian noise to root positions as well.
+
+    Parameters
+    ----------
+    joint_quats : ndarray, shape (F, J, 4)
+        Quaternion rotations ``(w, x, y, z)`` per joint per frame.
+    root_pos : ndarray, shape (F, 3)
+        Root translation per frame.
+    sigma_deg : float
+        Standard deviation of rotation noise in degrees.
+    sigma_pos : float
+        Standard deviation of position noise (default 0 = no noise).
+    rng : numpy Generator, optional
+
+    Returns
+    -------
+    new_joint_quats : ndarray, shape (F, J, 4)
+    new_root_pos : ndarray, shape (F, 3)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    joint_quats = np.asarray(joint_quats, dtype=np.float64)
+    root_pos = np.asarray(root_pos, dtype=np.float64)
+
+    F, J, _ = joint_quats.shape
+
+    # 1. Random axis (uniform on unit sphere) per joint per frame
+    axis = rng.standard_normal((F, J, 3))
+    norm = np.linalg.norm(axis, axis=-1, keepdims=True)
+    norm = np.where(norm < 1e-15, 1.0, norm)
+    axis = axis / norm
+
+    # 2. Random angle from N(0, sigma_deg), converted to radians
+    half_angle = np.radians(rng.normal(0, sigma_deg, (F, J))) / 2.0
+
+    # 3. Build noise quaternion: q = [cos(a/2), sin(a/2) * axis]
+    q_noise = np.empty((F, J, 4), dtype=np.float64)
+    q_noise[..., 0] = np.cos(half_angle)
+    q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
+
+    # 4. Compose: q_noisy = q_noise * q_original
+    new_quats = _quat_multiply(q_noise, joint_quats)
+
+    # 5. Re-normalize for numerical safety
+    new_quats /= np.linalg.norm(new_quats, axis=-1, keepdims=True)
+
+    # 6. Root position noise
+    new_root_pos = root_pos.copy()
+    if sigma_pos > 0:
+        new_root_pos = new_root_pos + rng.normal(0, sigma_pos, root_pos.shape)
+
+    return new_quats, new_root_pos
+
+
 # =========================================================================
 # 6D-space augmentation
 # =========================================================================

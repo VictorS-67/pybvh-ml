@@ -124,6 +124,140 @@ def standardize_length(
             f"Unknown method '{method}'. Use 'pad', 'crop', or 'resample'.")
 
 
+def uniform_temporal_sample(
+    num_frames: int,
+    clip_length: int,
+    mode: str = "train",
+    rng: np.random.Generator | None = None,
+) -> npt.NDArray[np.intp]:
+    """Sample *clip_length* frame indices from a sequence of *num_frames*.
+
+    Divides the sequence into *clip_length* equal segments and picks
+    one frame index per segment.  In ``"train"`` mode, picks a random
+    offset within each segment (temporal augmentation).  In ``"test"``
+    mode, picks a deterministic offset (reproducible evaluation).
+
+    Handles three regimes:
+
+    - ``num_frames < clip_length``: sequential indices with a random
+      start (train) or start at 0 (test).  Some indices will be
+      ``>= num_frames``; the caller must apply
+      ``indices % num_frames`` before indexing into data.
+    - ``clip_length <= num_frames < 2 * clip_length``: starts with
+      ``[0, ..., clip_length-1]`` and randomly inserts gaps to
+      spread indices across the full ``[0, num_frames)`` range.
+    - ``num_frames >= 2 * clip_length``: uniform segment-based
+      sampling with random (train) or deterministic (test) offsets
+      within each segment.
+
+    Parameters
+    ----------
+    num_frames : int
+        Total frames in the source sequence.
+    clip_length : int
+        Number of frame indices to return.
+    mode : {"train", "test"}
+        ``"train"`` for random offsets, ``"test"`` for deterministic.
+    rng : numpy Generator, optional
+        For reproducibility in train mode.  Ignored in test mode.
+
+    Returns
+    -------
+    ndarray of shape (clip_length,), dtype int
+        Frame indices.  May contain values ``>= num_frames`` when
+        ``num_frames < clip_length``; apply ``% num_frames`` to use.
+    """
+    if num_frames < 1:
+        raise ValueError(f"num_frames must be >= 1, got {num_frames}")
+    if clip_length < 1:
+        raise ValueError(f"clip_length must be >= 1, got {clip_length}")
+
+    if mode == "train":
+        if rng is None:
+            rng = np.random.default_rng()
+    elif mode == "test":
+        rng = np.random.default_rng(0)
+    else:
+        raise ValueError(f"mode must be 'train' or 'test', got '{mode}'")
+
+    if num_frames < clip_length:
+        # Short sequence: sequential indices with random start (train)
+        # or start=0 (test).  Caller applies % num_frames for wrapping.
+        start = rng.integers(0, num_frames) if mode == "train" else 0
+        return np.arange(start, start + clip_length, dtype=np.intp)
+
+    if num_frames < 2 * clip_length:
+        # Dense: start with [0..clip_length-1], randomly insert gaps
+        # to spread indices across the full [0, num_frames) range.
+        n_gaps = num_frames - clip_length
+        basic = np.arange(clip_length, dtype=np.intp)
+        gap_positions = rng.choice(clip_length + 1, size=n_gaps, replace=False)
+        offset = np.zeros(clip_length + 1, dtype=np.intp)
+        offset[gap_positions] = 1
+        offset = np.cumsum(offset)
+        return basic + offset[:clip_length]
+
+    # Uniform segment-based sampling: integer boundaries, discrete offsets
+    boundaries = np.array(
+        [i * num_frames // clip_length for i in range(clip_length + 1)],
+        dtype=np.intp,
+    )
+    seg_sizes = np.diff(boundaries)
+    seg_starts = boundaries[:clip_length]
+    offsets = rng.integers(seg_sizes)
+    return seg_starts + offsets
+
+
+def sample_temporal(
+    data: npt.NDArray[np.float64],
+    clip_length: int,
+    num_samples: int = 1,
+    mode: str = "train",
+    rng: np.random.Generator | None = None,
+) -> npt.NDArray[np.float64]:
+    """Sample *clip_length* frames from *data* with wraparound.
+
+    Convenience wrapper around :func:`uniform_temporal_sample` that
+    applies the sampled indices to an array and supports generating
+    multiple independent samples.
+
+    Parameters
+    ----------
+    data : ndarray, shape (T, ...)
+        Input array where axis 0 is the time dimension.
+    clip_length : int
+        Number of frames to sample.
+    num_samples : int
+        Number of independent samples to generate (default 1).
+    mode : {"train", "test"}
+    rng : numpy Generator, optional
+
+    Returns
+    -------
+    ndarray
+        Shape ``(num_samples, clip_length, ...)`` if ``num_samples > 1``,
+        or ``(clip_length, ...)`` if ``num_samples == 1``.
+    """
+    data = np.asarray(data)
+    T = data.shape[0]
+
+    if num_samples < 1:
+        raise ValueError(f"num_samples must be >= 1, got {num_samples}")
+
+    if rng is None and mode == "train":
+        rng = np.random.default_rng()
+
+    samples = []
+    for _ in range(num_samples):
+        indices = uniform_temporal_sample(T, clip_length, mode=mode, rng=rng)
+        indices = indices % T
+        samples.append(data[indices])
+
+    if num_samples == 1:
+        return samples[0]
+    return np.stack(samples, axis=0)
+
+
 def _pad(
     data: npt.NDArray[np.float64],
     target_length: int,

@@ -18,6 +18,11 @@ class AugmentationPipeline:
     *fn* has signature ``fn(joint_data, root_pos, **kwargs)`` and
     returns ``(new_joint_data, new_root_pos)``.
 
+    Kwargs values may be **callables** of the form ``lambda rng: value``,
+    which are resolved at each invocation using the pipeline's rng.
+    This enables random parameter sampling per sample (e.g., random
+    rotation angles).
+
     Parameters
     ----------
     augmentations : list of (callable, float, dict)
@@ -29,7 +34,10 @@ class AugmentationPipeline:
     --------
     >>> from pybvh_ml.augmentation import rotate_quaternions_vertical, mirror_quaternions
     >>> pipeline = AugmentationPipeline([
-    ...     (rotate_quaternions_vertical, 0.5, {"angle_deg": 90, "up_idx": 1}),
+    ...     (rotate_quaternions_vertical, 1.0, {
+    ...         "angle_deg": lambda rng: rng.uniform(-180, 180),
+    ...         "up_idx": 1,
+    ...     }),
     ...     (mirror_quaternions, 0.5, {"lr_joint_pairs": pairs, "lateral_idx": 0}),
     ... ])
     >>> new_quats, new_pos = pipeline(joint_quats, root_pos, rng=rng)
@@ -67,7 +75,11 @@ class AugmentationPipeline:
 
         for fn, prob, kwargs in self.augmentations:
             if rng.random() < prob:
-                joint_data, root_pos = fn(joint_data, root_pos, **kwargs)
+                resolved = {
+                    k: v(rng) if callable(v) else v
+                    for k, v in kwargs.items()
+                }
+                joint_data, root_pos = fn(joint_data, root_pos, **resolved)
 
         return joint_data, root_pos
 

@@ -424,8 +424,10 @@ class TestMetadata:
 from pybvh_ml.augmentation import (
     rotate_quaternions_vertical, mirror_quaternions,
     speed_perturbation_arrays, dropout_arrays,
+    add_joint_noise_quaternions,
     rotate_rot6d_vertical, mirror_rot6d,
 )
+from pybvh_ml.sequences import uniform_temporal_sample, sample_temporal
 from pybvh_ml.convert import convert_arrays
 from pybvh_ml.pipeline import AugmentationPipeline
 
@@ -1199,3 +1201,353 @@ class TestTorchDatasets:
         assert batch["data"].shape[0] == 2
         assert "lengths" in batch
         assert "mask" in batch
+
+
+# =============================================================================
+# Uniform temporal sampling
+# =============================================================================
+
+class TestUniformTemporalSample:
+    """Tests for uniform_temporal_sample and sample_temporal."""
+
+    # --- uniform_temporal_sample ---
+
+    def test_output_length(self):
+        indices = uniform_temporal_sample(100, 20, mode="test")
+        assert indices.shape == (20,)
+
+    def test_short_sequence_wraps(self):
+        """When num_frames < clip_length, indices exceed num_frames."""
+        indices = uniform_temporal_sample(5, 20, mode="test")
+        assert indices.shape == (20,)
+        # Test mode starts at 0
+        np.testing.assert_array_equal(indices, np.arange(20))
+        # Some indices must be >= num_frames (wrapping)
+        assert np.any(indices >= 5)
+        # After modulo, all indices should be valid
+        assert np.all(indices % 5 < 5)
+
+    def test_short_sequence_uniform_coverage(self):
+        """Short wrapping gives each frame equal representation."""
+        indices = uniform_temporal_sample(5, 20, mode="test") % 5
+        # Each of 0..4 should appear exactly 4 times
+        for i in range(5):
+            assert np.sum(indices == i) == 4
+
+    def test_short_train_random_start(self):
+        """Train mode short sequences should have varying start offsets."""
+        starts = set()
+        for seed in range(20):
+            indices = uniform_temporal_sample(
+                5, 20, mode="train", rng=np.random.default_rng(seed))
+            starts.add(indices[0])
+        # Should see multiple different start positions
+        assert len(starts) > 1
+
+    def test_dense_regime(self):
+        """clip_length <= num_frames < 2*clip_length: scattered dense sampling."""
+        indices = uniform_temporal_sample(30, 20, mode="test")
+        assert indices.shape == (20,)
+        assert np.all(indices < 30)
+        assert np.all(indices >= 0)
+        # Indices should be non-decreasing
+        diffs = np.diff(indices)
+        assert np.all(diffs >= 0)
+        # Steps are either 1 (consecutive) or 2 (gap inserted)
+        assert np.all((diffs == 1) | (diffs == 2))
+        # Span should cover most of the range
+        assert indices[-1] - indices[0] >= 19
+
+    def test_uniform_regime(self):
+        """num_frames >= 2*clip_length: uniform segment sampling."""
+        indices = uniform_temporal_sample(200, 20, mode="test")
+        assert indices.shape == (20,)
+        assert np.all(indices < 200)
+        assert np.all(indices >= 0)
+
+    def test_uniform_regime_sorted(self):
+        """Uniform segment indices should be non-decreasing."""
+        indices = uniform_temporal_sample(500, 50, mode="train",
+                                          rng=np.random.default_rng(42))
+        assert np.all(np.diff(indices) >= 0)
+
+    def test_uniform_integer_boundaries(self):
+        """Segment boundaries should use integer division."""
+        # 100 frames, 7 clips → segments of 14 or 15 frames
+        indices = uniform_temporal_sample(100, 7, mode="test")
+        assert indices.shape == (7,)
+        # Each index must be within its integer-division segment
+        for i in range(7):
+            seg_start = i * 100 // 7
+            seg_end = (i + 1) * 100 // 7
+            assert seg_start <= indices[i] < seg_end
+
+    def test_boundary_dense_to_uniform(self):
+        """num_frames == 2*clip_length is the uniform regime boundary."""
+        # 2*clip_length: should be uniform (not dense)
+        indices = uniform_temporal_sample(40, 20, mode="train",
+                                          rng=np.random.default_rng(42))
+        assert indices.shape == (20,)
+        # Uniform regime: indices should NOT necessarily be consecutive
+        # (seg_size=2, so gaps are possible)
+        assert np.all(indices < 40)
+
+    def test_boundary_short_to_dense(self):
+        """num_frames == clip_length is the dense regime boundary."""
+        indices = uniform_temporal_sample(20, 20, mode="test")
+        assert indices.shape == (20,)
+        assert np.all(indices < 20)
+        assert np.all(indices >= 0)
+        # num_frames == clip_length → 0 gaps, so exactly [0..19]
+        np.testing.assert_array_equal(indices, np.arange(20))
+
+    def test_uniform_covers_full_range(self):
+        """Indices should span most of the sequence, not cluster."""
+        indices = uniform_temporal_sample(1000, 20, mode="test")
+        assert indices[-1] > 900  # last segment should be near the end
+        assert indices[0] < 100   # first segment should be near the start
+
+    def test_train_mode_varies(self):
+        """Different rng seeds should produce different indices."""
+        i1 = uniform_temporal_sample(200, 20, mode="train", rng=np.random.default_rng(1))
+        i2 = uniform_temporal_sample(200, 20, mode="train", rng=np.random.default_rng(2))
+        assert not np.array_equal(i1, i2)
+
+    def test_test_mode_deterministic(self):
+        """Test mode always produces the same indices."""
+        i1 = uniform_temporal_sample(200, 20, mode="test")
+        i2 = uniform_temporal_sample(200, 20, mode="test")
+        np.testing.assert_array_equal(i1, i2)
+
+    def test_test_mode_ignores_rng(self):
+        """Test mode ignores the provided rng."""
+        i1 = uniform_temporal_sample(200, 20, mode="test", rng=np.random.default_rng(999))
+        i2 = uniform_temporal_sample(200, 20, mode="test")
+        np.testing.assert_array_equal(i1, i2)
+
+    def test_single_frame(self):
+        indices = uniform_temporal_sample(1, 10, mode="test")
+        assert indices.shape == (10,)
+        assert np.all(indices % 1 == 0)
+
+    def test_clip_equals_frames(self):
+        indices = uniform_temporal_sample(20, 20, mode="test")
+        assert indices.shape == (20,)
+        assert np.all(indices < 20)
+
+    def test_invalid_num_frames(self):
+        with pytest.raises(ValueError, match="num_frames"):
+            uniform_temporal_sample(0, 10)
+
+    def test_invalid_clip_length(self):
+        with pytest.raises(ValueError, match="clip_length"):
+            uniform_temporal_sample(10, 0)
+
+    def test_invalid_mode(self):
+        with pytest.raises(ValueError, match="mode"):
+            uniform_temporal_sample(10, 5, mode="invalid")
+
+    # --- sample_temporal ---
+
+    def test_sample_temporal_shape(self):
+        data = np.random.randn(100, 24, 4)
+        result = sample_temporal(data, clip_length=20, mode="test")
+        assert result.shape == (20, 24, 4)
+
+    def test_sample_temporal_multi(self):
+        data = np.random.randn(100, 24, 4)
+        result = sample_temporal(data, clip_length=20, num_samples=5, mode="test")
+        assert result.shape == (5, 20, 24, 4)
+
+    def test_sample_temporal_short_wraps(self):
+        """Short sequences should wrap around, not error."""
+        data = np.arange(15, dtype=np.float64).reshape(5, 3)
+        result = sample_temporal(data, clip_length=20, mode="test")
+        assert result.shape == (20, 3)
+        # All values should come from the original data
+        for row in result:
+            assert any(np.array_equal(row, data[i]) for i in range(5))
+        # Consecutive result rows should be consecutive source frames (mod 5)
+        for i in range(1, 20):
+            prev_idx = int(result[i - 1, 0]) // 3  # which source row
+            curr_idx = int(result[i, 0]) // 3
+            assert curr_idx == (prev_idx + 1) % 5
+
+    def test_sample_temporal_reproducible(self):
+        data = np.random.randn(100, 10)
+        r1 = sample_temporal(data, 20, mode="train", rng=np.random.default_rng(42))
+        r2 = sample_temporal(data, 20, mode="train", rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(r1, r2)
+
+
+# =============================================================================
+# Joint noise augmentation
+# =============================================================================
+
+class TestJointNoise:
+    """Tests for add_joint_noise_quaternions."""
+
+    def test_shape_preserved(self, bvh_example):
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, new_p = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=1.0, rng=np.random.default_rng(42))
+        assert new_q.shape == quats.shape
+        assert new_p.shape == pos.shape
+
+    def test_zero_noise_is_near_identity(self, bvh_example):
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, new_p = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=0.0, rng=np.random.default_rng(42))
+        # sigma_deg=0 means angle is always 0, so noise quat ≈ identity
+        # but axis is still random, so cos(0)=1, sin(0)=0 → q_noise = [1,0,0,0]
+        np.testing.assert_allclose(new_p, pos, atol=1e-10)
+        # Quaternions should be very close (numerical noise only)
+        for f in range(quats.shape[0]):
+            for j in range(quats.shape[1]):
+                match = (np.allclose(new_q[f, j], quats[f, j], atol=1e-6)
+                         or np.allclose(new_q[f, j], -quats[f, j], atol=1e-6))
+                assert match, f"Frame {f}, joint {j}: unexpected change"
+
+    def test_output_unit_quaternions(self, bvh_example):
+        """Output quaternions should be unit length."""
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, _ = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=5.0, rng=np.random.default_rng(42))
+        norms = np.linalg.norm(new_q, axis=-1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-10)
+
+    def test_noise_changes_values(self, bvh_example):
+        """Non-zero sigma should produce different quaternions."""
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, _ = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=5.0, rng=np.random.default_rng(42))
+        assert not np.allclose(new_q, quats, atol=1e-4)
+
+    def test_small_noise_stays_close(self, bvh_example):
+        """Small sigma should produce quaternions close to originals."""
+        from pybvh import rotations
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, _ = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=0.1, rng=np.random.default_rng(42))
+        # Geodesic distance: angle = 2 * arccos(|q1 . q2|)
+        dots = np.abs(np.sum(quats * new_q, axis=-1))
+        dots = np.clip(dots, 0, 1)
+        angles_deg = np.degrees(2 * np.arccos(dots))
+        # With sigma=0.1 deg, angles should be very small
+        assert np.mean(angles_deg) < 1.0
+
+    def test_root_pos_noise(self, bvh_example):
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, new_p = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=1.0, sigma_pos=0.5,
+            rng=np.random.default_rng(42))
+        assert not np.allclose(new_p, pos, atol=1e-4)
+
+    def test_no_root_pos_noise_by_default(self, bvh_example):
+        quats, pos = _get_quat_data(bvh_example)
+        _, new_p = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=5.0, rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(new_p, pos)
+
+    def test_reproducible(self, bvh_example):
+        quats, pos = _get_quat_data(bvh_example)
+        q1, p1 = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=2.0, rng=np.random.default_rng(42))
+        q2, p2 = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=2.0, rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(q1, q2)
+        np.testing.assert_array_equal(p1, p2)
+
+    def test_valid_rotations(self, bvh_example):
+        """Noisy quaternions should convert to valid rotation matrices."""
+        from pybvh import rotations
+        quats, pos = _get_quat_data(bvh_example)
+        new_q, _ = add_joint_noise_quaternions(
+            quats, pos, sigma_deg=5.0, rng=np.random.default_rng(42))
+        R = rotations.quat_to_rotmat(new_q)
+        I = np.eye(3)
+        for f in range(R.shape[0]):
+            for j in range(R.shape[1]):
+                np.testing.assert_allclose(
+                    R[f, j] @ R[f, j].T, I, atol=1e-10)
+
+    def test_pipeline_integration(self, bvh_example):
+        """Joint noise should work inside AugmentationPipeline."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (add_joint_noise_quaternions, 1.0, {"sigma_deg": 2.0}),
+        ])
+        new_q, new_p = pipeline(quats, pos, rng=np.random.default_rng(42))
+        assert new_q.shape == quats.shape
+
+
+# =============================================================================
+# Callable kwargs in AugmentationPipeline
+# =============================================================================
+
+class TestPipelineCallableKwargs:
+    """Tests for callable kwargs support in AugmentationPipeline."""
+
+    def test_callable_kwarg_resolved(self, bvh_example):
+        """A callable kwarg should be called with rng."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_quaternions_vertical, 1.0, {
+                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "up_idx": 1,
+            }),
+        ])
+        new_q, new_p = pipeline(quats, pos, rng=np.random.default_rng(42))
+        # Should have been rotated by some angle
+        assert not np.allclose(new_p, pos)
+
+    def test_callable_produces_different_values(self, bvh_example):
+        """Successive calls should sample different random values."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_quaternions_vertical, 1.0, {
+                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "up_idx": 1,
+            }),
+        ])
+        _, p1 = pipeline(quats, pos, rng=np.random.default_rng(1))
+        _, p2 = pipeline(quats, pos, rng=np.random.default_rng(2))
+        assert not np.allclose(p1, p2)
+
+    def test_mixed_callable_and_static(self, bvh_example):
+        """Callable and static kwargs should coexist."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (speed_perturbation_arrays, 1.0, {
+                "factor": lambda rng: rng.uniform(0.8, 1.2),
+            }),
+        ])
+        new_q, new_p = pipeline(quats, pos, rng=np.random.default_rng(42))
+        # Frame count may differ due to speed perturbation
+        assert new_q.shape[1] == quats.shape[1]  # joints unchanged
+
+    def test_reproducible_with_callable(self, bvh_example):
+        """Same rng seed should produce identical results."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_quaternions_vertical, 1.0, {
+                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "up_idx": 1,
+            }),
+        ])
+        q1, p1 = pipeline(quats, pos, rng=np.random.default_rng(99))
+        q2, p2 = pipeline(quats, pos, rng=np.random.default_rng(99))
+        np.testing.assert_allclose(q1, q2, atol=1e-12)
+        np.testing.assert_allclose(p1, p2, atol=1e-12)
+
+    def test_static_kwargs_still_work(self, bvh_example):
+        """Existing static kwargs should not be broken."""
+        quats, pos = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_quaternions_vertical, 1.0, {"angle_deg": 90, "up_idx": 1}),
+        ])
+        new_q, new_p = pipeline(quats, pos, rng=np.random.default_rng(42))
+        # Should match direct call
+        ref_q, ref_p = rotate_quaternions_vertical(quats, pos, 90.0, 1)
+        np.testing.assert_allclose(new_p, ref_p, atol=1e-12)
+        np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
