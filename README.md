@@ -9,12 +9,12 @@ ML bridge layer for [pybvh](https://github.com/VictorS-67/pybvh) — turn motion
 ## Features
 
 - **Tensor packing** to `(C,T,V)`, `(T,V,C)`, and flat `(T,D)` layouts with round-trip unpacking
-- **Array-level augmentation** in quaternion and 6D space — rotation, mirroring, speed perturbation, dropout — all on pre-extracted NumPy arrays, no Bvh objects needed
+- **Array-level augmentation** in quaternion and 6D space — rotation, mirroring, speed perturbation, dropout, joint noise — all on pre-extracted NumPy arrays, no Bvh objects needed
 - **Representation conversion** between euler, quaternion, 6D, axis-angle, and rotation matrices
-- **Composable augmentation pipelines** with per-step probabilities and seeded randomization
+- **Composable augmentation pipelines** with per-step probabilities, callable kwargs for random parameters, and seeded randomization
 - **Preprocessing pipelines** — batch convert BVH directories to on-disk datasets (npz, hdf5) with normalization stats
 - **Skeleton graph metadata** — edge lists, body-part partitions, L/R joint pairs for GCN and Transformer models
-- **Sequence utilities** — sliding windows and length standardization (pad, crop, resample)
+- **Sequence utilities** — sliding windows, length standardization (pad, crop, resample), and PySKL-style uniform temporal sampling
 - **Feature metadata** — column descriptors that map packed array channels to their meaning
 - **PyTorch integration** (optional) — `MotionDataset`, `OnTheFlyDataset`, and `collate_motion_batch` for variable-length sequences
 
@@ -76,6 +76,10 @@ quats, root_pos = speed_perturbation_arrays(quats, root_pos, factor=1.2)
 
 # Frame dropout with SLERP fill
 quats, root_pos = dropout_arrays(quats, root_pos, drop_rate=0.1, rng=rng)
+
+# Joint noise (Gaussian rotation perturbations)
+from pybvh_ml import add_joint_noise_quaternions
+quats, root_pos = add_joint_noise_quaternions(quats, root_pos, sigma_deg=1.0, rng=rng)
 ```
 
 6D augmentation avoids the quaternion round-trip in hot data loader paths:
@@ -90,16 +94,22 @@ rot6d, root_pos = mirror_rot6d(rot6d, root_pos, lr_joint_pairs=lr_pairs, lateral
 
 ## Augmentation Pipeline
 
-Compose augmentations with per-step probabilities for use in data loaders:
+Compose augmentations with per-step probabilities for use in data loaders. Kwargs can be callables for per-sample random parameters:
 
 ```python
 import numpy as np
 from pybvh_ml import AugmentationPipeline
-from pybvh_ml.augmentation import rotate_quaternions_vertical, mirror_quaternions
+from pybvh_ml.augmentation import (
+    rotate_quaternions_vertical, mirror_quaternions, add_joint_noise_quaternions,
+)
 
 pipeline = AugmentationPipeline([
-    (rotate_quaternions_vertical, 0.5, {"angle_deg": 90, "up_idx": 1}),
+    (rotate_quaternions_vertical, 1.0, {
+        "angle_deg": lambda rng: rng.uniform(-180, 180),  # random each sample
+        "up_idx": 1,
+    }),
     (mirror_quaternions, 0.5, {"lr_joint_pairs": lr_pairs, "lateral_idx": 0}),
+    (add_joint_noise_quaternions, 1.0, {"sigma_deg": 1.0}),
 ])
 
 rng = np.random.default_rng(42)
@@ -172,6 +182,25 @@ windows = sliding_window(data, window_size=64, stride=32)  # (num_windows, 64, .
 # Standardize to target length
 padded = standardize_length(data, target_length=128, method="pad")
 cropped = standardize_length(data, target_length=64, method="crop")
+```
+
+## Temporal Sampling
+
+PySKL-style uniform segment sampling for skeleton-based recognition:
+
+```python
+from pybvh_ml import uniform_temporal_sample, sample_temporal
+
+# Get frame indices (handles short, dense, and long sequences)
+indices = uniform_temporal_sample(num_frames=200, clip_length=64, mode="train", rng=rng)
+clip = data[indices]  # (64, ...)
+
+# Or apply directly to an array with wraparound for short sequences
+clip = sample_temporal(data, clip_length=64, mode="train", rng=rng)  # (64, ...)
+
+# Multiple independent samples
+clips = sample_temporal(data, clip_length=64, num_samples=5, mode="train", rng=rng)
+# (5, 64, ...)
 ```
 
 ## PyTorch Integration
