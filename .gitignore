@@ -1,0 +1,37 @@
+# --- Build & Distribution ---
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# --- Python Bytecode ---
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Testing ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- IDE & Editor Settings ---
+.vscode/
+.idea/
+*.swp
+.claude/
+
+# --- OS ---
+.DS_Store
+
+# --- Project Specific ---
+FUTURE_PLANS.md
+ONBOARDING.md
