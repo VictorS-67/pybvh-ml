@@ -1,7 +1,7 @@
 """pybvh-ml: ML bridge layer for pybvh motion capture data."""
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .packing import (
     pack_to_ctv,
@@ -28,13 +28,11 @@ from .metadata import (
     describe_features,
 )
 from .augmentation import (
-    rotate_quaternions_vertical,
-    mirror_quaternions,
+    rotate_vertical,
+    mirror,
+    add_joint_noise,
     speed_perturbation_arrays,
     dropout_arrays,
-    add_joint_noise_quaternions,
-    rotate_rot6d_vertical,
-    mirror_rot6d,
 )
 from .convert import convert_arrays
 from .pipeline import AugmentationPipeline

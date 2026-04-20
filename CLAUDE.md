@@ -18,6 +18,15 @@ pybvh-ml sits between pybvh (which parses and transforms BVH data) and the user'
 4. **Preprocessing and runtime are separate.** The "run once" preprocessing step (batch convert, normalize, export to disk) and the "every epoch" runtime step (on-the-fly augmentation in the data loader) are distinct modules with clean interfaces.
 5. **No model-level constructs.** pybvh-ml provides the *data* that models need (edge lists, joint indices, feature arrays), not the model components themselves (graph convolution layers, attention masks). It stops at the model boundary.
 
+## Code & API quality
+
+Non-negotiable across every change to the codebase:
+
+- **Intuitive API.** The public surface should be discoverable and obvious. Method names match what they do; signatures match how users will call them. If a user needs to read source code to figure out how to use something, the API itself needs work — not a docstring patch. When in doubt about a name or signature, prefer the form that reads naturally at the call site over the form that's easiest to implement.
+- **Clear logic, clear code.** Reads top-to-bottom. Named intermediate variables over clever one-liners. Functions that do one thing. Comments only for the *why* (non-obvious constraints, subtle invariants, workarounds for specific bugs) — never the *what*, which well-named code already says.
+- **Root-cause fixes, not band-aids.** When a bug surfaces, find the underlying cause and fix it there, even if the fix touches more files than the symptom. Avoid quick patches — special-case branches, suppressed warnings, `if this weird input then ...` guards — that mask the real problem and accumulate as scar tissue. If the proper fix is genuinely too large for the current change, document the trade-off explicitly in the commit message or a `# TODO:` rather than papering over it silently.
+
+
 ## What pybvh-ml owns
 
 - **Tensor packing**: Converting pybvh's structured arrays (root_pos, joint_angles) into model-ready layouts (C,T,V), (T,V,C), flat (T,D), and back

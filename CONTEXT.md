@@ -1,4 +1,4 @@
-# AI_CONTEXT.md — pybvh-ml
+# CONTEXT.md — pybvh-ml
 
 > **Purpose of this document**: Give any AI agent (or human contributor) a complete understanding of the pybvh-ml project — its goals, architecture, dependencies, and design decisions — so they can build it correctly from the start.
 
@@ -78,7 +78,7 @@ pybvh-ml/
 │       ├── __init__.py
 │       ├── datasets.py          # Dataset / IterableDataset classes
 │       └── collate.py           # Collate functions for variable-length sequences
-├── bvh_data/                    # Test BVH files (bvh_example, bvh_test1-3, standard_skeleton)
+├── bvh_data/                    # Test BVH files (bvh_test1-3, standard_skeleton)
 ├── tests/
 │   └── test_pybvh_ml.py         # 191 tests across 14 test classes
 ├── pyproject.toml
@@ -96,14 +96,18 @@ pybvh-ml/
 - Root position is always vertex 0, zero-padded to C channels if `C > 3`
 
 **`augmentation.py`** — Array-level augmentation (operates on pre-extracted numpy arrays, no Bvh object needed)
-- Quaternion-space: `rotate_quaternions_vertical`, `mirror_quaternions`, `speed_perturbation_arrays`, `dropout_arrays`, `add_joint_noise_quaternions` — operate on `(F, J, 4)` arrays using pybvh's `quat_slerp` and rotation primitives
-- 6D-space: `rotate_rot6d_vertical`, `mirror_rot6d` — operate directly on `(F, J, 6)` arrays. Apply rotation matrix to the two 3D column vectors, re-orthogonalize via Gram-Schmidt. Avoids unnecessary 6D → quat → 6D round-trip in hot data loader paths
+- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Supported representations: `"quaternion"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`)
+- All public functions are **keyword-only**: `root_pos` and `joint_data` are shape-compatible ndarrays, so positional binding is refused to prevent silent-corruption swaps
+- Fast paths: `rotate_vertical` and `mirror` skip the quaternion round-trip when `representation="6d"` (direct rotation of the two column vectors / analytic sign mask)
+- Quat-internal ops (`add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert to/from quaternion space once; `AugmentationPipeline(cache_quats=True)` amortizes the conversion across consecutive steps
 
 **`convert.py`** — Representation conversion
 - `convert_arrays(joint_data, from_repr, to_repr, euler_orders)` — unified representation conversion dispatch for `(F, J, C)` arrays, wrapping pybvh's rotation functions
 
 **`pipeline.py`** — Composable augmentation pipeline
-- `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection)
+- `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection). `__call__` is keyword-only (`root_pos=`, `joint_data=`, `rng=`).
+- `AugmentationPipeline.standard(skeleton_info, ...)` classmethod — opinionated factory that builds the canonical rotate + mirror + noise + speed pipeline from a `skeleton_info` dict. Each step is optional (pass `None` or `mirror_prob=0` to skip). For anything beyond the exposed kwargs, build the pipeline directly with the `(fn, prob, kwargs)` constructor.
+- `cache_quats=True` (default) shares one quaternion cache across consecutive staged steps via `_staged.py`'s `STAGED_DISPATCH` registry. User-defined augmentations are supported transparently (cache flushed, function called normally, staging resumed cold). Set `cache_quats=False` for historical bit-exact behavior.
 
 **`sequences.py`** — Sequence length utilities
 - `sliding_window(data, window_size, stride)` → `(num_windows, window_size, ...)` fixed-length windows
@@ -142,12 +146,11 @@ pybvh-ml/
 
 ## 5. Key Design Decisions
 
-### 5.1 Supported augmentation representations: quaternion and 6D
-Array-level augmentation supports two representation families:
-- **Quaternion `(F, J, 4)`** — full augmentation suite (rotation, mirror, speed perturbation, dropout). Quaternion math is clean: no gimbal lock, SLERP is well-defined.
-- **6D `(F, J, 6)`** — rotation and mirror only. 6D is the dominant training representation in recent motion ML. Avoiding the 6D → quat → augment → quat → 6D round-trip saves compute in hot data loader paths. The round-trip is lossless (unlike Euler), so this is a performance choice, not a correctness one.
-- **Euler arrays are NOT directly augmented** by pybvh-ml. Euler augmentation lives in pybvh itself (`transforms.rotate_angles_vertical`, `mirror_angles`). pybvh-ml focuses on the representations ML pipelines actually train with.
-- **Axis-angle** — deferred. Niche (mainly SMPL/SMPL-X). Users can convert to quaternion and back.
+### 5.1 Unified augmentation across representations
+Array-level augmentation is a single function per operation, parameterized by a `representation=` kwarg that covers every representation pybvh supports (`"quaternion"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`). Internally:
+- **Quaternion** — primary internal representation for rotation-space math (SLERP, Hamilton product, unit-sphere noise). Clean, no gimbal lock.
+- **6D** — fast paths in `rotate_vertical` and `mirror` operate directly on `(F, J, 6)` without a quat round-trip. Other ops (`add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert once, stay in quat, convert back — or, with `AugmentationPipeline(cache_quats=True)`, share the cache across consecutive steps.
+- **Axis-angle / rotmat / euler** — supported uniformly via convert-to-quat, mutate, convert-back. Euler additionally requires `euler_orders=`.
 
 ### 5.2 Preprocessing and runtime are separate
 - **Preprocessing** (`preprocessing.py`): runs once, converts BVH files to arrays on disk. Slow is OK.
@@ -160,7 +163,7 @@ All `torch/` imports are guarded. The core modules (`packing`, `augmentation`, `
 pybvh-ml uses these pybvh entry points:
 - `pybvh.read_bvh_file()`, `pybvh.read_bvh_directory()` — loading
 - `bvh.root_pos`, `bvh.joint_angles`, `bvh.joint_count`, `bvh.joint_names` — data access
-- `bvh.get_frames_as_quaternion()`, `bvh.get_frames_as_6d()`, etc. — representation conversion
+- `bvh.to_quaternions()`, `bvh.to_6d()`, `bvh.to_axisangle()`, `bvh.to_rotmat()` — representation conversion (2-tuple `(root_pos, joint_data)` since pybvh 0.6.0)
 - `bvh.euler_orders` — per-joint Euler order strings
 - `bvh.edges` — skeleton edge list as `(child_idx, parent_idx)` tuples
 - `bvh.nodes`, `bvh.node_index` — skeleton topology
@@ -170,13 +173,13 @@ pybvh-ml uses these pybvh entry points:
 - `pybvh.batch.compute_normalization_stats()` — normalization
 - `pybvh.tools.rotX`, `rotY`, `rotZ` — elementary rotation matrices
 
-### 5.5 Joint noise is quaternion-only
-`add_joint_noise_quaternions` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma_deg)), converts to quaternion, and composes via Hamilton product. This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. No 6D variant — same rationale as speed perturbation and dropout (the math is naturally quaternion-based).
+### 5.5 Joint noise is quaternion-internal
+`add_joint_noise` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma_deg)), converts to quaternion, and composes via Hamilton product. This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. The public `representation=` kwarg controls the input/output format; the math itself is always quat-space.
 
 ### 5.6 Callable kwargs and rng forwarding in AugmentationPipeline
 Kwargs values can be callables of the form `lambda rng: value`, resolved at each invocation. This enables per-sample random parameter sampling (e.g., random rotation angles) without modifying augmentation function signatures. Static kwargs continue to work unchanged.
 
-The pipeline automatically forwards its `rng` to augmentation functions that accept an `rng` parameter (detected via `inspect.signature`). This ensures reproducibility for functions like `dropout_arrays` and `add_joint_noise_quaternions` without requiring explicit `"rng": lambda rng: rng` in kwargs. If the user provides an explicit `rng` kwarg (static or callable), it takes precedence over the auto-forwarded one.
+The pipeline automatically forwards its `rng` to augmentation functions that accept an `rng` parameter (detected via `inspect.signature`). This ensures reproducibility for functions like `dropout_arrays` and `add_joint_noise` without requiring explicit `"rng": lambda rng: rng` in kwargs. If the user provides an explicit `rng` kwarg (static or callable), it takes precedence over the auto-forwarded one.
 
 ### 5.7 Uniform temporal sampling matches PySKL
 `uniform_temporal_sample` reproduces the PySKL/MMAction2 `UniformSampleFrames` algorithm as a stateless function. Three regimes:
@@ -185,7 +188,7 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 - **Uniform** (`num_frames >= 2*clip_length`): integer segment boundaries (`i * num_frames // clip_length`), discrete random offset per segment.
 
 ### 5.8 Implementation-level conventions
-1. **All augmentation functions return `(joint_data, root_pos)`** — joint data first, matching pybvh's convention in `rotate_angles_vertical` and `mirror_angles`.
+1. **All augmentation functions take and return `(root_pos, joint_data)`** — root first, matching pybvh's `Bvh.from_*` / `Bvh.to_*` and pybvh-ml's own `pack_to_flat` / `extract_repr`. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
 2. **`convert_arrays` routes through rotation matrices** as intermediate. Per-joint Euler orders are handled by grouping joints by unique order and batch-converting each group.
 3. **Packing zero-pads root only** — root has 3 channels (position), joints have C_joint channels. In CTV/TVC layouts, `C = max(3, C_joint)`. Since C_joint >= 3 for all real representations, joint data is never padded.
 4. **Mirror math**: quaternion mirror negates the two imaginary components NOT at the lateral axis. 6D mirror uses `R'[i,j] = s_i * s_j * R[i,j]` where `s[lateral] = -1`. Both derived from `R' = S @ R @ S`.
@@ -221,7 +224,7 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 Tests are in `tests/test_pybvh_ml.py` (201 tests, 16 test classes). Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures**:
-- `bvh_example` — loads `bvh_data/bvh_example.bvh` (24 joints, 56 frames, ZYX)
+- `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)
 - `bvh_test3` — loads `bvh_data/bvh_test3.bvh` (60 joints, mixed euler orders)
 - `rng` — `np.random.default_rng(42)`
 
@@ -233,7 +236,7 @@ Tests are in `tests/test_pybvh_ml.py` (201 tests, 16 test classes). Test BVH fil
 - Real BVH integration: tests use actual BVH data, not synthetic arrays
 - Shape assertions: explicit `assert result.shape == (F, J, C)`
 
-**Note**: `bvh_example` and `bvh_test1` share a skeleton (24 joints, ZYX). `bvh_test2` and `bvh_test3` have different skeletons. `compute_normalization_stats` rejects mixed skeletons — tests that batch multiple files must use compatible ones.
+**Note**: `bvh_test1` is the only fixture in its skeleton family (24 joints, ZYX); `bvh_test2`, `bvh_test3`, and `standard_skeleton` all have different skeletons. `compute_normalization_stats` rejects mixed skeletons — tests that batch multiple files must copy `bvh_test1.bvh` under several names in a `tmp_path` work directory.
 
 ---
 

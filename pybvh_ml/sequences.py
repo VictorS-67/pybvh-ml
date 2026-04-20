@@ -69,15 +69,20 @@ def standardize_length(
     data : ndarray, shape (T, ...)
     target_length : int
         Desired number of frames.
-    method : {"pad", "crop", "resample"}
+    method : {"pad", "crop", "resample_linear"}
         - ``"pad"``: truncate from end if longer, zero-pad at end
           if shorter.
         - ``"crop"``: center-crop if longer, zero-pad at end if
           shorter.
-        - ``"resample"``: linearly interpolate to *target_length*
-          frames.  Suitable for position data.  **Not recommended
-          for rotation data** — use ``pybvh.Bvh.resample()`` with
-          SLERP instead.
+        - ``"resample_linear"``: linearly interpolate to
+          *target_length* frames along axis 0.  Correct for position
+          data, velocities, and generic feature arrays.  **Not
+          correct for rotation arrays** (Euler / quaternion / 6D /
+          axis-angle) — linear interpolation does not preserve
+          rotation geometry.  For rotations, resample with
+          :meth:`pybvh.Bvh.resample` (SLERP) before extracting
+          arrays.  The name makes the limitation visible at the
+          call site; no runtime warning is emitted.
     pad_value : float
         Value used for padding (default 0.0).  Only used by
         ``"pad"`` and ``"crop"`` methods.
@@ -100,14 +105,7 @@ def standardize_length(
             return data[start:start + target_length].copy()
         return _pad(data, target_length, pad_value)
 
-    elif method == "resample":
-        import warnings
-        warnings.warn(
-            "standardize_length(method='resample') uses linear interpolation, "
-            "which is not suitable for rotation data. For rotation arrays, "
-            "use pybvh.Bvh.resample() (SLERP-based) before extracting arrays.",
-            stacklevel=2,
-        )
+    elif method == "resample_linear":
         if T == target_length:
             return data.copy()
         old_t = np.linspace(0.0, 1.0, T)
@@ -121,7 +119,8 @@ def standardize_length(
 
     else:
         raise ValueError(
-            f"Unknown method '{method}'. Use 'pad', 'crop', or 'resample'.")
+            f"Unknown method '{method}'. "
+            f"Use 'pad', 'crop', or 'resample_linear'.")
 
 
 def uniform_temporal_sample(

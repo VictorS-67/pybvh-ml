@@ -7,7 +7,6 @@ consume.  Only uses pybvh's public API.
 from __future__ import annotations
 
 from pybvh import Bvh
-from pybvh.transforms import auto_detect_lr_pairs
 
 
 def get_edge_list(
@@ -16,34 +15,30 @@ def get_edge_list(
 ) -> list[tuple[int, int]]:
     """Get skeleton edge list as ``(child_idx, parent_idx)`` tuples.
 
+    Thin re-export of pybvh's edge-list properties.
+
     Parameters
     ----------
     bvh : Bvh
     include_end_sites : bool
         If False (default), use ``joint_angles`` index space
-        (non-end-site joints only).  Returns ``bvh.edges``.
+        (non-end-site joints only) — returns ``bvh.edges``.
         If True, use ``node_index`` space (all nodes including
-        end sites).
+        end sites) — returns ``bvh.node_edges``.
 
     Returns
     -------
     list of (int, int)
     """
-    if not include_end_sites:
-        return list(bvh.edges)
-
-    edges: list[tuple[int, int]] = []
-    for i, node in enumerate(bvh.nodes):
-        if node.parent is not None:
-            parent_idx = bvh.node_index[node.parent.name]
-            edges.append((i, parent_idx))
-    return edges
+    return list(bvh.node_edges if include_end_sites else bvh.edges)
 
 
 def get_lr_pairs(bvh: Bvh) -> list[tuple[int, int]]:
     """Detect left/right joint pairs as index tuples.
 
-    Thin wrapper around :func:`pybvh.transforms.auto_detect_lr_pairs`.
+    Returns ``list(bvh.lr_pairs)`` — the cached, auto-detected
+    index-space pair list from pybvh.  An empty list means no pairs
+    were detected on this skeleton.
 
     Returns
     -------
@@ -51,7 +46,7 @@ def get_lr_pairs(bvh: Bvh) -> list[tuple[int, int]]:
         ``[(left_idx, right_idx), ...]`` in ``joint_angles`` index
         space.  Empty if no pairs found.
     """
-    return auto_detect_lr_pairs(bvh)
+    return list(bvh.lr_pairs) if bvh.lr_pairs else []
 
 
 def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
@@ -67,8 +62,9 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
     -------
     dict
         Keys: ``num_joints``, ``joint_names``, ``edges``,
-        ``euler_orders``, ``lr_pairs``.  Optionally
-        ``body_partitions``.
+        ``euler_orders``, ``lr_pairs``, ``lr_mapping``.  Optionally
+        ``body_partitions``.  ``lr_mapping`` is the name-keyed dict
+        from ``bvh.lr_mapping`` (``None`` when no pairs detected).
     """
     info = {
         'num_joints': bvh.joint_count,
@@ -76,6 +72,7 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
         'edges': list(bvh.edges),
         'euler_orders': list(bvh.euler_orders),
         'lr_pairs': get_lr_pairs(bvh),
+        'lr_mapping': dict(bvh.lr_mapping) if bvh.lr_mapping else None,
     }
     if include_partitions:
         info['body_partitions'] = get_body_partitions(bvh)

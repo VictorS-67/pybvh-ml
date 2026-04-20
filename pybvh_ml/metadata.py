@@ -7,14 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
-REPR_CHANNELS: dict[str, int] = {
-    "euler": 3,
-    "axisangle": 3,
-    "quaternion": 4,
-    "6d": 6,
-    "rotmat": 9,
-}
+from pybvh.rotations import REPRESENTATION_CHANNELS as REPR_CHANNELS
 
 
 @dataclass
@@ -50,6 +43,13 @@ def describe_features(
     include_root_pos: bool = True,
 ) -> FeatureDescriptor:
     """Build a :class:`FeatureDescriptor` for a flat ``(T, D)`` layout.
+
+    Describes the simple ``root_pos + joint_rotations`` layout produced
+    by :func:`pybvh_ml.pack_to_flat`.  For a layout that also covers
+    velocities and foot contacts (as written by
+    ``pybvh.Bvh.to_feature_array``), use
+    :meth:`pybvh.Bvh.feature_array_layout` instead — it returns a
+    ``{block_name: slice}`` dict covering the full feature array.
 
     Parameters
     ----------

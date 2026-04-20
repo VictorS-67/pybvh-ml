@@ -1,10 +1,16 @@
 """Array-level augmentation for ML pipelines.
 
 Operates on pre-extracted NumPy arrays without Bvh objects.
-Supports quaternion ``(F, J, 4)`` and 6D ``(F, J, 6)`` representations.
+All functions accept any rotation representation supported by pybvh:
+``"quaternion"``, ``"6d"``, ``"axisangle"``, ``"rotmat"``, or ``"euler"``.
+Euler arrays additionally require an ``euler_orders`` kwarg.
 
-All functions return ``(new_joint_data, new_root_pos)`` — joint data
-first, matching pybvh's convention.
+All functions take and return ``(root_pos, joint_data)`` — root position
+first, matching pybvh's ``Bvh.from_*`` / ``Bvh.to_*`` convention.  All
+parameters are keyword-only: since ``root_pos`` and ``joint_data`` are
+shape-compatible ndarrays, accepting them positionally would make a
+swapped call silently corrupt data.  Call with
+``rotate_vertical(root_pos=..., joint_data=..., angle_deg=..., ...)``.
 """
 from __future__ import annotations
 
@@ -20,6 +26,58 @@ from pybvh.tools import rotX, rotY, rotZ
 # =========================================================================
 
 _ROT_FUNCS = {0: rotX, 1: rotY, 2: rotZ}
+_AXIS_IDX = {"x": 0, "y": 1, "z": 2}
+
+
+def _parse_axis(axis: str) -> tuple[int, float]:
+    """Parse a signed-axis string into ``(index, sign)``.
+
+    Accepts exactly the six canonical values ``'+x'``, ``'-x'``,
+    ``'+y'``, ``'-y'``, ``'+z'``, ``'-z'`` — matching the
+    :attr:`pybvh.Bvh.world_up` / :meth:`pybvh.Bvh.forward_at`
+    convention.
+    """
+    if (not isinstance(axis, str)
+            or len(axis) != 2
+            or axis[0] not in "+-"
+            or axis[1] not in "xyz"):
+        raise ValueError(
+            f"axis must be one of '+x', '-x', '+y', '-y', '+z', '-z'; "
+            f"got {axis!r}")
+    return _AXIS_IDX[axis[1]], 1.0 if axis[0] == "+" else -1.0
+
+
+def _to_quats(
+    joint_data: npt.NDArray[np.float64],
+    representation: str,
+    euler_orders: list[str] | None,
+) -> npt.NDArray[np.float64]:
+    """Convert joint data to quaternion space for augmentation math."""
+    if representation == "quaternion":
+        return joint_data
+    if representation == "euler":
+        if euler_orders is None:
+            raise ValueError(
+                "euler_orders is required when representation='euler'")
+        return rotations.convert(
+            joint_data, "euler", "quaternion",
+            order=euler_orders, degrees=True)
+    return rotations.convert(joint_data, representation, "quaternion")
+
+
+def _from_quats(
+    quats: npt.NDArray[np.float64],
+    representation: str,
+    euler_orders: list[str] | None,
+) -> npt.NDArray[np.float64]:
+    """Convert quaternions back to the original representation."""
+    if representation == "quaternion":
+        return quats
+    if representation == "euler":
+        return rotations.convert(
+            quats, "quaternion", "euler",
+            order=euler_orders, degrees=True)
+    return rotations.convert(quats, "quaternion", representation)
 
 
 def _quat_multiply(
@@ -41,7 +99,7 @@ def _build_rotation_quat(
     angle_deg: float,
     up_idx: int,
 ) -> npt.NDArray[np.float64]:
-    """Build a unit quaternion for rotation around an axis."""
+    """Build a unit quaternion for rotation around a cardinal axis."""
     half = np.radians(angle_deg) / 2.0
     q = np.array([np.cos(half), 0.0, 0.0, 0.0])
     q[1 + up_idx] = np.sin(half)
@@ -52,7 +110,7 @@ def _build_rotation_matrix(
     angle_deg: float,
     up_idx: int,
 ) -> npt.NDArray[np.float64]:
-    """Build a 3x3 rotation matrix for rotation around an axis."""
+    """Build a 3×3 rotation matrix for rotation around a cardinal axis."""
     return _ROT_FUNCS[up_idx](np.radians(angle_deg))
 
 
@@ -95,135 +153,258 @@ def _swap_lr_pairs(
 
 
 # =========================================================================
-# Quaternion-space augmentation
+# Public augmentation functions
 # =========================================================================
 
-def rotate_quaternions_vertical(
-    joint_quats: npt.NDArray[np.float64],
+def rotate_vertical(
+    *,
     root_pos: npt.NDArray[np.float64],
+    joint_data: npt.NDArray[np.float64],
     angle_deg: float,
-    up_idx: int,
+    up_axis: str,
+    representation: str,
+    euler_orders: list[str] | None = None,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Rotate quaternion arrays around the vertical axis.
+    """Rotate joint arrays around the vertical axis.
+
+    All arguments are keyword-only.  ``root_pos`` and ``joint_data``
+    are shape-compatible ndarrays (both have leading dim ``F``); a
+    swapped positional call would silently corrupt, so the API refuses
+    positional binding and forces explicit names.
 
     Only the root joint (index 0) and root position are modified;
     non-root joints are in parent-local space and stay unchanged.
 
     Parameters
     ----------
-    joint_quats : ndarray, shape (F, J, 4)
-        Quaternion rotations ``(w, x, y, z)`` per joint per frame.
     root_pos : ndarray, shape (F, 3)
         Root translation per frame.
+    joint_data : ndarray, shape (F, J, C)
+        Joint rotation data in ``representation`` format.
     angle_deg : float
         Rotation angle in degrees.
-    up_idx : int
-        Vertical axis: 0 = X, 1 = Y, 2 = Z.
+    up_axis : str
+        Signed axis string: ``'+x'``, ``'-x'``, ``'+y'``, ``'-y'``,
+        ``'+z'``, or ``'-z'``.  The sign flips the rotation direction,
+        so ``'+y'`` and ``'-y'`` produce opposite yaws for the same
+        ``angle_deg``.  Typically ``bvh.world_up``.
+    representation : str
+        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        ``"rotmat"``, ``"euler"``.
+    euler_orders : list of str, optional
+        Per-joint Euler order strings (e.g. ``["ZYX", "ZYX", ...]``).
+        Required when ``representation="euler"``, ignored otherwise.
 
     Returns
     -------
-    new_joint_quats : ndarray, shape (F, J, 4)
     new_root_pos : ndarray, shape (F, 3)
+    new_joint_data : ndarray, shape (F, J, C)
     """
-    joint_quats = np.array(joint_quats, dtype=np.float64)
+    joint_data = np.array(joint_data, dtype=np.float64)
     root_pos = np.array(root_pos, dtype=np.float64)
 
-    R_vert = _build_rotation_matrix(angle_deg, up_idx)
-    q_rot = _build_rotation_quat(angle_deg, up_idx)
-
-    new_quats = joint_quats.copy()
-    new_quats[:, 0] = _quat_multiply(q_rot, joint_quats[:, 0])
-
+    up_idx, up_sign = _parse_axis(up_axis)
+    signed_angle = angle_deg * up_sign
+    R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_root_pos = (R_vert @ root_pos.T).T
 
-    return new_quats, new_root_pos
+    # 6D: rotate the two column vectors of the root rotation matrix directly.
+    if representation == "6d":
+        new_data = joint_data.copy()
+        col0 = joint_data[:, 0, :3]
+        col1 = joint_data[:, 0, 3:]
+        new_data[:, 0, :3] = (R_vert @ col0.T).T
+        new_data[:, 0, 3:] = (R_vert @ col1.T).T
+        return new_root_pos, new_data
+
+    # All other representations: work through quaternion space.
+    quats = _to_quats(joint_data, representation, euler_orders)
+    q_rot = _build_rotation_quat(signed_angle, up_idx)
+    new_quats = quats.copy()
+    new_quats[:, 0] = _quat_multiply(q_rot, quats[:, 0])
+    return new_root_pos, _from_quats(new_quats, representation, euler_orders)
 
 
-def mirror_quaternions(
-    joint_quats: npt.NDArray[np.float64],
+def mirror(
+    *,
     root_pos: npt.NDArray[np.float64],
+    joint_data: npt.NDArray[np.float64],
     lr_joint_pairs: list[tuple[int, int]],
-    lateral_idx: int,
+    lateral_axis: str,
+    representation: str,
+    euler_orders: list[str] | None = None,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Mirror quaternion arrays left-right.
+    """Mirror joint arrays left-right.
+
+    Swaps left and right joint data, negates the lateral component of
+    root translation, and reflects each rotation across the sagittal plane.
 
     Parameters
     ----------
-    joint_quats : ndarray, shape (F, J, 4)
-        Quaternion rotations ``(w, x, y, z)``.
     root_pos : ndarray, shape (F, 3)
+    joint_data : ndarray, shape (F, J, C)
     lr_joint_pairs : list of (int, int)
-        ``[(left_idx, right_idx), ...]`` in ``joint_angles`` space.
-    lateral_idx : int
-        Lateral axis: 0 = X, 1 = Y, 2 = Z.
+        ``[(left_idx, right_idx), ...]`` in joint-array space.
+    lateral_axis : str
+        Signed axis string: ``'+x'``, ``'-x'``, ``'+y'``, ``'-y'``,
+        ``'+z'``, or ``'-z'``.  The sign is accepted for API symmetry
+        with :func:`rotate_vertical` but does not affect the result
+        (mirror is sign-invariant).
+    representation : str
+        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        ``"rotmat"``, ``"euler"``.
+    euler_orders : list of str, optional
+        Required when ``representation="euler"``, ignored otherwise.
 
     Returns
     -------
-    new_joint_quats : ndarray, shape (F, J, 4)
     new_root_pos : ndarray, shape (F, 3)
+    new_joint_data : ndarray, shape (F, J, C)
     """
-    new_quats = np.array(joint_quats, dtype=np.float64)
+    new_data = np.array(joint_data, dtype=np.float64)
     new_root_pos = np.array(root_pos, dtype=np.float64)
 
-    # 1. Negate root lateral component
+    lateral_idx, _ = _parse_axis(lateral_axis)
     new_root_pos[:, lateral_idx] *= -1.0
+    _swap_lr_pairs(new_data, lr_joint_pairs)
 
-    # 2. Swap L/R joint pairs
-    _swap_lr_pairs(new_quats, lr_joint_pairs)
+    # 6D and quaternion: apply the analytic sign mask directly.
+    if representation == "6d":
+        new_data *= _mirror_sign_rot6d(lateral_idx)
+        return new_root_pos, new_data
 
-    # 3. Reflect each quaternion
-    signs = _mirror_sign_quat(lateral_idx)
-    new_quats *= signs
+    if representation == "quaternion":
+        new_data *= _mirror_sign_quat(lateral_idx)
+        return new_root_pos, new_data
 
-    return new_quats, new_root_pos
+    # All other representations: convert the (already swapped) data to
+    # quaternions, apply the sign mask, then convert back.
+    quats = _to_quats(new_data, representation, euler_orders)
+    quats *= _mirror_sign_quat(lateral_idx)
+    return new_root_pos, _from_quats(quats, representation, euler_orders)
+
+
+def add_joint_noise(
+    *,
+    root_pos: npt.NDArray[np.float64],
+    joint_data: npt.NDArray[np.float64],
+    sigma_deg: float,
+    representation: str,
+    sigma_pos: float = 0.0,
+    rng: np.random.Generator | None = None,
+    euler_orders: list[str] | None = None,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Add Gaussian rotation noise to joint arrays.
+
+    For each joint at each frame, generates a small random rotation
+    (axis uniformly random on the unit sphere, angle sampled from
+    ``N(0, sigma_deg)`` in degrees) and composes it with the original
+    rotation: ``q_noisy = q_noise * q_original``.
+
+    Optionally adds Gaussian noise to root positions as well.
+
+    Parameters
+    ----------
+    root_pos : ndarray, shape (F, 3)
+    joint_data : ndarray, shape (F, J, C)
+    sigma_deg : float
+        Standard deviation of rotation noise in degrees.
+    representation : str
+        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        ``"rotmat"``, ``"euler"``.
+    sigma_pos : float
+        Standard deviation of root position noise (default 0 = none).
+    rng : numpy Generator, optional
+    euler_orders : list of str, optional
+        Required when ``representation="euler"``, ignored otherwise.
+
+    Returns
+    -------
+    new_root_pos : ndarray, shape (F, 3)
+    new_joint_data : ndarray, shape (F, J, C)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    joint_data = np.asarray(joint_data, dtype=np.float64)
+    root_pos = np.asarray(root_pos, dtype=np.float64)
+
+    quats = _to_quats(joint_data, representation, euler_orders)
+    F, J, _ = quats.shape
+
+    axis = rng.standard_normal((F, J, 3))
+    norm = np.linalg.norm(axis, axis=-1, keepdims=True)
+    norm = np.where(norm < 1e-15, 1.0, norm)
+    axis = axis / norm
+
+    half_angle = np.radians(rng.normal(0, sigma_deg, (F, J))) / 2.0
+    q_noise = np.empty((F, J, 4), dtype=np.float64)
+    q_noise[..., 0] = np.cos(half_angle)
+    q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
+
+    noisy_quats = _quat_multiply(q_noise, quats)
+    noisy_quats /= np.linalg.norm(noisy_quats, axis=-1, keepdims=True)
+
+    new_root_pos = root_pos.copy()
+    if sigma_pos > 0:
+        new_root_pos = new_root_pos + rng.normal(0, sigma_pos, root_pos.shape)
+
+    return new_root_pos, _from_quats(noisy_quats, representation, euler_orders)
 
 
 def speed_perturbation_arrays(
-    joint_quats: npt.NDArray[np.float64],
+    *,
     root_pos: npt.NDArray[np.float64],
+    joint_data: npt.NDArray[np.float64],
     factor: float,
+    representation: str,
+    euler_orders: list[str] | None = None,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Speed perturbation on pre-extracted quaternion arrays.
+    """Speed perturbation via time resampling.
 
-    Uses SLERP for rotation interpolation and linear interpolation
-    for root position.
+    Uses SLERP for rotation interpolation (via quaternion space) and
+    linear interpolation for root position.
 
     Parameters
     ----------
-    joint_quats : ndarray, shape (F, J, 4)
     root_pos : ndarray, shape (F, 3)
+    joint_data : ndarray, shape (F, J, C)
     factor : float
         Speed factor.  ``> 1`` = faster (fewer frames),
         ``< 1`` = slower (more frames).
+    representation : str
+        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        ``"rotmat"``, ``"euler"``.
+    euler_orders : list of str, optional
+        Required when ``representation="euler"``, ignored otherwise.
 
     Returns
     -------
-    new_joint_quats : ndarray, shape (F', J, 4)
     new_root_pos : ndarray, shape (F', 3)
+    new_joint_data : ndarray, shape (F', J, C)
         ``F' = max(2, round(F / factor))``.
     """
     if factor <= 0:
         raise ValueError(f"factor must be > 0, got {factor}")
 
-    joint_quats = np.asarray(joint_quats, dtype=np.float64)
+    joint_data = np.asarray(joint_data, dtype=np.float64)
     root_pos = np.asarray(root_pos, dtype=np.float64)
 
     F = root_pos.shape[0]
     if F < 2:
-        return joint_quats.copy(), root_pos.copy()
+        return root_pos.copy(), joint_data.copy()
 
     F_new = max(2, round(F / factor))
-    J = joint_quats.shape[1]
-
     t_orig = np.linspace(0.0, 1.0, F)
     t_new = np.linspace(0.0, 1.0, F_new)
 
-    # Root position: linear interpolation per axis
     new_root_pos = np.empty((F_new, 3), dtype=np.float64)
     for ax in range(3):
         new_root_pos[:, ax] = np.interp(t_new, t_orig, root_pos[:, ax])
 
-    # Joint quaternions: SLERP
+    quats = _to_quats(joint_data, representation, euler_orders)
+    J = quats.shape[1]
+
     idx_right = np.searchsorted(t_orig, t_new, side='right')
     idx_right = np.clip(idx_right, 1, F - 1)
     idx_left = idx_right - 1
@@ -232,243 +413,92 @@ def speed_perturbation_arrays(
     t_right = t_orig[idx_right]
     dt = t_right - t_left
     dt = np.where(dt < 1e-15, 1.0, dt)
-    alpha = (t_new - t_left) / dt  # (F_new,)
+    alpha = (t_new - t_left) / dt
 
-    q_left = joint_quats[idx_left]    # (F_new, J, 4)
-    q_right = joint_quats[idx_right]  # (F_new, J, 4)
+    q_left = quats[idx_left]
+    q_right = quats[idx_right]
     alpha_jt = np.broadcast_to(alpha[:, np.newaxis], (F_new, J))
-
     new_quats = rotations.quat_slerp(q_left, q_right, alpha_jt)
 
-    return new_quats, new_root_pos
+    return new_root_pos, _from_quats(new_quats, representation, euler_orders)
 
 
 def dropout_arrays(
-    joint_quats: npt.NDArray[np.float64],
+    *,
     root_pos: npt.NDArray[np.float64],
+    joint_data: npt.NDArray[np.float64],
     drop_rate: float,
+    representation: str,
     rng: np.random.Generator | None = None,
+    euler_orders: list[str] | None = None,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Frame dropout with SLERP interpolation on quaternion arrays.
+    """Frame dropout with SLERP interpolation.
 
-    Randomly drops frames and fills gaps with SLERP-interpolated
-    quaternions and linearly interpolated root positions.  First and
-    last frames are always kept.
+    Randomly drops frames and fills the gaps with SLERP-interpolated
+    rotations (via quaternion space) and linearly interpolated root
+    positions.  First and last frames are always kept.  Shape is
+    unchanged — you get the same ``F`` frames, some replaced by
+    interpolated values.
 
     Parameters
     ----------
-    joint_quats : ndarray, shape (F, J, 4)
     root_pos : ndarray, shape (F, 3)
+    joint_data : ndarray, shape (F, J, C)
     drop_rate : float
         Fraction of frames to drop, in ``[0, 1)``.
+    representation : str
+        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        ``"rotmat"``, ``"euler"``.
     rng : numpy Generator, optional
+    euler_orders : list of str, optional
+        Required when ``representation="euler"``, ignored otherwise.
 
     Returns
     -------
-    new_joint_quats : ndarray, shape (F, J, 4)
     new_root_pos : ndarray, shape (F, 3)
-        Same frame count; dropped frames replaced with interpolated
-        values.
+    new_joint_data : ndarray, shape (F, J, C)
     """
     if rng is None:
         rng = np.random.default_rng()
 
-    joint_quats = np.asarray(joint_quats, dtype=np.float64)
+    joint_data = np.asarray(joint_data, dtype=np.float64)
     root_pos = np.asarray(root_pos, dtype=np.float64)
 
     F = root_pos.shape[0]
     if F < 2 or drop_rate <= 0:
-        return joint_quats.copy(), root_pos.copy()
+        return root_pos.copy(), joint_data.copy()
 
-    # Build keep mask — always keep first and last
     keep_mask = rng.random(F) >= drop_rate
     keep_mask[0] = True
     keep_mask[-1] = True
     kept_indices = np.where(keep_mask)[0]
 
-    new_quats = joint_quats.copy()
-    new_root_pos = root_pos.copy()
-
     dropped = np.where(~keep_mask)[0]
     if len(dropped) == 0:
-        return new_quats, new_root_pos
+        return root_pos.copy(), joint_data.copy()
 
-    # For each dropped frame, find surrounding kept frames
     ins = np.searchsorted(kept_indices, dropped, side='right')
     left_idx = kept_indices[np.clip(ins - 1, 0, len(kept_indices) - 1)]
     right_idx = kept_indices[np.clip(ins, 0, len(kept_indices) - 1)]
 
     dt = (right_idx - left_idx).astype(np.float64)
     dt = np.where(dt < 1e-15, 1.0, dt)
-    alpha = (dropped - left_idx).astype(np.float64) / dt  # (num_dropped,)
+    alpha = (dropped - left_idx).astype(np.float64) / dt
 
-    # Root position: linear interpolation
+    new_root_pos = root_pos.copy()
     for ax in range(3):
         new_root_pos[dropped, ax] = (
             (1.0 - alpha) * root_pos[left_idx, ax]
             + alpha * root_pos[right_idx, ax])
 
-    # Joint quaternions: SLERP
-    J = joint_quats.shape[1]
-    q_left = joint_quats[left_idx]    # (num_dropped, J, 4)
-    q_right = joint_quats[right_idx]  # (num_dropped, J, 4)
-    alpha_jt = np.broadcast_to(
-        alpha[:, np.newaxis], (len(dropped), J))
+    quats = _to_quats(joint_data, representation, euler_orders)
+    J = quats.shape[1]
+
+    q_left = quats[left_idx]
+    q_right = quats[right_idx]
+    alpha_jt = np.broadcast_to(alpha[:, np.newaxis], (len(dropped), J))
+
+    new_quats = quats.copy()
     new_quats[dropped] = rotations.quat_slerp(q_left, q_right, alpha_jt)
 
-    return new_quats, new_root_pos
-
-
-def add_joint_noise_quaternions(
-    joint_quats: npt.NDArray[np.float64],
-    root_pos: npt.NDArray[np.float64],
-    sigma_deg: float,
-    sigma_pos: float = 0.0,
-    rng: np.random.Generator | None = None,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Add Gaussian noise to quaternion joint rotations.
-
-    For each joint at each frame, generates a small random rotation
-    (axis uniformly random on the unit sphere, angle sampled from
-    ``N(0, sigma_deg)`` in degrees) and composes it with the original
-    quaternion: ``q_noisy = q_noise * q_original``.
-
-    Optionally adds Gaussian noise to root positions as well.
-
-    Parameters
-    ----------
-    joint_quats : ndarray, shape (F, J, 4)
-        Quaternion rotations ``(w, x, y, z)`` per joint per frame.
-    root_pos : ndarray, shape (F, 3)
-        Root translation per frame.
-    sigma_deg : float
-        Standard deviation of rotation noise in degrees.
-    sigma_pos : float
-        Standard deviation of position noise (default 0 = no noise).
-    rng : numpy Generator, optional
-
-    Returns
-    -------
-    new_joint_quats : ndarray, shape (F, J, 4)
-    new_root_pos : ndarray, shape (F, 3)
-    """
-    if rng is None:
-        rng = np.random.default_rng()
-
-    joint_quats = np.asarray(joint_quats, dtype=np.float64)
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-
-    F, J, _ = joint_quats.shape
-
-    # 1. Random axis (uniform on unit sphere) per joint per frame
-    axis = rng.standard_normal((F, J, 3))
-    norm = np.linalg.norm(axis, axis=-1, keepdims=True)
-    norm = np.where(norm < 1e-15, 1.0, norm)
-    axis = axis / norm
-
-    # 2. Random angle from N(0, sigma_deg), converted to radians
-    half_angle = np.radians(rng.normal(0, sigma_deg, (F, J))) / 2.0
-
-    # 3. Build noise quaternion: q = [cos(a/2), sin(a/2) * axis]
-    q_noise = np.empty((F, J, 4), dtype=np.float64)
-    q_noise[..., 0] = np.cos(half_angle)
-    q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
-
-    # 4. Compose: q_noisy = q_noise * q_original
-    new_quats = _quat_multiply(q_noise, joint_quats)
-
-    # 5. Re-normalize for numerical safety
-    new_quats /= np.linalg.norm(new_quats, axis=-1, keepdims=True)
-
-    # 6. Root position noise
-    new_root_pos = root_pos.copy()
-    if sigma_pos > 0:
-        new_root_pos = new_root_pos + rng.normal(0, sigma_pos, root_pos.shape)
-
-    return new_quats, new_root_pos
-
-
-# =========================================================================
-# 6D-space augmentation
-# =========================================================================
-
-def rotate_rot6d_vertical(
-    joint_rot6d: npt.NDArray[np.float64],
-    root_pos: npt.NDArray[np.float64],
-    angle_deg: float,
-    up_idx: int,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Rotate 6D rotation arrays around the vertical axis.
-
-    Only modifies the root joint (index 0) and root position.
-    Since ``R_vert`` is orthogonal, the result is a valid rotation
-    without needing Gram-Schmidt re-orthogonalization.
-
-    Parameters
-    ----------
-    joint_rot6d : ndarray, shape (F, J, 6)
-        6D rotations (first two columns of rotation matrix).
-    root_pos : ndarray, shape (F, 3)
-    angle_deg : float
-    up_idx : int
-
-    Returns
-    -------
-    new_joint_rot6d : ndarray, shape (F, J, 6)
-    new_root_pos : ndarray, shape (F, 3)
-    """
-    joint_rot6d = np.array(joint_rot6d, dtype=np.float64)
-    root_pos = np.array(root_pos, dtype=np.float64)
-
-    R_vert = _build_rotation_matrix(angle_deg, up_idx)
-
-    new_rot6d = joint_rot6d.copy()
-    # Split root 6D into two 3D column vectors, rotate each
-    col0 = joint_rot6d[:, 0, :3]  # (F, 3)
-    col1 = joint_rot6d[:, 0, 3:]  # (F, 3)
-    new_rot6d[:, 0, :3] = (R_vert @ col0.T).T
-    new_rot6d[:, 0, 3:] = (R_vert @ col1.T).T
-
-    new_root_pos = (R_vert @ root_pos.T).T
-
-    return new_rot6d, new_root_pos
-
-
-def mirror_rot6d(
-    joint_rot6d: npt.NDArray[np.float64],
-    root_pos: npt.NDArray[np.float64],
-    lr_joint_pairs: list[tuple[int, int]],
-    lateral_idx: int,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Mirror 6D rotation arrays left-right.
-
-    Uses the identity ``R'[i,j] = s_i * s_j * R[i,j]`` where
-    ``s[lateral_idx] = -1`` and ``s`` is ``+1`` elsewhere.
-    No rotation matrix conversion needed.
-
-    Parameters
-    ----------
-    joint_rot6d : ndarray, shape (F, J, 6)
-    root_pos : ndarray, shape (F, 3)
-    lr_joint_pairs : list of (int, int)
-    lateral_idx : int
-
-    Returns
-    -------
-    new_joint_rot6d : ndarray, shape (F, J, 6)
-    new_root_pos : ndarray, shape (F, 3)
-    """
-    new_rot6d = np.array(joint_rot6d, dtype=np.float64)
-    new_root_pos = np.array(root_pos, dtype=np.float64)
-
-    # 1. Negate root lateral component
-    new_root_pos[:, lateral_idx] *= -1.0
-
-    # 2. Swap L/R joint pairs
-    _swap_lr_pairs(new_rot6d, lr_joint_pairs)
-
-    # 3. Reflect 6D
-    signs = _mirror_sign_rot6d(lateral_idx)
-    new_rot6d *= signs
-
-    return new_rot6d, new_root_pos
+    return new_root_pos, _from_quats(new_quats, representation, euler_orders)

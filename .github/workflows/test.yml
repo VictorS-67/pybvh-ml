@@ -25,3 +25,5 @@ jobs:
         pip install .[dev]
     - name: Run tests
       run: pytest tests/ -v
+    - name: Execute tutorial notebooks
+      run: pytest --nbmake tutorials/ -v

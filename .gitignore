@@ -35,3 +35,7 @@ htmlcov/
 # --- Project Specific ---
 FUTURE_PLANS.md
 ONBOARDING.md
+
+# Integration tests run against internal datasets that are not shared.
+# Keep the test code itself out of the public repo too.
+tests/integration/
