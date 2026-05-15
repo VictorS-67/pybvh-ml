@@ -80,7 +80,6 @@ summary = preprocess_directory(
     representation="6d",                 # continuous, recommended for ML models
     center_root=True,
     label_fn=label_fn,
-    require_matching_topology=True,      # safety — raises if the skeletons disagree
 )
 
 print("num_clips:", summary["num_clips"])

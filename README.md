@@ -33,8 +33,8 @@ Runnable end-to-end notebooks in [`tutorials/`](tutorials/):
    `dropout_arrays`, `add_joint_noise`) shown before/after on a real skeleton, plus
    pipeline composition and `set_epoch` reproducibility.
 3. **[Heterogeneous preprocessing](tutorials/03_heterogeneous_preprocessing.ipynb)** —
-   mixing skeletons, frame rates, and up-axes: `pybvh.harmonize` + `skip_errors` +
-   `require_matching_topology` as a robust ingest recipe.
+   mixing skeletons, frame rates, and up-axes: `harmonize=True` + `skip_errors`
+   + the rep-aware compatibility check as a robust ingest recipe.
 
 Notebooks execute in CI via `pytest --nbmake tutorials/`, so they can't silently rot.
 
@@ -219,32 +219,47 @@ normalization); exclude them from per-channel diagnostics.
 
 ### Harmonizing heterogeneous datasets
 
-When clips come from different skeletons, frame rates, or up-axis conventions, preprocess
-with `require_matching_topology=True` (the default) will reject the batch. Pre-harmonize
-with `pybvh.harmonize`:
+When clips come from different skeletons, frame rates, up-axis conventions, or — for
+order-sensitive representations like `"euler"` / `"axisangle"` — different per-joint
+Euler orders, pass `harmonize=True` to `preprocess_directory`:
+
+```python
+preprocess_directory(
+    "raw/", "train.npz",
+    representation="euler",
+    harmonize=True,                  # runs pybvh.harmonize after loading
+    target_world_up="+y",            # (optional) explicit target; majority otherwise
+    skip_errors=True,
+)
+```
+
+`harmonize=True` runs `pybvh.harmonize` against the first clip, using majority values
+from the uniformity audit for any `target_*` you didn't set explicitly. For
+order-sensitive representations it also auto-picks a `target_euler_order` (most common
+per-joint order across the dataset). Hierarchy mismatches raise loudly — no silent
+drops. The returned `uniformity["harmonized_to"]` carries the resolved targets,
+per-stage modification counts, and a JSON-serializable `HarmonizeReport` so the
+transformation trail is auditable from the saved dataset metadata.
+
+For workflows that need to inspect or persist intermediates, call `pybvh.harmonize`
+directly:
 
 ```python
 from pybvh import read_bvh_directory, harmonize, write_bvh_file
 from pathlib import Path
 
 clips = read_bvh_directory("raw/", parallel=True, skip_errors=True)
-reference = clips[0]
-
 harmonized = harmonize(
     clips,
-    reference=reference,             # retarget to this skeleton
-    target_fps=30,                   # SLERP resample
-    target_world_up="+y",            # reorient animation up
-    target_rest_forward="+z",        # (optional) unify rest-pose facing
-    target_rest_up="+y",             # (optional) unify rest-pose up
-    on_incompatible="drop",          # skip clips whose topology doesn't match
+    reference=clips[0],
+    target_fps=30,
+    target_world_up="+y",
 )
 
-# Write the harmonized clips to disk and preprocess normally
 out_dir = Path("harmonized/")
 out_dir.mkdir(exist_ok=True)
 for b, src in zip(harmonized, clips):
-    write_bvh_file(b, out_dir / Path(src.filepath).name)  # or your own naming
+    write_bvh_file(b, out_dir / Path(src.source_path).name)
 preprocess_directory(out_dir, "train.npz", representation="6d")
 ```
 

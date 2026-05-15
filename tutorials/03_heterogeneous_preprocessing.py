@@ -50,10 +50,14 @@ for name in ("bvh_test1.bvh", "bvh_test2.bvh", "bvh_test3.bvh"):
 # produce garbage.
 
 # %% [markdown]
-# ## The safety net: `require_matching_topology=True`
+# ## The safety net: rep-aware skeleton compatibility check
 #
-# Since pybvh-ml 0.3, `preprocess_directory` validates skeleton compatibility by default.
-# Mixing incompatible clips raises `ValueError`:
+# `preprocess_directory` validates skeleton compatibility against the first
+# clip.  Hierarchy (names, parent indices, rest offsets) must always agree.
+# Per-joint Euler orders must additionally agree for order-sensitive
+# representations (``"euler"`` / ``"axisangle"``); rotation-invariant ones
+# (``"6d"`` / ``"quaternion"`` / ``"rotmat"``) accept mixed orders since
+# the tensor channel layout is order-agnostic.  Mismatches raise `ValueError`:
 
 # %%
 work_dir = Path(tempfile.mkdtemp(prefix="pybvh_ml_hetero_"))
@@ -90,35 +94,27 @@ except ValueError as e:
 
 # %%
 # Synthesize a cross-convention mix: keep bvh_test1 as-is and add a
-# +y-up copy.  Both share topology.
+# +y-up copy.  Both share joint hierarchy by name and parent indices —
+# but reorient_world_up rotates rest offsets, so the strict
+# matches_hierarchy check rejects them without harmonization.
 axis_dir = Path(tempfile.mkdtemp(prefix="pybvh_ml_axis_"))
 shutil.copy(BVH_DIR / "bvh_test1.bvh", axis_dir / "captureA.bvh")
 orig = read_bvh_file(BVH_DIR / "bvh_test1.bvh")
 write_bvh_file(orig.reorient_world_up("+y"), axis_dir / "captureB.bvh")
 
-# Topologies match so preprocess_directory doesn't raise, but it emits
-# one aggregated UserWarning per heterogeneous axis and records the
-# distribution in summary["uniformity"] — a machine-readable snapshot
-# you can grep from CI to fail builds on surprise heterogeneity.
-summary = preprocess_directory(
-    axis_dir, axis_dir / "axis_mismatch.npz", representation="6d")
-
-for key, dist in summary["uniformity"].items():
-    counts = {k: len(v) for k, v in dist.items()} if isinstance(dist, dict) else dist
-    print(f"{key}: {counts}")
-
-# %% [markdown]
-# Now pass the `target_*` kwargs to reorient every clip to a shared
-# axis.  Warnings go away; outputs are directly comparable across the
-# two captures:
-
-# %%
+# preprocess_directory audits uniformity, emits one aggregated warning
+# per heterogeneous axis, and records the distribution in
+# summary["uniformity"] — a machine-readable snapshot you can grep
+# from CI to fail builds on surprise heterogeneity.
 summary = preprocess_directory(
     axis_dir, axis_dir / "axis_harmonized.npz",
     representation="6d",
     target_world_up="+z",        # reorient every clip to +z up
     target_rest_forward="+y",    # and +y rest-pose forward
 )
+for key, dist in summary["uniformity"].items():
+    counts = {k: len(v) for k, v in dist.items()} if isinstance(dist, dict) else dist
+    print(f"{key}: {counts}")
 print("num_clips:", summary["num_clips"])
 
 # %% [markdown]
@@ -149,16 +145,49 @@ print("num_clips:", summary["num_clips"])
 shutil.rmtree(axis_dir)
 
 # %% [markdown]
-# ## Fix #1 — topology / FPS mismatch with `harmonize`
+# ## Fix #1 — one-line uniformization with `harmonize=True`
 #
-# `pybvh.harmonize` is the heavier dataset-level preprocessor.  Give it a
-# reference skeleton plus optional `target_fps`, `target_world_up`,
-# `target_rest_forward`, `target_rest_up` — and it drops clips that can't
-# be made compatible (`on_incompatible="drop"`, the default) and retargets
-# / resamples / reorients the rest.  The three `target_*` reorient kwargs
-# mirror `preprocess_directory` exactly, so once you're calling
-# `harmonize` it handles every axis concern too; reach for it when
-# topology or frame rate differs.
+# `harmonize=True` on `preprocess_directory` runs `pybvh.harmonize` after
+# loading: it picks majority values from the uniformity audit for any
+# `target_*` you didn't set explicitly, and applies world-up / rest-up /
+# rest-forward reorientation plus — for order-sensitive representations —
+# Euler-order unification, all in one pass.  Hierarchy mismatches raise
+# loudly (no silent drops); the returned `uniformity["harmonized_to"]`
+# carries the resolved targets, per-stage modification counts, and the
+# full `HarmonizeReport` for downstream audit trails.
+
+# %%
+# Build a mixed dataset that shares hierarchy but disagrees on Euler order.
+hetero_dir = Path(tempfile.mkdtemp(prefix="pybvh_ml_euler_"))
+src = read_bvh_file(BVH_DIR / "bvh_test1.bvh")
+write_bvh_file(src, hetero_dir / "native.bvh")
+write_bvh_file(src.change_euler_order("ZXY"), hetero_dir / "alt_order.bvh")
+
+# representation="euler" is order-sensitive — without harmonize it raises.
+try:
+    preprocess_directory(
+        hetero_dir, hetero_dir / "bad.npz", representation="euler")
+except ValueError as e:
+    print("Without harmonize:", str(e).splitlines()[0])
+
+# With harmonize=True, the mixed Euler orders get unified.
+summary = preprocess_directory(
+    hetero_dir, hetero_dir / "ok.npz",
+    representation="euler", harmonize=True,
+)
+print("With harmonize=True:")
+print("  num_clips:", summary["num_clips"])
+print("  resolved targets:",
+      summary["uniformity"]["harmonized_to"]["targets"])
+print("  stage counts:",
+      summary["uniformity"]["harmonized_to"]["stage_counts"])
+
+# %% [markdown]
+# ## Fix #2 — manual `pybvh.harmonize` for full control
+#
+# For workflows that need to inspect / persist the harmonized clips before
+# preprocessing (e.g. to write them to disk as canonical BVHs), call
+# `pybvh.harmonize` directly with the kwargs you need:
 
 # %%
 clips = read_bvh_directory(work_dir, parallel=False)
@@ -167,19 +196,16 @@ print(f"Loaded {len(clips)} clips: {[b.joint_count for b in clips]} joints each"
 reference = clips[0]
 harmonized = harmonize(
     clips,
-    reference=reference,         # topology must match this
+    reference=reference,         # hierarchy must match this
     target_fps=30,               # SLERP-resample any fps mismatch
     target_world_up="+z",        # rotate the world if up axes disagree
     on_incompatible="drop",      # drop mismatches (alternative: "raise")
-    verbose=True,                # UserWarning per dropped clip
+    verbose=True,                # one summary UserWarning at end of call
 )
 
 print(f"\n{len(harmonized)} clips survived; joints: {[b.joint_count for b in harmonized]}")
 
-# %% [markdown]
-# Now write the harmonized clips to a clean directory and preprocess normally:
-
-# %%
+# Write the harmonized clips to a clean directory and preprocess normally:
 harmonized_dir = Path(tempfile.mkdtemp(prefix="pybvh_ml_hetero_ok_"))
 for i, b in enumerate(harmonized):
     write_bvh_file(b, harmonized_dir / f"clip_{i:03d}.bvh")
@@ -188,9 +214,11 @@ summary = preprocess_directory(
     harmonized_dir,
     harmonized_dir / "train.npz",
     representation="6d",
-    require_matching_topology=True,    # now safe because we pre-harmonized
 )
 print("preprocessed:", summary["num_clips"], "clips,", summary["representation"])
+
+# Cleanup
+shutil.rmtree(hetero_dir)
 
 # %% [markdown]
 # ## Fix #2 — tolerate corrupt files with `skip_errors=True`
@@ -238,20 +266,20 @@ print(f"num_clips preprocessed: {summary['num_clips']}")
 # 1. **Inspect first.** `read_bvh_directory(..., skip_errors=True)` + check
 #    `b.joint_count`, `1/b.frame_time`, `b.world_up` — print them and look for outliers.
 # 2. **Pick the right harmonization tool.**
-#    - Axes disagree but topology / FPS match → `target_world_up`,
-#      `target_rest_forward`, `target_rest_up` on `preprocess_directory`
-#      (fast, in-process; no intermediate files).
-#    - Topology / FPS / missing joints differ → `pybvh.harmonize(..., on_incompatible="drop")`
-#      for a forgiving pass, `"raise"` for strict CI.  Its `target_*`
-#      reorient kwargs are a strict superset of `preprocess_directory`'s,
-#      so if you're running `harmonize` anyway, pass the axes to it and
-#      skip the `preprocess_directory` kwargs.
-# 3. **Write out.** If you used `harmonize`, `write_bvh_file` the harmonized clips to a clean
-#    directory so `preprocess_directory` reads from a known-good input.
-# 4. **Preprocess.** `preprocess_directory(..., skip_errors=True, parallel=True,
-#    require_matching_topology=True)` gives you throughput + a last-line-of-defence check.
-#    Inspect `summary["uniformity"]` in CI to guard against silent axis drift.
-# 5. **Normalize.** `load_preprocessed(out)["mean"] / ["std"]` are ready for
+#    - One-line fix from inside `preprocess_directory`: `harmonize=True`
+#      (uses majority values for any `target_*` you didn't set, and unifies
+#      Euler orders for order-sensitive representations).  Best default.
+#    - Manual control / persisting intermediates: `pybvh.harmonize` with an
+#      explicit `reference`, then `write_bvh_file` the survivors and run
+#      `preprocess_directory` against the clean directory.
+#    - Axes disagree but topology / FPS match and you want a no-harmonize
+#      path: `target_world_up`, `target_rest_forward`, `target_rest_up` on
+#      `preprocess_directory` (without `harmonize=True`).
+# 3. **Preprocess.** `preprocess_directory(..., skip_errors=True, parallel=True)`
+#    gives you throughput + the rep-aware compatibility check as a last line
+#    of defence.  Inspect `summary["uniformity"]` in CI to guard against
+#    silent axis drift.
+# 4. **Normalize.** `load_preprocessed(out)["mean"] / ["std"]` are ready for
 #    `pybvh.normalize_array(...)` at training time; `["constant_channels"]` tells you
 #    which columns had zero variance.
 

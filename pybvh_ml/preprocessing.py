@@ -15,7 +15,8 @@ from typing import Callable
 import numpy as np
 import numpy.typing as npt
 
-from pybvh import Bvh, read_bvh_file, compute_normalization_stats
+from pybvh import Bvh, read_bvh_file
+from pybvh import harmonize as pybvh_harmonize
 from pybvh import rotations
 from pybvh_ml.skeleton import get_skeleton_info
 
@@ -222,12 +223,262 @@ def _warn_if_heterogeneous(
             example = mismatch[:3]
             warnings.warn(
                 f"Rest-pose up disagrees with animation-derived world_up "
-                f"in {len(mismatch)} file(s) (e.g. {example}). Quaternion / "
-                "6D / axis-angle tensors extracted from these files will "
-                "not match topology-identical files whose rest pose "
-                "agrees. Pass target_rest_up='<axis>' to reorient every "
-                "clip's rest pose before extraction.",
+                f"in {len(mismatch)} file(s) (e.g. {example}). Tensors "
+                "extracted from these files (quaternion / 6D / axis-angle "
+                "/ rotmat / euler) will live in a different reference "
+                "frame than topology-identical files whose rest pose "
+                "agrees with their animation-inferred up axis.\n\n"
+                "Two recovery paths:\n"
+                "  - If the file's rest pose is authoritative (most "
+                "common; animation frame 0 may be mid-action and confuse "
+                "pybvh's auto-inference): pass world_up='<axis>' to "
+                "preprocess_directory to override animation-based "
+                "detection at parse time.\n"
+                "  - If the animation frame is authoritative: pass "
+                "target_rest_up='<axis>' to reorient each clip's rest "
+                "pose to match its animation up.",
                 UserWarning, stacklevel=3)
+
+
+_REP_NEEDS_CHANNEL_MATCH = {"euler", "axisangle"}
+
+
+def _majority_value(distribution: dict[str, list[str]]) -> str | None:
+    """Return the key with the most entries in ``distribution`` (ties broken
+    by lexical order for determinism), or ``None`` if empty."""
+    if not distribution:
+        return None
+    return max(distribution.keys(), key=lambda k: (len(distribution[k]), k))
+
+
+def _majority_euler_order(clips: list[Bvh]) -> str | None:
+    """Pick the single most common per-joint Euler order across all clips.
+
+    ``pybvh.harmonize(target_euler_order=...)`` takes one order string and
+    rewrites every joint to it — so the right default is the order that
+    minimizes rewrites: the mode of every joint's order across every clip.
+    Ties broken by lexical order for determinism.
+    """
+    if not clips:
+        return None
+    counts: dict[str, int] = {}
+    for c in clips:
+        for o in c.euler_orders:
+            counts[o] = counts.get(o, 0) + 1
+    return max(counts.keys(), key=lambda k: (counts[k], k))
+
+
+def _is_already_uniform_euler_order(
+    clips: list[Bvh], target: str,
+) -> bool:
+    """True iff every joint in every clip is already in ``target`` order."""
+    return all(all(o == target for o in c.euler_orders) for c in clips)
+
+
+def _resolve_harmonize_targets(
+    clips: list[Bvh],
+    uniformity: dict,
+    representation: str,
+    target_world_up: str | None,
+    target_rest_forward: str | None,
+    target_rest_up: str | None,
+    target_euler_order: str | None,
+) -> dict[str, str]:
+    """Resolve target signature for ``pybvh.harmonize``: explicit kwargs win,
+    audit majority fills in the rest.  Order-sensitive representations
+    additionally resolve a target Euler order; rotation-invariant ones
+    drop it (mixing orders is harmless in those tensors).
+    """
+    targets: dict[str, str] = {}
+    if target_world_up is not None:
+        targets["target_world_up"] = target_world_up
+    elif len(uniformity["world_up"]) > 1:
+        targets["target_world_up"] = _majority_value(uniformity["world_up"])
+    if target_rest_up is not None:
+        targets["target_rest_up"] = target_rest_up
+    elif uniformity["rest_anim_mismatch"]:
+        targets["target_rest_up"] = _majority_value(uniformity["rest_up"])
+    if target_rest_forward is not None:
+        targets["target_rest_forward"] = target_rest_forward
+    elif len(uniformity["rest_forward"]) > 1:
+        targets["target_rest_forward"] = _majority_value(
+            uniformity["rest_forward"])
+
+    if _channel_layout_depends_on_euler_order(representation):
+        if target_euler_order is not None:
+            targets["target_euler_order"] = target_euler_order
+        else:
+            order = _majority_euler_order(clips)
+            if order is not None and not _is_already_uniform_euler_order(
+                    clips, order):
+                targets["target_euler_order"] = order
+    return targets
+
+
+def _normalization_stats_from_arrays(
+    root_pos_list: list[npt.NDArray[np.float64]],
+    joint_data_list: list[npt.NDArray[np.float64]],
+) -> dict[str, npt.NDArray]:
+    """Compute global mean/std/constant_channels across already-extracted
+    ``(root_pos, joint_data)`` lists.
+
+    Equivalent to ``pybvh.compute_normalization_stats(clips, ...)`` on
+    the saved ``(F, 3 + J*C)`` flat layout — but operates on the
+    numpy arrays directly so the cross-clip rest-offset check inside
+    ``batch_to_numpy`` is bypassed.  Layout: ``[root_pos (3), joint_data
+    flattened over (J, C)]`` per frame, concatenated across all clips.
+    """
+    flats: list[npt.NDArray[np.float64]] = []
+    for rp, jd in zip(root_pos_list, joint_data_list):
+        F = rp.shape[0]
+        flats.append(np.concatenate([rp, jd.reshape(F, -1)], axis=1))
+    all_frames = np.concatenate(flats, axis=0)
+    mean = all_frames.mean(axis=0)
+    std = all_frames.std(axis=0)
+    constant_channels = std < 1e-8
+    std = std.copy()
+    std[constant_channels] = 1.0
+    return {"mean": mean, "std": std, "constant_channels": constant_channels}
+
+
+def _stage_counts(applied_stages: list[dict]) -> dict[str, int]:
+    """Aggregate ``HarmonizeReport.applied_stages`` (per-clip list of
+    per-stage dicts) into ``{stage_name: clip_count}``."""
+    counts: dict[str, int] = {}
+    for clip_stages in applied_stages:
+        for stage in clip_stages:
+            counts[stage] = counts.get(stage, 0) + 1
+    return counts
+
+
+def _run_harmonize(
+    clips: list[Bvh],
+    stems: list[str],
+    uniformity: dict,
+    representation: str,
+    target_world_up: str | None,
+    target_rest_forward: str | None,
+    target_rest_up: str | None,
+    target_euler_order: str | None,
+) -> tuple[list[Bvh], list[str]]:
+    """Drive ``pybvh.harmonize`` with resolved targets and surface drops.
+
+    Hierarchy mismatches against the reference clip are dropped by
+    ``pybvh.harmonize`` (default ``on_incompatible="drop"``).  Silent
+    drops are exactly the failure mode the maintainer report hit — we
+    inspect the returned :class:`HarmonizeReport` and raise with the
+    dropped filenames + reasons so the user can act.
+
+    Records the resolved targets, per-stage modification counts, and
+    the JSON-native report under ``uniformity["harmonized_to"]`` so the
+    transformation trail is auditable from the saved dataset metadata.
+    """
+    import dataclasses
+
+    targets = _resolve_harmonize_targets(
+        clips, uniformity, representation,
+        target_world_up, target_rest_forward, target_rest_up,
+        target_euler_order,
+    )
+    # Pin the reference clip so pybvh.harmonize gates on the hierarchy
+    # graph (names + parent indices) and retargets bone offsets to the
+    # first clip.  Without ``reference=`` harmonize is purely reorient,
+    # and hierarchy mismatches would only surface later in our own
+    # _check_skeleton_compatibility — with worse drop diagnostics.
+    harmonized, report = pybvh_harmonize(
+        clips, reference=clips[0],
+        **targets, return_report=True, verbose=False,
+    )
+    if report.dropped_indices:
+        labels = [
+            src if src else f"index={i}"
+            for i, src in zip(report.dropped_indices, report.dropped_sources)
+        ]
+        details = "; ".join(
+            f"'{lbl}' ({reason})"
+            for lbl, reason in zip(labels, report.drop_reasons)
+        )
+        raise ValueError(
+            f"pybvh.harmonize dropped {len(report.dropped_indices)} clip(s) "
+            f"as incompatible with the reference: {details}. "
+            f"Hierarchy mismatches cannot be auto-fixed — filter the "
+            f"dataset to a single skeleton, or run pybvh.harmonize with "
+            f"an explicit reference for retargeting.")
+
+    kept_stems = [stems[i] for i in report.kept_indices]
+    uniformity["harmonized_to"] = {
+        "targets": targets,
+        "stage_counts": _stage_counts(report.applied_stages),
+        "report": dataclasses.asdict(report),
+    }
+    return harmonized, kept_stems
+
+
+def _channel_layout_depends_on_euler_order(representation: str) -> bool:
+    """Whether the saved tensor's channel layout depends on the source Euler order.
+
+    True for ``"euler"`` / ``"axisangle"`` — mixing orders across clips
+    yields a tensor whose channels are misaligned per-joint.  False for
+    rotation-invariant representations (``"6d"`` / ``"quaternion"`` /
+    ``"rotmat"``), where pybvh's conversion produces an order-agnostic
+    layout.
+    """
+    return representation in _REP_NEEDS_CHANNEL_MATCH
+
+
+def _clip_label(bvh: Bvh, stem: str) -> str:
+    """Prefer the file's ``source_path`` stem (set by pybvh) over the
+    caller-supplied stem when both are available — keeps error messages
+    consistent with how the user thinks about the files."""
+    src = getattr(bvh, "source_path", None)
+    if src:
+        return Path(src).stem
+    return stem
+
+
+def _check_skeleton_compatibility(
+    clips: list[Bvh], stems: list[str], representation: str,
+) -> None:
+    """Validate that every clip is compatible with the first clip's skeleton.
+
+    Compares the skeleton *graph* (joint names + parent indices) but not
+    rest offsets — bone-length variation across actors is intrinsic to
+    multi-actor datasets and doesn't affect the angle-based tensors
+    pybvh-ml extracts (``joint_data`` is a function of rotations, not
+    bone lengths; root translation is centered by default).  Pybvh's
+    own ``harmonize(reference=...)`` uses the same loose convention.
+    Callers who need bone-length uniformity (e.g. when extracting
+    FK-derived features) should pre-run ``pybvh.harmonize(reference=...)``
+    via ``harmonize=True``.
+
+    For order-sensitive representations (``"euler"`` / ``"axisangle"``),
+    additionally requires channel equality (``matches_channels``).
+    Raises :class:`ValueError` on the first divergence, naming both
+    clips and pointing at the right recovery.
+    """
+    reference = clips[0]
+    ref_label = _clip_label(reference, stems[0])
+    needs_channels = _channel_layout_depends_on_euler_order(representation)
+    for i, bvh in enumerate(clips[1:], start=1):
+        clip_label = _clip_label(bvh, stems[i])
+        if not reference.matches_hierarchy(bvh, match_offsets=False):
+            raise ValueError(
+                f"Clip '{clip_label}' skeleton graph is incompatible with "
+                f"'{ref_label}' (joint names or parent indices differ). "
+                f"This is a data problem — clips with different skeletons "
+                f"cannot be batched together. Filter the dataset to a "
+                f"single skeleton, or use pybvh.harmonize(reference=<ref>) "
+                f"if the difference is bone-offset retargetable.")
+        if needs_channels and not reference.matches_channels(bvh):
+            raise ValueError(
+                f"Clip '{clip_label}' has Euler orders incompatible with "
+                f"'{ref_label}'. For representation='{representation}' "
+                f"the tensor channel layout depends on per-joint Euler "
+                f"order, so mixed orders corrupt the batch. Pass "
+                f"harmonize=True to unify Euler orders automatically, "
+                f"or pick a rotation-invariant representation "
+                f"('6d' / 'quaternion' / 'rotmat') for which "
+                f"channel layout is order-agnostic.")
 
 
 def preprocess_directory(
@@ -244,10 +495,11 @@ def preprocess_directory(
     skip_errors: bool = False,
     world_up: str = "auto",
     lr_mapping: dict[str, str] | None = None,
-    require_matching_topology: bool = True,
+    harmonize: bool = False,
     target_world_up: str | None = None,
     target_rest_forward: str | None = None,
     target_rest_up: str | None = None,
+    target_euler_order: str | None = None,
     parallel: bool = False,
     max_workers: int | None = None,
 ) -> dict:
@@ -272,10 +524,11 @@ def preprocess_directory(
     include_velocities : bool
         If True, compute per-joint linear velocities via
         :meth:`pybvh.Bvh.joint_velocities` (central stencil, edge
-        padding — shape ``(F, N, 3)`` aligned with the source frames)
-        and store them per clip.  Static features: **not** refreshed
-        after augmentation, so use for evaluation / targets, not as
-        augmentation-invariant training inputs.
+        padding — shape ``(F, J, 3)`` aligned with ``joint_data`` /
+        ``joint_angles``, no end sites) and store them per clip.
+        Static features: **not** refreshed after augmentation, so use
+        for evaluation / targets, not as augmentation-invariant
+        training inputs.
     include_foot_contacts : bool
         If True, compute binary foot-contact labels via
         :meth:`pybvh.Bvh.foot_contacts` (default ``method="combined"``)
@@ -300,29 +553,49 @@ def preprocess_directory(
     lr_mapping : dict or None
         Forwarded to :func:`pybvh.read_bvh_file`.  Explicit left/right
         joint pair mapping, useful for uniform dataset conventions.
-    require_matching_topology : bool
-        If True (default), every clip must share the first clip's
-        topology (``joint_names`` + ``euler_orders``).  Mismatched
-        clips raise :class:`ValueError`.  Set to False to keep the
-        lenient pre-0.3 behavior.
+    harmonize : bool
+        If True, run :func:`pybvh.harmonize` after loading to unify
+        clips along every axis the dataset disagrees on.  Targets are
+        resolved as: explicit ``target_*`` kwarg wins; otherwise the
+        majority value from the uniformity audit fills in.  For
+        ``representation in {"euler", "axisangle"}``, an Euler-order
+        target is also resolved (majority of ``euler_orders[0]`` across
+        clips); rotation-invariant representations skip this stage
+        since channel layout is order-agnostic.
+
+        Clips with hierarchy mismatches against the reference are
+        dropped by ``pybvh.harmonize``; ``preprocess_directory``
+        inspects the returned report and raises :class:`ValueError`
+        rather than silently shipping a smaller dataset.  The
+        resolved targets and per-stage modification counts land in
+        the returned ``uniformity`` dict under
+        ``uniformity["harmonized_to"]``.
+
+        Default ``False`` keeps the explicit ``target_*`` kwargs as
+        independent uniformization stages (current behavior).
     target_world_up : str or None
-        If set (e.g. ``"+y"``), reorient every clip via
-        :meth:`pybvh.Bvh.reorient_world_up` so the world vertical axis
-        matches.  ``None`` (default) leaves each clip's ``world_up``
-        untouched.  Complements the ``world_up`` parsing kwarg:
-        ``world_up="auto"`` parses what the file declares;
-        ``target_world_up="+y"`` harmonizes across the dataset.
+        Signed-axis string (``"+y"``, ``"-z"``, ...).  When
+        ``harmonize=False`` (default): reorient every clip via
+        :meth:`pybvh.Bvh.reorient_world_up`.  When ``harmonize=True``:
+        used as the explicit world-up target for
+        :func:`pybvh.harmonize`, overriding the audit-majority value.
+        ``None`` (default) defers to the dataset majority under
+        ``harmonize=True``, or leaves clips untouched otherwise.
     target_rest_forward : str or None
-        If set, reorient every clip via
-        :meth:`pybvh.Bvh.reorient_rest_forward` so the rest-pose
-        forward direction matches.  ``None`` (default) skips this
-        uniformization.  Must not be parallel to the (post-
+        Same dual semantics as ``target_world_up`` for the rest-pose
+        forward direction.  Must not be parallel to the (post-
         ``target_world_up``) up axis.
     target_rest_up : str or None
-        If set, reorient every clip via
-        :meth:`pybvh.Bvh.reorient_rest_up`.  Typically only needed
-        for the rare single-file case where a file's rest-pose up
-        disagrees with its animation up.  ``None`` (default) skips.
+        Same dual semantics as ``target_world_up`` for the rest-pose
+        up axis.  Typically only needed for the rare single-file case
+        where a file's rest-pose up disagrees with its animation up.
+    target_euler_order : str or None
+        Canonical Euler order (``"XYZ"``, ``"ZYX"``, ...) to unify
+        joint angles to.  Only honored when ``harmonize=True`` and
+        the representation is order-sensitive
+        (``"euler"`` / ``"axisangle"``); silently ignored otherwise.
+        ``None`` (default) under ``harmonize=True`` picks the majority
+        Euler order across clips.
     parallel : bool
         If True, load BVH files using a :class:`ThreadPoolExecutor`.
         Speeds up large directories; per-file I/O is the bottleneck.
@@ -359,6 +632,7 @@ def preprocess_directory(
               "rest_forward": {value: [stems, ...]},
               "rest_up":      {value: [stems, ...]},
               "rest_anim_mismatch": [stems, ...],
+              "harmonized_to": {...},   # present only when harmonize=True
             }
 
         capturing the pre-reorient state of the dataset (useful for
@@ -366,6 +640,14 @@ def preprocess_directory(
         ``rest_anim_mismatch`` lists files whose rest-pose up axis
         disagrees with their animation-derived ``world_up`` — the
         condition ``target_rest_up`` repairs.
+
+        When ``harmonize=True``, ``harmonized_to`` carries the
+        resolved target signature (``world_up``, ``rest_up``,
+        ``rest_forward``, ``euler_order`` — only those that ran),
+        ``stage_counts`` (per-stage count of clips modified, from
+        pybvh's ``HarmonizeReport.applied_stages``), and the
+        serialized ``report`` itself (JSON-native ``dict`` from
+        ``dataclasses.asdict``).
     """
     bvh_dir = Path(bvh_dir)
     output_path = Path(output_path)
@@ -411,24 +693,23 @@ def preprocess_directory(
     _warn_if_heterogeneous(
         uniformity, target_world_up, target_rest_forward, target_rest_up)
 
-    if target_world_up is not None:
-        clips = [b.reorient_world_up(target_world_up) or b for b in clips]
-    if target_rest_forward is not None:
-        clips = [
-            b.reorient_rest_forward(target_rest_forward) or b for b in clips]
-    if target_rest_up is not None:
-        clips = [b.reorient_rest_up(target_rest_up) or b for b in clips]
+    if harmonize:
+        clips, stems = _run_harmonize(
+            clips, stems, uniformity, representation,
+            target_world_up, target_rest_forward, target_rest_up,
+            target_euler_order,
+        )
+    else:
+        if target_world_up is not None:
+            clips = [b.reorient_world_up(target_world_up) or b for b in clips]
+        if target_rest_forward is not None:
+            clips = [
+                b.reorient_rest_forward(target_rest_forward) or b
+                for b in clips]
+        if target_rest_up is not None:
+            clips = [b.reorient_rest_up(target_rest_up) or b for b in clips]
 
-    if require_matching_topology:
-        reference = clips[0]
-        for i, b in enumerate(clips[1:], start=1):
-            if not reference.matches_topology(b):
-                raise ValueError(
-                    f"Clip '{stems[i]}' has topology incompatible with "
-                    f"'{stems[0]}' (joint_names or euler_orders differ). "
-                    f"Pass require_matching_topology=False to accept "
-                    f"mismatched clips, or pre-harmonize the dataset "
-                    f"with pybvh.harmonize().")
+    _check_skeleton_compatibility(clips, stems, representation)
 
     # Extract data per clip
     all_root_pos: list[npt.NDArray[np.float64]] = []
@@ -469,7 +750,15 @@ def preprocess_directory(
 
     # Normalization stats (computed on the primary representation only;
     # velocities / foot contacts have their own natural scales).
-    stats = compute_normalization_stats(clips, representation=representation)
+    #
+    # Computed locally from the already-extracted arrays rather than via
+    # pybvh's ``compute_normalization_stats``.  That entry point routes
+    # through ``batch_to_numpy``, which insists on rest-offset equality
+    # via ``matches_hierarchy(match_offsets=True)``.  Pybvh-ml accepts
+    # bone-length variation across actors (the angle tensors don't depend
+    # on bone lengths) — see ``_check_skeleton_compatibility``.  Going
+    # via the raw arrays sidesteps the redundant compatibility check.
+    stats = _normalization_stats_from_arrays(all_root_pos, all_joint_data)
 
     # Labels
     labels = None

@@ -54,7 +54,7 @@ This env has:
 - numpy, matplotlib, pytest
 - torch 2.8.0+cpu (CPU-only)
 - h5py 3.14.0
-- pybvh 0.4.0 (editable install)
+- pybvh 0.7.0 (editable install) — minimum required by pybvh-ml 0.4
 
 **Important**: pybvh has its own separate conda env (`pybvh`) with no torch/h5py. pybvh-ml code must never require torch or h5py for core functionality — they are optional, guarded with try/except.
 
@@ -127,6 +127,8 @@ pybvh-ml/
 - Stores arrays + skeleton metadata + normalization stats in a single file
 - Optional label function `label_fn(filename) → int`
 - Optional filter function `filter_fn(filename_stem) → bool` — applied before loading, skipped files are never parsed
+- Rep-aware compatibility check: skeleton graph (`matches_hierarchy(match_offsets=False)`) must always agree; per-joint Euler orders must additionally agree for order-sensitive reps (`euler`, `axisangle`).  Bone-length variation across actors is accepted — `joint_data` is a function of rotations, not bone lengths.
+- `harmonize=True` runs `pybvh.harmonize` against the first clip after the uniformity audit. Resolves each `target_*` from the explicit kwarg if set, else the audit majority; for order-sensitive reps also picks `target_euler_order` from the most common per-joint order. Hierarchy mismatches raise loudly with pybvh's drop reasons — no silent shrinkage. The resolved targets, per-stage counts, and full `HarmonizeReport` land in `uniformity["harmonized_to"]` (JSON-serializable via `dataclasses.asdict`).
 
 **`metadata.py`** — Feature column descriptors
 - `FeatureDescriptor` — describes which columns correspond to which features in a packed array
@@ -163,15 +165,20 @@ All `torch/` imports are guarded. The core modules (`packing`, `augmentation`, `
 pybvh-ml uses these pybvh entry points:
 - `pybvh.read_bvh_file()`, `pybvh.read_bvh_directory()` — loading
 - `bvh.root_pos`, `bvh.joint_angles`, `bvh.joint_count`, `bvh.joint_names` — data access
+- `bvh.source_path` — on-disk origin used in error messages
 - `bvh.to_quaternions()`, `bvh.to_6d()`, `bvh.to_axisangle()`, `bvh.to_rotmat()` — representation conversion (2-tuple `(root_pos, joint_data)` since pybvh 0.6.0)
 - `bvh.euler_orders` — per-joint Euler order strings
+- `bvh.change_euler_order(order)` — re-express angles in a uniform Euler order (used by `harmonize(target_euler_order=...)`)
+- `bvh.matches_hierarchy(other, match_offsets=False)` and `bvh.matches_channels(other)` — skeleton compatibility predicates (pybvh 0.7.0)
 - `bvh.edges` — skeleton edge list as `(child_idx, parent_idx)` tuples
 - `bvh.nodes`, `bvh.node_index` — skeleton topology
 - `pybvh.transforms.auto_detect_lr_pairs()` — L/R joint pair detection as index tuples
 - `pybvh.rotations.*` — rotation conversion primitives
 - `pybvh.features.*` — motion analysis features (velocities, foot contacts, etc.)
-- `pybvh.batch.compute_normalization_stats()` — normalization
+- `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`
 - `pybvh.tools.rotX`, `rotY`, `rotZ` — elementary rotation matrices
+
+Normalization stats are computed locally in pybvh-ml from already-extracted arrays (see `_normalization_stats_from_arrays`) rather than via `pybvh.compute_normalization_stats` — the latter routes through `batch_to_numpy`, which is stricter about rest-offset equality than pybvh-ml's intentionally loose compatibility check.
 
 ### 5.5 Joint noise is quaternion-internal
 `add_joint_noise` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma_deg)), converts to quaternion, and composes via Hamilton product. This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. The public `representation=` kwarg controls the input/output format; the math itself is always quat-space.

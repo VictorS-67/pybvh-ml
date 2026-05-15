@@ -5,6 +5,97 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-14
+
+Heterogeneous-dataset support pass driven by an external maintainer report
+on `preprocess_directory`'s UX gaps. Pairs with pybvh 0.7.0 — minimum version
+bumped accordingly.
+
+### Breaking changes
+
+- **`require_matching_topology` kwarg removed from `preprocess_directory`.**
+  - **Why**: the flag advertised a fallback that didn't exist. Setting it
+    to False let the per-clip topology check skip, but the downstream
+    `compute_normalization_stats` (which routes through pybvh's
+    `batch_to_numpy`) re-ran the same check and raised anyway. The "lenient
+    pre-0.3 behavior" the docstring promised was dead code — the only
+    observable effect of `False` was a less informative error from a deeper
+    stack frame.
+  - **Migration**: drop the kwarg. For heterogeneous datasets, pass
+    `harmonize=True` instead (see below); for incompatible hierarchies
+    that need bone retargeting, pre-call `pybvh.harmonize(reference=...)`.
+- **Compatibility check is now representation-aware.** Clips that share
+  joint hierarchy but disagree on per-joint Euler orders are accepted for
+  rotation-invariant representations (`"6d"` / `"quaternion"` / `"rotmat"`),
+  where the saved tensor's channel layout is order-agnostic. Order-sensitive
+  representations (`"euler"` / `"axisangle"`) still require channel equality.
+  - **Why**: the previous uniform-check rejected legitimately compatible
+    datasets (same skeleton, half the clips in XZY, half in ZYX) for users
+    on 6D / quaternion representations, who'd get the strictness of the
+    least-flexible representation regardless of what they were extracting.
+  - **Migration**: most users are net-better off — fewer false rejections.
+    Datasets that previously raised on Euler-order mismatch under `"6d"` etc.
+    now succeed. For `"euler"` / `"axisangle"` users, the recovery is
+    `harmonize=True` or an explicit `target_euler_order=` on
+    `pybvh.harmonize` before preprocessing.
+- **Minimum pybvh version: 0.7.0.** Required for `Bvh.matches_hierarchy`,
+  `Bvh.matches_channels`, `Bvh.source_path`, and
+  `pybvh.harmonize(target_euler_order=..., return_report=True)`. Older pybvh
+  installs will fail at import.
+- **`bvh.joint_angles` is radians-native (silent breaking via pybvh 0.7.0).**
+  pybvh 0.7.0 moved the deg↔rad boundary entirely to I/O: `read_bvh_file`
+  converts deg→rad on read and `write_bvh_file` converts rad→deg on write,
+  so every value in `bvh.joint_angles` is now ~57× smaller than before.
+  pybvh-ml's internals already operated in radians (`np.radians(angle_deg)`
+  on user input, quaternion math throughout), so this is a no-op
+  internally — but user code that did `np.deg2rad(bvh.joint_angles)` before
+  feeding pybvh-ml is now a no-op and must be dropped. The unit-test cross-
+  checks against `pybvh.transforms.rotate_angles_vertical` / `mirror_angles`
+  were updated to compare in radians (`rotmat_to_euler(degrees=False)`).
+- **`bvh.joint_velocities()` / `bvh.joint_accelerations()` now return
+  `(F, J, 3)`, not `(F, N, 3)`** (silent breaking via pybvh 0.7.0).  The
+  `(F, J, 3)` layout is joint-axis aligned with `joint_data` /
+  `joint_angles` (no end sites). pybvh-ml's `preprocess_directory(include_velocities=True)`
+  now stores arrays of this tightened shape — code that indexed velocities
+  by node-axis must switch to `bvh.node_velocities()` upstream or adjust
+  axis indexing downstream.
+
+### Added
+
+- **`harmonize=True` kwarg on `preprocess_directory`** — one-line opt-in for
+  the common heterogeneous-dataset workflow. Runs `pybvh.harmonize` against
+  the first clip with `return_report=True`, resolving each target axis from
+  the explicit `target_*` kwarg when set or the majority value from the
+  uniformity audit when not. For order-sensitive representations, also
+  resolves a `target_euler_order` (most-common per-joint order across the
+  dataset). Hierarchy mismatches raise loudly with the dropped filenames
+  and pybvh's drop reasons — no silent shrinkage, which was the original
+  failure mode the maintainer report flagged.
+- **`target_euler_order` kwarg on `preprocess_directory`** — canonical
+  Euler order to unify joint angles to, honored only when `harmonize=True`
+  and the representation is order-sensitive (silently ignored otherwise).
+- **`uniformity["harmonized_to"]`** in the returned summary, populated when
+  `harmonize=True` ran. Carries the resolved target signature
+  (`{"target_world_up": "+z", ...}`), per-stage modification counts
+  (from `HarmonizeReport.applied_stages`), and the full report serialized
+  via `dataclasses.asdict` — JSON-native and ready to embed in dataset
+  metadata for an auditable transformation trail.
+
+### Changed
+
+- **Compatibility-check error messages** now name both the reference clip
+  and the divergent clip, distinguish hierarchy mismatch from channel
+  mismatch, and point at the right recovery (`harmonize=True` for channel,
+  filter / `harmonize(reference=...)` for hierarchy). Uses each clip's
+  `Bvh.source_path` when set (shipped by pybvh 0.7.0), falling back to the
+  caller-supplied filename stem.
+- **Rest-up disagreement warning recovery advice rewritten.** The previous
+  warning suggested `target_rest_up='<axis>'` as the only fix, which fails
+  silently when the file's rest pose is authoritative and animation-frame
+  inference is the wrong one (the maintainer-report's case). The new text
+  names both recovery paths and flags `world_up='<axis>'` (override at
+  parse time) as the more common fix.
+
 ## [0.3.0] - 2026-04-20
 
 ### Breaking changes

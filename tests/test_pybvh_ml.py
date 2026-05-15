@@ -242,16 +242,22 @@ class TestSkeleton:
             assert info['lr_mapping'] == dict(bvh_example.lr_mapping)
 
     def test_lr_pairs_via_cached_mapping(self, bvh_example):
-        """get_lr_pairs should use bvh.lr_mapping when available and agree
-        with the name→index resolution via bvh.joint_index."""
-        if bvh_example.lr_mapping is None:
+        """get_lr_pairs should agree with bvh.lr_pairs (the index-space cache).
+
+        bvh.lr_mapping is bidirectional in pybvh 0.7.0 (each pair appears
+        once as L→R and once as R→L), but bvh.lr_pairs remains
+        single-direction — that's what get_lr_pairs delegates to.
+        """
+        if bvh_example.lr_pairs is None:
             pytest.skip("fixture has no L/R mapping")
-        expected = [
-            (bvh_example.joint_index[l], bvh_example.joint_index[r])
-            for l, r in bvh_example.lr_mapping.items()
-            if l in bvh_example.joint_index and r in bvh_example.joint_index
-        ]
-        assert get_lr_pairs(bvh_example) == expected
+        assert get_lr_pairs(bvh_example) == list(bvh_example.lr_pairs)
+        # Sanity: every (l, r) in get_lr_pairs maps to a name pair present
+        # in lr_mapping (the bidirectional dict).
+        for li, ri in get_lr_pairs(bvh_example):
+            l_name = bvh_example.joint_names[li]
+            r_name = bvh_example.joint_names[ri]
+            assert bvh_example.lr_mapping[l_name] == r_name
+            assert bvh_example.lr_mapping[r_name] == l_name
 
     def test_lr_pairs_fallback(self, bvh_example):
         """With lr_mapping cleared, get_lr_pairs still returns the auto
@@ -543,10 +549,15 @@ class TestQuaternionAugmentation:
 
     @pytest.mark.parametrize("up_idx", [0, 1, 2])
     def test_rotate_quat_consistency_with_euler(self, bvh_example, up_idx):
-        """Quaternion rotation should match pybvh's Euler rotation after conversion."""
+        """Quaternion rotation should match pybvh's Euler rotation after conversion.
+
+        pybvh 0.7.0 made bvh.joint_angles radians-native — rotate_angles_vertical
+        operates on radians, so the cross-check converts the quaternion result
+        back via rotmat_to_euler(..., degrees=False) to match.
+        """
         from pybvh.transforms import rotate_angles_vertical
         angle = 73.0
-        # Euler-level rotation (pybvh's int-axis API)
+        # Euler-level rotation (pybvh's int-axis API) — radians-in, radians-out.
         root_order = ''.join(bvh_example.nodes[0].rot_channels)
         euler_angles, euler_pos = rotate_angles_vertical(
             bvh_example.joint_angles, bvh_example.root_pos,
@@ -557,13 +568,13 @@ class TestQuaternionAugmentation:
         new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quaternion")
         # Compare root positions
         np.testing.assert_allclose(new_pos, euler_pos, atol=1e-6)
-        # Convert quaternion result to Euler and compare
+        # Convert quaternion result to radians-Euler and compare
         from pybvh import rotations
         for j_idx in range(bvh_example.joint_count):
             order = bvh_example.euler_orders[j_idx]
             euler_from_quat = rotations.rotmat_to_euler(
                 rotations.quat_to_rotmat(new_quats[:, j_idx]),
-                order, degrees=True)
+                order, degrees=False)
             np.testing.assert_allclose(
                 euler_from_quat, euler_angles[:, j_idx], atol=1e-4)
 
@@ -604,12 +615,16 @@ class TestQuaternionAugmentation:
 
     @pytest.mark.parametrize("lateral_idx", [0, 1, 2])
     def test_mirror_quat_consistency_with_euler(self, bvh_example, lateral_idx):
-        """Quaternion mirror should produce same spatial result as Euler mirror."""
+        """Quaternion mirror should produce same spatial result as Euler mirror.
+
+        pybvh 0.7.0 made bvh.joint_angles radians-native — comparison is in
+        radians (rotmat_to_euler(..., degrees=False)).
+        """
         from pybvh.transforms import mirror_angles, auto_detect_lr_pairs
         pairs = auto_detect_lr_pairs(bvh_example)
         rot_ch = [list(n.rot_channels) for n in bvh_example.nodes
                    if not n.is_end_site()]
-        # Euler mirror
+        # Euler mirror — radians-in, radians-out.
         euler_m, pos_m = mirror_angles(
             bvh_example.joint_angles, bvh_example.root_pos,
             pairs, lateral_idx, rot_ch)
@@ -619,13 +634,13 @@ class TestQuaternionAugmentation:
         quat_pos_m, quat_m = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
         # Root positions should match
         np.testing.assert_allclose(quat_pos_m, pos_m, atol=1e-6)
-        # Convert quaternion result to Euler and compare
+        # Convert quaternion result to radians-Euler and compare
         from pybvh import rotations
         for j_idx in range(bvh_example.joint_count):
             order = bvh_example.euler_orders[j_idx]
             euler_from_quat = rotations.rotmat_to_euler(
                 rotations.quat_to_rotmat(quat_m[:, j_idx]),
-                order, degrees=True)
+                order, degrees=False)
             np.testing.assert_allclose(
                 euler_from_quat, euler_m[:, j_idx], atol=1e-4)
 
@@ -1175,8 +1190,8 @@ class TestPreprocessing:
         with pytest.raises(ValueError, match="No BVH files found"):
             preprocess_directory(empty_dir, out)
 
-    # --- 0.3 additions: skip_errors, world_up, lr_mapping, constant_channels,
-    #                    require_matching_topology ---
+    # --- skip_errors, world_up, lr_mapping, constant_channels,
+    #     skeleton compatibility check ---
 
     def test_skip_errors_skips_malformed(self, bvh_dir, tmp_path):
         """A malformed file should be skipped with a UserWarning."""
@@ -1231,37 +1246,61 @@ class TestPreprocessing:
         assert "constant_channels" in loaded
         assert loaded["constant_channels"].shape == loaded["mean"].shape
 
-    def test_require_matching_topology_rejects_mismatch(self, bvh_dir, tmp_path):
-        """Mixing bvh_test1 (24 joints) and bvh_test3 (60 joints) raises."""
+    def test_skeleton_mismatch_raises_with_hierarchy_message(
+            self, bvh_dir, tmp_path):
+        """Mixing bvh_test1 (24 joints) and bvh_test3 (60 joints) raises with a
+        hierarchy-mismatch error that names both clips."""
         work_dir = tmp_path / "work"
         work_dir.mkdir()
         import shutil
         shutil.copy(bvh_dir / "bvh_test1.bvh", work_dir / "a.bvh")
         shutil.copy(bvh_dir / "bvh_test3.bvh", work_dir / "b.bvh")
         out = tmp_path / "dataset.npz"
-        # The two fixtures have different rest_forward / world_up, so
-        # preprocess_directory now also emits a heterogeneity warning
-        # before raising. Swallow it to keep test output clean — the
-        # topology ValueError is the assertion under test.
         with pytest.warns(UserWarning, match="(world_up|Rest-pose)"):
-            with pytest.raises(ValueError, match="topology"):
-                preprocess_directory(
-                    work_dir, out, require_matching_topology=True)
+            with pytest.raises(ValueError, match="graph is incompatible"):
+                preprocess_directory(work_dir, out)
 
-    def test_require_matching_topology_false_accepts(self, bvh_dir, tmp_path):
-        """With the flag off, mismatched clips are loaded (legacy behaviour)."""
+    def test_mixed_euler_orders_6d_succeeds(self, bvh_dir, tmp_path):
+        """For rotation-invariant 6d, clips that share hierarchy but differ in
+        Euler order are batchable — the saved tensor is order-agnostic."""
+        from pybvh import read_bvh_file, write_bvh_file
         work_dir = tmp_path / "work"
         work_dir.mkdir()
-        import shutil
-        shutil.copy(bvh_dir / "bvh_test1.bvh", work_dir / "a.bvh")
-        shutil.copy(bvh_dir / "bvh_test1.bvh", work_dir / "b.bvh")
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        # Re-express joint angles in a different Euler order — same
+        # skeleton, same motion, different channel order.
+        bvh_zxy = bvh.change_euler_order("ZXY")
+        write_bvh_file(bvh_zxy, work_dir / "b.bvh")
         out = tmp_path / "dataset.npz"
-        # Two copies of the same file share topology by construction, so
-        # this succeeds either way; the no-op assertion is that no
-        # ValueError is raised.
         result = preprocess_directory(
-            work_dir, out, require_matching_topology=False)
+            work_dir, out, representation="6d")
         assert result["num_clips"] == 2
+
+    def test_mixed_euler_orders_euler_raises_with_recovery_hint(
+            self, bvh_dir, tmp_path):
+        """For order-sensitive 'euler', same setup must raise — and the error
+        should mention harmonize=True as the recovery."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        bvh_zxy = bvh.change_euler_order("ZXY")
+        write_bvh_file(bvh_zxy, work_dir / "b.bvh")
+        out = tmp_path / "dataset.npz"
+        with pytest.raises(ValueError, match="Euler orders"):
+            preprocess_directory(work_dir, out, representation="euler")
+        with pytest.raises(ValueError, match="harmonize=True"):
+            preprocess_directory(work_dir, out, representation="euler")
+
+    def test_require_matching_topology_kwarg_removed(self, bvh_dir, tmp_path):
+        """Passing the dropped kwarg should be a TypeError, not silently ignored."""
+        out = tmp_path / "dataset.npz"
+        with pytest.raises(TypeError, match="require_matching_topology"):
+            preprocess_directory(
+                bvh_dir, out, file_pattern="bvh_test1.bvh",
+                require_matching_topology=False)
 
     def test_parallel_matches_serial(self, bvh_dir, tmp_path):
         """parallel=True must produce byte-identical clip arrays to serial."""
@@ -1284,16 +1323,19 @@ class TestPreprocessing:
             np.testing.assert_array_equal(cs["joint_data"], cp["joint_data"])
 
     def test_include_velocities(self, bvh_dir, tmp_path):
-        """Velocities array is (F, N, 3) where N includes end sites."""
+        """Velocities array is (F, J, 3) — joint-axis aligned with joint_data,
+        not node-axis (pybvh 0.7.0 dropped end sites from joint_velocities)."""
         out = tmp_path / "vel.npz"
         preprocess_directory(
             bvh_dir, out, file_pattern="bvh_test1.bvh",
             include_velocities=True)
         loaded = load_preprocessed(out)
         vel = loaded["clips"][0]["velocities"]
-        # F matches the joint_data, last axis is 3 (xyz).
+        jd = loaded["clips"][0]["joint_data"]
         assert vel.ndim == 3
-        assert vel.shape[0] == loaded["clips"][0]["joint_data"].shape[0]
+        assert vel.shape[0] == jd.shape[0], "F axis must match joint_data"
+        assert vel.shape[1] == jd.shape[1], (
+            "J axis must match joint_data (per-joint, no end sites)")
         assert vel.shape[-1] == 3
 
     def test_include_foot_contacts(self, bvh_dir, tmp_path):
@@ -1308,6 +1350,204 @@ class TestPreprocessing:
         assert fc.shape[0] == loaded["clips"][0]["joint_data"].shape[0]
         assert "foot_joints" in loaded["skeleton_info"]
         assert fc.shape[1] == len(loaded["skeleton_info"]["foot_joints"])
+
+    def test_harmonize_unifies_euler_orders_for_euler_rep(
+            self, bvh_dir, tmp_path):
+        """For representation='euler', clips with mismatched Euler orders should
+        be batchable after harmonize=True, and the saved tensor's per-joint
+        channel layout becomes the harmonized order."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        bvh_zxy = bvh.change_euler_order("ZXY")
+        write_bvh_file(bvh_zxy, work_dir / "b.bvh")
+
+        out = tmp_path / "harmonized.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="euler",
+            harmonize=True, target_euler_order="ZYX",
+        )
+        assert result["num_clips"] == 2
+        h = result["uniformity"]["harmonized_to"]
+        assert h["targets"].get("target_euler_order") == "ZYX"
+        # One of the clips was already ZYX, so only the ZXY one should
+        # have had an euler_order stage applied.
+        assert h["stage_counts"].get("euler_order", 0) >= 1
+
+    def test_harmonize_picks_majority_when_target_omitted(
+            self, bvh_dir, tmp_path):
+        """When target_euler_order is omitted under harmonize=True, the
+        most-common per-joint order across clips is chosen.
+
+        bvh_test1's per-joint distribution is {XZY: 16, XYZ: 4, YZX: 2,
+        ZYX: 2}. Two native copies + one ZXY-reoriented copy →
+        per-joint mode XZY (32 occurrences vs ZXY's 24).
+        """
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        write_bvh_file(bvh, work_dir / "b.bvh")
+        write_bvh_file(bvh.change_euler_order("ZXY"), work_dir / "c.bvh")
+
+        out = tmp_path / "harmonized.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="euler", harmonize=True)
+        assert result["num_clips"] == 3
+        targets = result["uniformity"]["harmonized_to"]["targets"]
+        assert targets.get("target_euler_order") == "XZY"
+
+    def test_harmonize_skips_euler_order_for_rotation_invariant_reps(
+            self, bvh_dir, tmp_path):
+        """For 6d / quaternion / rotmat, harmonize=True should not include
+        target_euler_order in the resolved signature — channel layout is
+        order-agnostic so unifying orders is wasted work."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        write_bvh_file(bvh.change_euler_order("ZXY"), work_dir / "b.bvh")
+
+        out = tmp_path / "harmonized.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="6d", harmonize=True)
+        targets = result["uniformity"]["harmonized_to"]["targets"]
+        assert "target_euler_order" not in targets
+
+    def test_harmonize_hierarchy_mismatch_raises(self, bvh_dir, tmp_path):
+        """Hierarchy mismatches under harmonize=True must raise loudly with
+        the dropped filename and pybvh's drop reason — not silently shrink
+        the dataset (the original maintainer-report failure)."""
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        import shutil
+        shutil.copy(bvh_dir / "bvh_test1.bvh", work_dir / "a.bvh")
+        shutil.copy(bvh_dir / "bvh_test3.bvh", work_dir / "b.bvh")
+        out = tmp_path / "harmonized.npz"
+        with pytest.warns(UserWarning):
+            with pytest.raises(
+                    ValueError,
+                    match=r"pybvh\.harmonize dropped \d+ clip"):
+                preprocess_directory(
+                    work_dir, out, representation="6d", harmonize=True)
+
+    def test_same_graph_different_offsets_accepted(self, bvh_dir, tmp_path):
+        """Multi-actor case: clips share the skeleton graph (same names +
+        parent indices) but have different bone offsets. The compatibility
+        check accepts them — joint_data tensors don't depend on bone
+        lengths, and harmonize(reference=...) is the right tool when
+        offset uniformity matters."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "actor_a.bvh")
+        write_bvh_file(bvh.scale(0.5), work_dir / "actor_b.bvh")
+
+        out = tmp_path / "dataset.npz"
+        result = preprocess_directory(work_dir, out, representation="6d")
+        assert result["num_clips"] == 2
+
+    def test_harmonize_explicit_target_wins_over_majority(
+            self, bvh_dir, tmp_path):
+        """When harmonize=True receives an explicit target_euler_order, that
+        value wins even when the dataset majority is different."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        # Majority would be XZY (bvh_test1's native); force XYZ.
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        write_bvh_file(bvh, work_dir / "b.bvh")
+        write_bvh_file(bvh.change_euler_order("ZXY"), work_dir / "c.bvh")
+
+        out = tmp_path / "dataset.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="euler",
+            harmonize=True, target_euler_order="XYZ",
+        )
+        targets = result["uniformity"]["harmonized_to"]["targets"]
+        assert targets["target_euler_order"] == "XYZ"
+
+    def test_harmonize_roundtrip_saved_arrays_load_back(
+            self, bvh_dir, tmp_path):
+        """End-to-end: after harmonize=True, the saved .npz loads with
+        consistent shapes — extraction actually happened post-harmonize."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        write_bvh_file(bvh.change_euler_order("ZXY"), work_dir / "b.bvh")
+
+        out = tmp_path / "dataset.npz"
+        preprocess_directory(
+            work_dir, out, representation="euler",
+            harmonize=True, target_euler_order="ZYX",
+        )
+        loaded = load_preprocessed(out)
+        a = loaded["clips"][0]["joint_data"]
+        b = loaded["clips"][1]["joint_data"]
+        assert a.shape == b.shape, (
+            "After harmonize=True with target_euler_order='ZYX', both "
+            "clips should have the same (F, J, 3) channel layout")
+
+    def test_harmonize_report_is_json_serializable(self, bvh_dir, tmp_path):
+        """The harmonized_to summary must be JSON-serializable so it can be
+        embedded in dataset metadata downstream."""
+        import json
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        write_bvh_file(bvh.change_euler_order("ZXY"), work_dir / "b.bvh")
+
+        out = tmp_path / "harmonized.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="euler",
+            harmonize=True, target_euler_order="ZYX",
+        )
+        # Must not raise — proves dataclasses.asdict produced JSON-native data.
+        encoded = json.dumps(result["uniformity"]["harmonized_to"])
+        assert "report" in json.loads(encoded)
+
+    def test_rest_anim_mismatch_warning_offers_both_recoveries(self):
+        """When rest_up != world_up, the warning names both world_up= and
+        target_rest_up= recovery paths (the file's parsed rest_up vs the
+        animation-inferred world_up). Old text mentioned only target_rest_up,
+        which doesn't help when animation inference is the wrong one."""
+        import warnings as _warnings
+        from pybvh_ml.preprocessing import _warn_if_heterogeneous
+
+        uniformity = {
+            "world_up": {"+y": ["clip_a", "clip_b"]},
+            "rest_forward": {"+z": ["clip_a", "clip_b"]},
+            "rest_up": {"+y": ["clip_a", "clip_b"]},
+            "rest_anim_mismatch": ["clip_a", "clip_b"],
+        }
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            _warn_if_heterogeneous(
+                uniformity,
+                target_world_up=None,
+                target_rest_forward=None,
+                target_rest_up=None,
+            )
+        mismatch_warnings = [
+            w for w in caught
+            if "Rest-pose up disagrees" in str(w.message)
+        ]
+        assert len(mismatch_warnings) == 1
+        msg = str(mismatch_warnings[0].message)
+        assert "world_up='<axis>'" in msg, (
+            "warning should recommend world_up= override at parse time")
+        assert "target_rest_up='<axis>'" in msg, (
+            "warning should keep the target_rest_up= path as alternative")
 
 
 # =============================================================================
@@ -2103,11 +2343,11 @@ class TestPreprocessingFilter:
 
 
 class TestVersionFloor:
-    """pybvh-ml 0.3 requires pybvh >= 0.6."""
+    """pybvh-ml 0.4 requires pybvh >= 0.7."""
 
     def test_pybvh_version_floor(self):
         import pybvh
         major, minor = (int(x) for x in pybvh.__version__.split(".")[:2])
-        assert (major, minor) >= (0, 6), (
-            f"pybvh-ml >= 0.3 requires pybvh >= 0.6.0, "
+        assert (major, minor) >= (0, 7), (
+            f"pybvh-ml >= 0.4 requires pybvh >= 0.7.0, "
             f"got {pybvh.__version__}")
