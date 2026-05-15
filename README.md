@@ -23,6 +23,14 @@ pybvh-ml is the layer between [pybvh](https://github.com/VictorS-67/pybvh) (whic
 
 It replaces the ~150 lines of preprocessing, augmentation, and dataset-class boilerplate that most BVH-based ML pipelines reinvent. Composable enough to use one piece at a time (just the packer, just the augmentor); opinionated enough to give you a working data loader in a dozen lines.
 
+## Stability and versioning
+
+**pybvh-ml is in 0.x — expect breaking changes between minor versions.**
+
+We treat 0.x as design space: when a past choice turns out to be wrong, we fix it at the root rather than carry scar tissue forward. No deprecation cycles, no compatibility shims; each release ships a single clean migration path, documented in the [CHANGELOG](CHANGELOG.md). If you depend on pybvh-ml from production code, **pin to an exact version** (`pybvh-ml==0.4.0`) and read the upgrade notes before bumping.
+
+This will change at **1.0**: from then on, pybvh-ml will commit to strict semver — no breaking changes within a major version, deprecation warnings (at least one minor release) before any future removal. Until 1.0, "make the library better" wins over "preserve the old behavior."
+
 ## Installation
 
 ```bash
