@@ -318,20 +318,25 @@ def _resolve_harmonize_targets(
 def _normalization_stats_from_arrays(
     root_pos_list: list[npt.NDArray[np.float64]],
     joint_data_list: list[npt.NDArray[np.float64]],
+    include_root_pos: bool = True,
 ) -> dict[str, npt.NDArray]:
     """Compute global mean/std/constant_channels across already-extracted
     ``(root_pos, joint_data)`` lists.
 
-    Equivalent to ``pybvh.compute_normalization_stats(clips, ...)`` on
-    the saved ``(F, 3 + J*C)`` flat layout — but operates on the
-    numpy arrays directly so the cross-clip rest-offset check inside
-    ``batch_to_numpy`` is bypassed.  Layout: ``[root_pos (3), joint_data
-    flattened over (J, C)]`` per frame, concatenated across all clips.
+    Array-level core shared by the public
+    :func:`compute_normalization_stats` (which extracts the arrays from
+    Bvh objects first) and :func:`preprocess_directory` (which already
+    holds them).  Layout: ``[root_pos (3), joint_data flattened over
+    (J, C)]`` per frame, concatenated across all clips; the root_pos
+    columns are dropped when ``include_root_pos=False``.
     """
     flats: list[npt.NDArray[np.float64]] = []
     for rp, jd in zip(root_pos_list, joint_data_list):
-        F = rp.shape[0]
-        flats.append(np.concatenate([rp, jd.reshape(F, -1)], axis=1))
+        F = jd.shape[0]
+        flat = jd.reshape(F, -1)
+        if include_root_pos:
+            flat = np.concatenate([rp, flat], axis=1)
+        flats.append(flat)
     all_frames = np.concatenate(flats, axis=0)
     mean = all_frames.mean(axis=0)
     std = all_frames.std(axis=0)
@@ -479,6 +484,125 @@ def _check_skeleton_compatibility(
                 f"or pick a rotation-invariant representation "
                 f"('6d' / 'quat' / 'rotmat') for which "
                 f"channel layout is order-agnostic.")
+
+
+# =========================================================================
+# Normalization utilities
+# =========================================================================
+
+def compute_normalization_stats(
+    bvh_list: list[Bvh],
+    representation: str = "euler",
+    include_root_pos: bool = True,
+) -> dict[str, npt.NDArray]:
+    """Compute per-channel mean and std across a dataset of BVH objects.
+
+    Extracts every clip in the given representation, concatenates all
+    frames, then computes mean and standard deviation per feature
+    channel.  Compatible with the ``Mean.npy`` / ``Std.npy`` convention
+    used by HumanML3D and MDM.  The channel layout matches
+    :func:`pybvh_ml.pack_to_flat` and the arrays saved by
+    :func:`preprocess_directory`: ``[root_pos (3), joint_data flattened
+    over (J, C)]`` per frame.
+
+    Parameters
+    ----------
+    bvh_list : list of Bvh
+        Dataset of BVH objects.  Clips must share the same skeleton
+        graph (joint names + parent indices); bone-length variation
+        across actors is accepted, matching the loose compatibility
+        convention of :func:`preprocess_directory`.  For
+        order-sensitive representations (``'euler'`` / ``'axisangle'``),
+        per-joint Euler orders must also match.
+    representation : str, optional
+        Rotation representation: ``'euler'`` (default), ``'quat'``,
+        ``'6d'``, or ``'axisangle'``.
+    include_root_pos : bool, optional
+        If True (default), include root position in the features.
+
+    Returns
+    -------
+    dict
+        ``{"mean": ndarray (D,), "std": ndarray (D,),
+        "constant_channels": ndarray of bool (D,)}``.
+
+        ``constant_channels[i]`` is True when the raw standard deviation
+        for channel ``i`` was below ``1e-8`` and the guard replaced it
+        with ``1.0``. Normalized values on these channels are identically
+        zero rather than ~N(0, 1) — use this mask to exclude them from
+        per-channel diagnostics.
+
+    Raises
+    ------
+    ValueError
+        If ``bvh_list`` is empty, skeletons are incompatible, or the
+        representation is unknown.
+
+    Notes
+    -----
+    Save/load stats with ``np.savez("stats.npz", **stats)`` and
+    ``dict(np.load("stats.npz"))``. Bool arrays round-trip cleanly
+    through ``.npz``.
+    """
+    if not bvh_list:
+        raise ValueError("bvh_list is empty.")
+
+    labels = [f"bvh_list[{i}]" for i in range(len(bvh_list))]
+    _check_skeleton_compatibility(bvh_list, labels, representation)
+
+    root_pos_list: list[npt.NDArray[np.float64]] = []
+    joint_data_list: list[npt.NDArray[np.float64]] = []
+    for bvh in bvh_list:
+        root_pos, joint_data = extract_repr(bvh, representation)
+        root_pos_list.append(root_pos)
+        joint_data_list.append(joint_data)
+
+    return _normalization_stats_from_arrays(
+        root_pos_list, joint_data_list, include_root_pos=include_root_pos)
+
+
+def normalize_array(
+    data: npt.NDArray[np.float64],
+    stats: dict[str, npt.NDArray[np.float64]],
+) -> npt.NDArray[np.float64]:
+    """Apply z-score normalization: ``(data - mean) / std``.
+
+    Parameters
+    ----------
+    data : ndarray
+        Data to normalize. Last dimension must match ``stats["mean"]``.
+    stats : dict
+        ``{"mean": ndarray (D,), "std": ndarray (D,)}`` from
+        :func:`compute_normalization_stats`.
+
+    Returns
+    -------
+    ndarray
+        Normalized data, same shape as input.
+    """
+    return (data - stats["mean"]) / stats["std"]
+
+
+def denormalize_array(
+    data: npt.NDArray[np.float64],
+    stats: dict[str, npt.NDArray[np.float64]],
+) -> npt.NDArray[np.float64]:
+    """Reverse z-score normalization: ``data * std + mean``.
+
+    Parameters
+    ----------
+    data : ndarray
+        Normalized data to denormalize.
+    stats : dict
+        ``{"mean": ndarray (D,), "std": ndarray (D,)}`` from
+        :func:`compute_normalization_stats`.
+
+    Returns
+    -------
+    ndarray
+        Denormalized data, same shape as input.
+    """
+    return data * stats["std"] + stats["mean"]
 
 
 def preprocess_directory(
@@ -749,15 +873,10 @@ def preprocess_directory(
         skel_info["foot_joints"] = list(foot_joints) if foot_joints else []
 
     # Normalization stats (computed on the primary representation only;
-    # velocities / foot contacts have their own natural scales).
-    #
-    # Computed locally from the already-extracted arrays rather than via
-    # pybvh's ``compute_normalization_stats``.  That entry point routes
-    # through ``batch_to_numpy``, which insists on rest-offset equality
-    # via ``matches_hierarchy(match_offsets=True)``.  Pybvh-ml accepts
-    # bone-length variation across actors (the angle tensors don't depend
-    # on bone lengths) — see ``_check_skeleton_compatibility``.  Going
-    # via the raw arrays sidesteps the redundant compatibility check.
+    # velocities / foot contacts have their own natural scales).  Shares
+    # the array-level core with the public compute_normalization_stats;
+    # going via the already-extracted (and centered) arrays avoids a
+    # second extraction pass and a redundant compatibility check.
     stats = _normalization_stats_from_arrays(all_root_pos, all_joint_data)
 
     # Labels

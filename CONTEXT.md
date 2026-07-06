@@ -178,7 +178,7 @@ pybvh-ml uses these pybvh entry points:
 - `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`
 - `pybvh.tools.rotX`, `rotY`, `rotZ` — elementary rotation matrices
 
-Normalization stats are computed locally in pybvh-ml from already-extracted arrays (see `_normalization_stats_from_arrays`) rather than via `pybvh.compute_normalization_stats` — the latter routes through `batch_to_numpy`, which is stricter about rest-offset equality than pybvh-ml's intentionally loose compatibility check.
+Normalization is pybvh-ml's own public API since 0.5.0: `compute_normalization_stats` / `normalize_array` / `denormalize_array` live in `preprocessing.py` (absorbed from pybvh 0.8.0, which removed the trio from `pybvh.batch`). The Bvh-list entry point extracts via `extract_repr` and applies pybvh-ml's intentionally loose skeleton check (`_check_skeleton_compatibility`, bone-length variation accepted); `preprocess_directory` shares the same array-level core (`_normalization_stats_from_arrays`) on its already-extracted arrays.
 
 ### 5.5 Joint noise is quaternion-internal
 `add_joint_noise` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma_deg)), converts to quaternion, and composes via Hamilton product. This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. The public `representation=` kwarg controls the input/output format; the math itself is always quat-space.

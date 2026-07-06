@@ -13,7 +13,7 @@ ML bridge layer for [pybvh](https://github.com/VictorS-67/pybvh) — turn motion
 
 - **Tensor packing** to `(C, T, V)`, `(T, V, C)`, and flat `(T, D)` layouts with round-trip unpacking.
 - **Array-level augmentation** in quaternion, 6D, axis-angle, rotmat, and Euler — keyword-only, no `Bvh` round-trip, with composable pipelines and reproducible per-epoch seeding.
-- **Preprocessing pipelines** — BVH directory → on-disk dataset (`.npz` / `.hdf5`) with skeleton-aware harmonization for heterogeneous corpora.
+- **Preprocessing pipelines** — BVH directory → on-disk dataset (`.npz` / `.hdf5`) with skeleton-aware harmonization for heterogeneous corpora and dataset-wide z-score normalization (`compute_normalization_stats` / `normalize_array` / `denormalize_array`).
 - **Skeleton-graph metadata** — edge lists, body-part partitions, L/R joint pairs for GCN and Transformer models.
 - **Optional PyTorch integration** — `MotionDataset` / `OnTheFlyDataset` / `collate_motion_batch` with variable-length padding.
 
@@ -104,6 +104,20 @@ Power-user kwargs for richer outputs:
 - `include_quaternions=True` — store pre-computed quaternion arrays for runtime augmentation that needs them.
 - `label_fn(stem) -> int` — attach per-clip integer labels.
 - `filter_fn(stem) -> bool` — filter files before loading (skipped files are never parsed).
+
+### Normalization
+
+Per-channel z-score normalization following the `Mean.npy` / `Std.npy` convention used by HumanML3D and MDM:
+
+```python
+from pybvh_ml import compute_normalization_stats, normalize_array, denormalize_array
+
+stats = compute_normalization_stats(clips, representation="6d")  # {"mean", "std", "constant_channels"}
+x_norm = normalize_array(x, stats)     # (x - mean) / std
+x = denormalize_array(x_norm, stats)   # back to BVH units
+```
+
+`compute_normalization_stats` takes a list of `Bvh` objects and computes stats over all frames in the flat `[root_pos, joint_data]` channel layout (`include_root_pos=False` drops the first 3 columns); zero-variance channels get their std guarded to `1.0` and flagged in the `constant_channels` mask. `preprocess_directory` stores the same stats in its output file, so after `load_preprocessed` you can pass the loaded dict straight to `normalize_array` — the direct entry point is for workflows that skip the on-disk artifact.
 
 ### Harmonizing heterogeneous datasets
 

@@ -36,6 +36,12 @@ from .augmentation import (
 )
 from .convert import convert_arrays
 from .pipeline import AugmentationPipeline
-from .preprocessing import preprocess_directory, load_preprocessed
+from .preprocessing import (
+    preprocess_directory,
+    load_preprocessed,
+    compute_normalization_stats,
+    normalize_array,
+    denormalize_array,
+)
 
 # torch subpackage is imported by user as: from pybvh_ml.torch import ...

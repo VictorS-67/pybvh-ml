@@ -280,7 +280,7 @@ print(f"num_clips preprocessed: {summary['num_clips']}")
 #    of defence.  Inspect `summary["uniformity"]` in CI to guard against
 #    silent axis drift.
 # 4. **Normalize.** `load_preprocessed(out)["mean"] / ["std"]` are ready for
-#    `pybvh.normalize_array(...)` at training time; `["constant_channels"]` tells you
+#    `pybvh_ml.normalize_array(...)` at training time; `["constant_channels"]` tells you
 #    which columns had zero variance.
 
 # %%

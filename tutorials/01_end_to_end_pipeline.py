@@ -104,6 +104,19 @@ print("clip[0] root_pos shape:", data["clips"][0]["root_pos"].shape)
 print("clip[0] joint_data shape:", data["clips"][0]["joint_data"].shape)
 
 # %% [markdown]
+# The stored `mean` / `std` follow the `Mean.npy` / `Std.npy` convention used by HumanML3D and MDM, in the same flat `[root_pos, joint_data]` channel layout as `pack_to_flat`. Apply them with `normalize_array` at training time and map model output back into BVH units with `denormalize_array` — both live in pybvh-ml (as does `compute_normalization_stats`, for computing the same stats straight from a list of `Bvh` objects without going through `preprocess_directory`).
+
+# %%
+from pybvh_ml import normalize_array, denormalize_array, pack_to_flat
+
+clip = data["clips"][0]
+flat = pack_to_flat(clip["root_pos"], clip["joint_data"], center_root=False)
+normalized = normalize_array(flat, data)  # data carries "mean" / "std"
+print("normalized dataset mean ~ 0:", abs(normalized.mean()) < 1e-10)
+roundtrip = denormalize_array(normalized, data)
+print("round-trip max error:", abs(roundtrip - flat).max())
+
+# %% [markdown]
 # ## Step 3 — Add an on-the-fly augmentation pipeline
 #
 # Augmentation runs inside `__getitem__` so each epoch sees freshly augmented clips.

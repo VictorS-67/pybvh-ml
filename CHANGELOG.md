@@ -17,6 +17,11 @@ Coordinated migration to pybvh 0.8.0 (atomic, no shims). This section is consoli
 - **`bvh.to_quaternions()` / `bvh.from_quaternions()` call sites migrated to `bvh.to_quat()` / `bvh.from_quat()`** (silent breaking via pybvh 0.8.0). Affects any user code calling these pybvh methods around pybvh-ml pipelines; pybvh-ml's own internals are updated.
 - **`pybvh_ml.augmentation` no longer imports `pybvh.tools.rotX/rotY/rotZ`** (removed in pybvh 0.8.0). The internal cardinal-axis rotation matrix is now built via the public `pybvh.rotations.quat_to_rotmat`; results are identical up to float rounding (~1e-16).
 
+### Added
+
+- **Normalization trio moved here from pybvh** — `compute_normalization_stats`, `normalize_array`, and `denormalize_array` are now pybvh-ml public API (pybvh 0.8.0 removed them from `pybvh.batch`; dataset z-score normalization is an ML-pipeline concern). Same signatures and `Mean.npy` / `Std.npy`-compatible output as the pybvh originals: `{"mean", "std", "constant_channels"}` with zero-std channels guarded to `1.0`. The Bvh-list entry point extracts through pybvh-ml's own `extract_repr` and uses the representation-aware loose skeleton check (bone-length variation across actors is accepted), so supported representations are `"euler"` / `"quat"` / `"6d"` / `"axisangle"` — `"rotmat"` is not part of pybvh-ml's extraction surface. `preprocess_directory`'s stored stats share the same array-level core.
+  - **Migration**: one line — `from pybvh import compute_normalization_stats, normalize_array, denormalize_array` becomes `from pybvh_ml import compute_normalization_stats, normalize_array, denormalize_array`.
+
 ### Documentation
 
 - `packing._center` docstring now states explicitly that pybvh-ml's `center_root` subtracts the full 3D first-frame root position — distinct from pybvh 0.8.0's `centered="first"`, which is ground-plane-only.
