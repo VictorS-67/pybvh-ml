@@ -168,7 +168,7 @@ class TestPacking:
 
     def test_pack_from_bvh_quaternion(self, bvh_example):
         """Pack actual BVH data in quaternion representation."""
-        root_pos, quats = bvh_example.to_quaternions()
+        root_pos, quats = bvh_example.to_quat()
         packed = pack_to_ctv(root_pos, quats, center_root=True)
         F = bvh_example.frame_count
         J = bvh_example.joint_count
@@ -411,7 +411,7 @@ class TestMetadata:
         assert desc["joint_rotations"] == (3, 147)
 
     def test_quaternion_descriptor(self):
-        desc = describe_features(24, representation="quaternion")
+        desc = describe_features(24, representation="quat")
         assert desc.total_dim == 3 + 24 * 4  # 99
 
     def test_no_root_pos(self):
@@ -444,7 +444,7 @@ class TestMetadata:
             describe_features(24, representation="invalid")
 
     @pytest.mark.parametrize("repr_name,expected_c", [
-        ("euler", 3), ("axisangle", 3), ("quaternion", 4),
+        ("euler", 3), ("axisangle", 3), ("quat", 4),
         ("6d", 6), ("rotmat", 9),
     ])
     def test_all_representations(self, repr_name, expected_c):
@@ -468,7 +468,7 @@ from pybvh_ml.pipeline import AugmentationPipeline
 
 def _get_quat_data(bvh):
     """Helper: extract quaternion arrays from a Bvh."""
-    return bvh.to_quaternions()
+    return bvh.to_quat()
 
 
 def _get_6d_data(bvh):
@@ -493,19 +493,19 @@ class TestQuaternionAugmentation:
 
     def test_rotate_quat_shape(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=45.0, up_axis="+y", representation="quaternion")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=45.0, up_axis="+y", representation="quat")
         assert new_quats.shape == quats.shape
         assert new_pos.shape == pos.shape
 
     def test_rotate_quat_zero_is_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=0.0, up_axis="+y", representation="quaternion")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=0.0, up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_quats, quats, atol=1e-10)
         np.testing.assert_allclose(new_pos, pos, atol=1e-10)
 
     def test_rotate_quat_360_is_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=360.0, up_axis="+y", representation="quaternion")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=360.0, up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_pos, pos, atol=1e-10)
         # Quaternions: q and -q represent same rotation
         for f in range(quats.shape[0]):
@@ -518,13 +518,13 @@ class TestQuaternionAugmentation:
 
     def test_rotate_quat_nonroot_unchanged(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        _, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quaternion")
+        _, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_quats[:, 1:], quats[:, 1:], atol=1e-10)
 
     def test_rotate_quat_root_pos_rotated(self, bvh_example):
         """Root position should be transformed by the rotation matrix."""
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quaternion")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
         # 90° around Y: (x, y, z) → (z, y, -x)
         np.testing.assert_allclose(new_pos[:, 0], pos[:, 2], atol=1e-10)
         np.testing.assert_allclose(new_pos[:, 1], pos[:, 1], atol=1e-10)
@@ -533,8 +533,8 @@ class TestQuaternionAugmentation:
     def test_rotate_quat_negative_axis_flips_direction(self, bvh_example):
         """'+y' and '-y' of the same angle should rotate in opposite directions."""
         pos, quats = _get_quat_data(bvh_example)
-        pos_plus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quaternion")
-        pos_minus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="-y", representation="quaternion")
+        pos_plus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
+        pos_minus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="-y", representation="quat")
         # Same magnitude, opposite sign on the non-up components.
         np.testing.assert_allclose(pos_plus[:, 1], pos_minus[:, 1], atol=1e-10)
         np.testing.assert_allclose(pos_plus[:, 0], -pos_minus[:, 0], atol=1e-10)
@@ -543,9 +543,9 @@ class TestQuaternionAugmentation:
     def test_rotate_quat_bad_axis_raises(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(ValueError, match="axis must be"):
-            rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="y", representation="quaternion")
+            rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="y", representation="quat")
         with pytest.raises(ValueError, match="axis must be"):
-            rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+w", representation="quaternion")
+            rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+w", representation="quat")
 
     @pytest.mark.parametrize("up_idx", [0, 1, 2])
     def test_rotate_quat_consistency_with_euler(self, bvh_example, up_idx):
@@ -557,15 +557,16 @@ class TestQuaternionAugmentation:
         """
         from pybvh.transforms import rotate_angles_vertical
         angle = 73.0
-        # Euler-level rotation (pybvh's int-axis API) — radians-in, radians-out.
+        # Euler-level rotation (pybvh's int-axis API). pybvh 0.8.0 made the
+        # angle radians-first; degrees=True matches pybvh-ml's degree input.
         root_order = ''.join(bvh_example.nodes[0].rot_channels)
         euler_angles, euler_pos = rotate_angles_vertical(
             bvh_example.joint_angles, bvh_example.root_pos,
-            angle, up_idx, root_order)
+            angle, up_idx, root_order, degrees=True)
         # Quaternion-level rotation (pybvh-ml's signed-axis API)
         up_axis = "+" + "xyz"[up_idx]
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quaternion")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quat")
         # Compare root positions
         np.testing.assert_allclose(new_pos, euler_pos, atol=1e-6)
         # Convert quaternion result to radians-Euler and compare
@@ -583,14 +584,14 @@ class TestQuaternionAugmentation:
     def test_mirror_quat_shape(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
-        new_pos, new_quats = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
+        new_pos, new_quats = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
         assert new_quats.shape == quats.shape
         assert new_pos.shape == pos.shape
 
     def test_mirror_quat_lateral_negated(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
-        new_pos, _ = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
+        new_pos, _ = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
         lat_idx = "xyz".index(lateral_axis[1])
         np.testing.assert_allclose(
             new_pos[:, lat_idx], -pos[:, lat_idx], atol=1e-10)
@@ -598,8 +599,8 @@ class TestQuaternionAugmentation:
     def test_mirror_quat_double_is_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
-        p1, q1 = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
-        p2, q2 = mirror(root_pos=p1, joint_data=q1, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
+        p1, q1 = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
+        p2, q2 = mirror(root_pos=p1, joint_data=q1, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
         np.testing.assert_allclose(p2, pos, atol=1e-10)
         np.testing.assert_allclose(q2, quats, atol=1e-10)
 
@@ -608,8 +609,8 @@ class TestQuaternionAugmentation:
         pos, quats = _get_quat_data(bvh_example)
         pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
         flipped = ("-" if lateral_axis[0] == "+" else "+") + lateral_axis[1]
-        p1, q1 = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
-        p2, q2 = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=flipped, representation="quaternion")
+        p1, q1 = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
+        p2, q2 = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=flipped, representation="quat")
         np.testing.assert_allclose(q1, q2, atol=1e-12)
         np.testing.assert_allclose(p1, p2, atol=1e-12)
 
@@ -631,7 +632,7 @@ class TestQuaternionAugmentation:
         # Quaternion mirror (pybvh-ml's signed-axis API)
         lateral_axis = "+" + "xyz"[lateral_idx]
         pos, quats = _get_quat_data(bvh_example)
-        quat_pos_m, quat_m = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
+        quat_pos_m, quat_m = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
         # Root positions should match
         np.testing.assert_allclose(quat_pos_m, pos_m, atol=1e-6)
         # Convert quaternion result to radians-Euler and compare
@@ -649,13 +650,13 @@ class TestQuaternionAugmentation:
     def test_speed_frame_count(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         F = pos.shape[0]
-        new_p, new_q = speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=2.0, representation="quaternion")
+        new_p, new_q = speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=2.0, representation="quat")
         assert new_p.shape[0] == max(2, round(F / 2.0))
         assert new_q.shape[0] == new_p.shape[0]
 
     def test_speed_factor_one(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_p, new_q = speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=1.0, representation="quaternion")
+        new_p, new_q = speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=1.0, representation="quat")
         assert new_p.shape[0] == pos.shape[0]
         np.testing.assert_allclose(new_p, pos, atol=1e-10)
         # Quaternions should match (q or -q)
@@ -667,26 +668,26 @@ class TestQuaternionAugmentation:
 
     def test_speed_endpoints(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_p, new_q = speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=1.5, representation="quaternion")
+        new_p, new_q = speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=1.5, representation="quat")
         np.testing.assert_allclose(new_p[0], pos[0], atol=1e-10)
         np.testing.assert_allclose(new_p[-1], pos[-1], atol=1e-10)
 
     def test_speed_invalid_factor(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(ValueError, match="factor must be > 0"):
-            speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=0.0, representation="quaternion")
+            speed_perturbation_arrays(root_pos=pos, joint_data=quats, factor=0.0, representation="quat")
 
     # --- dropout_arrays ---
 
     def test_dropout_shape(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_p, new_q = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.3, representation="quaternion", rng=np.random.default_rng(42))
+        new_p, new_q = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.3, representation="quat", rng=np.random.default_rng(42))
         assert new_q.shape == quats.shape
         assert new_p.shape == pos.shape
 
     def test_dropout_first_last_kept(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_p, new_q = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.5, representation="quaternion", rng=np.random.default_rng(42))
+        new_p, new_q = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.5, representation="quat", rng=np.random.default_rng(42))
         np.testing.assert_allclose(new_p[0], pos[0], atol=1e-10)
         np.testing.assert_allclose(new_p[-1], pos[-1], atol=1e-10)
         np.testing.assert_allclose(new_q[0], quats[0], atol=1e-10)
@@ -694,14 +695,14 @@ class TestQuaternionAugmentation:
 
     def test_dropout_zero_rate(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_p, new_q = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.0, representation="quaternion")
+        new_p, new_q = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.0, representation="quat")
         np.testing.assert_allclose(new_q, quats, atol=1e-10)
         np.testing.assert_allclose(new_p, pos, atol=1e-10)
 
     def test_dropout_reproducible(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        p1, q1 = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.3, representation="quaternion", rng=np.random.default_rng(99))
-        p2, q2 = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.3, representation="quaternion", rng=np.random.default_rng(99))
+        p1, q1 = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.3, representation="quat", rng=np.random.default_rng(99))
+        p2, q2 = dropout_arrays(root_pos=pos, joint_data=quats, drop_rate=0.3, representation="quat", rng=np.random.default_rng(99))
         np.testing.assert_allclose(q1, q2, atol=1e-12)
         np.testing.assert_allclose(p1, p2, atol=1e-12)
 
@@ -754,7 +755,7 @@ class TestRot6dAugmentation:
         pos, quats = _get_quat_data(bvh_example)
         _, rot6d = _get_6d_data(bvh_example)
         # Quaternion rotation
-        new_pos_q, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quaternion")
+        new_pos_q, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quat")
         # 6D rotation
         new_pos_6d, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=angle, up_axis=up_axis, representation="6d")
         # Root positions should match
@@ -793,7 +794,7 @@ class TestRot6dAugmentation:
         pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
         pos, quats = _get_quat_data(bvh_example)
         _, rot6d = _get_6d_data(bvh_example)
-        quat_pos, quat_m = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quaternion")
+        quat_pos, quat_m = mirror(root_pos=pos, joint_data=quats, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="quat")
         r6d_pos, r6d_m = mirror(root_pos=pos, joint_data=rot6d, lr_joint_pairs=pairs, lateral_axis=lateral_axis, representation="6d")
         np.testing.assert_allclose(r6d_pos, quat_pos, atol=1e-10)
         R_from_quat = rotations.quat_to_rotmat(quat_m)
@@ -836,12 +837,12 @@ class TestConvertArrays:
 
     def test_identity(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        result = convert_arrays(quats, "quaternion", "quaternion")
+        result = convert_arrays(quats, "quat", "quat")
         np.testing.assert_allclose(result, quats, atol=1e-12)
 
     def test_euler_to_quat_shape(self, bvh_example):
         result = convert_arrays(
-            bvh_example.joint_angles, "euler", "quaternion",
+            bvh_example.joint_angles, "euler", "quat",
             euler_orders=bvh_example.euler_orders)
         assert result.shape == (bvh_example.frame_count, bvh_example.joint_count, 4)
 
@@ -853,9 +854,9 @@ class TestConvertArrays:
 
     def test_roundtrip_euler_quat(self, bvh_example):
         orders = bvh_example.euler_orders
-        q = convert_arrays(bvh_example.joint_angles, "euler", "quaternion",
+        q = convert_arrays(bvh_example.joint_angles, "euler", "quat",
                            euler_orders=orders)
-        back = convert_arrays(q, "quaternion", "euler", euler_orders=orders)
+        back = convert_arrays(q, "quat", "euler", euler_orders=orders)
         np.testing.assert_allclose(back, bvh_example.joint_angles, atol=1e-4)
 
     def test_roundtrip_euler_6d(self, bvh_example):
@@ -867,8 +868,8 @@ class TestConvertArrays:
 
     def test_roundtrip_quat_6d(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        r6d = convert_arrays(quats, "quaternion", "6d")
-        back = convert_arrays(r6d, "6d", "quaternion")
+        r6d = convert_arrays(quats, "quat", "6d")
+        back = convert_arrays(r6d, "6d", "quat")
         # q and -q represent same rotation
         for f in range(quats.shape[0]):
             for j in range(quats.shape[1]):
@@ -878,8 +879,8 @@ class TestConvertArrays:
 
     def test_roundtrip_quat_axisangle(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        aa = convert_arrays(quats, "quaternion", "axisangle")
-        back = convert_arrays(aa, "axisangle", "quaternion")
+        aa = convert_arrays(quats, "quat", "axisangle")
+        back = convert_arrays(aa, "axisangle", "quat")
         for f in range(quats.shape[0]):
             for j in range(quats.shape[1]):
                 match = (np.allclose(back[f, j], quats[f, j], atol=1e-6)
@@ -895,35 +896,35 @@ class TestConvertArrays:
 
     def test_rotmat_flat_shape(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        rm = convert_arrays(quats, "quaternion", "rotmat")
+        rm = convert_arrays(quats, "quat", "rotmat")
         F, J = quats.shape[:2]
         assert rm.shape == (F, J, 9)
 
     def test_euler_orders_required(self, bvh_example):
         with pytest.raises(ValueError, match="euler_orders is required"):
-            convert_arrays(bvh_example.joint_angles, "euler", "quaternion")
+            convert_arrays(bvh_example.joint_angles, "euler", "quat")
 
     def test_euler_orders_not_required_for_non_euler(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
         # Should not raise
-        convert_arrays(quats, "quaternion", "6d")
+        convert_arrays(quats, "quat", "6d")
 
     def test_unknown_repr(self):
         data = np.zeros((10, 5, 3))
         with pytest.raises(ValueError, match="Unknown"):
-            convert_arrays(data, "invalid", "quaternion")
+            convert_arrays(data, "invalid", "quat")
 
     def test_per_joint_mixed_orders(self, bvh_test3):
         """bvh_test3 has mixed Euler orders."""
         orders = bvh_test3.euler_orders
         assert len(set(orders)) >= 1  # may have mixed orders
-        q = convert_arrays(bvh_test3.joint_angles, "euler", "quaternion",
+        q = convert_arrays(bvh_test3.joint_angles, "euler", "quat",
                            euler_orders=orders)
-        back = convert_arrays(q, "quaternion", "euler", euler_orders=orders)
+        back = convert_arrays(q, "quat", "euler", euler_orders=orders)
         np.testing.assert_allclose(back, bvh_test3.joint_angles, atol=1e-4)
 
     @pytest.mark.parametrize("repr_name,expected_c", [
-        ("euler", 3), ("axisangle", 3), ("quaternion", 4),
+        ("euler", 3), ("axisangle", 3), ("quat", 4),
         ("6d", 6), ("rotmat", 9),
     ])
     def test_convert_shapes(self, bvh_example, repr_name, expected_c):
@@ -950,7 +951,7 @@ class TestAugmentationPipeline:
     def test_prob_zero_skips(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 0.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quaternion"}),
+            (rotate_vertical, 0.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         np.testing.assert_array_equal(new_q, quats)
@@ -959,7 +960,7 @@ class TestAugmentationPipeline:
     def test_prob_one_applies(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quaternion"}),
+            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         # Should NOT be identical
@@ -970,9 +971,9 @@ class TestAugmentationPipeline:
         pairs, lateral_axis, up_axis = _get_mirror_metadata(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 0.5,
-                {"angle_deg": 45, "up_axis": up_axis, "representation": "quaternion"}),
+                {"angle_deg": 45, "up_axis": up_axis, "representation": "quat"}),
             (mirror, 0.5,
-                {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis, "representation": "quaternion"}),
+                {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis, "representation": "quat"}),
         ])
         p1, q1 = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(123))
         p2, q2 = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(123))
@@ -984,9 +985,9 @@ class TestAugmentationPipeline:
         pairs, lateral_axis, up_axis = _get_mirror_metadata(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0,
-                {"angle_deg": 45, "up_axis": up_axis, "representation": "quaternion"}),
+                {"angle_deg": 45, "up_axis": up_axis, "representation": "quat"}),
             (mirror, 1.0,
-                {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis, "representation": "quaternion"}),
+                {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis, "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         # Both should have been applied
@@ -995,14 +996,14 @@ class TestAugmentationPipeline:
 
     def test_len(self):
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 0.5, {"angle_deg": 90, "up_axis": "+y", "representation": "quaternion"}),
-            (mirror, 0.5, {"lr_joint_pairs": [], "lateral_axis": "+x", "representation": "quaternion"}),
+            (rotate_vertical, 0.5, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (mirror, 0.5, {"lr_joint_pairs": [], "lateral_axis": "+x", "representation": "quat"}),
         ])
         assert len(pipeline) == 2
 
     def test_repr(self):
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 0.5, {"angle_deg": 90, "up_axis": "+y", "representation": "quaternion"}),
+            (rotate_vertical, 0.5, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
         ])
         r = repr(pipeline)
         assert "rotate_vertical" in r
@@ -1011,7 +1012,7 @@ class TestAugmentationPipeline:
         """Pipeline should work without explicit rng."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 45, "up_axis": "+y", "representation": "quaternion"}),
+            (rotate_vertical, 1.0, {"angle_deg": 45, "up_axis": "+y", "representation": "quat"}),
         ])
         # Should not raise
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats)
@@ -1032,20 +1033,20 @@ class TestKeywordOnlyAugmentation:
         with pytest.raises(TypeError):
             rotate_vertical(
                 pos, quats, angle_deg=45.0, up_axis="+y",
-                representation="quaternion")
+                representation="quat")
 
     def test_mirror_refuses_positional(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(TypeError):
             mirror(
                 pos, quats, lr_joint_pairs=[], lateral_axis="+x",
-                representation="quaternion")
+                representation="quat")
 
     def test_add_joint_noise_refuses_positional(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(TypeError):
             add_joint_noise(
-                pos, quats, sigma_deg=1.0, representation="quaternion")
+                pos, quats, sigma_deg=1.0, representation="quat")
 
 
 class TestPipelineStandardFactory:
@@ -1054,7 +1055,7 @@ class TestPipelineStandardFactory:
     def test_builds_four_steps_by_default(self, bvh_example):
         from pybvh_ml.skeleton import get_skeleton_info
         skel = get_skeleton_info(bvh_example)
-        p = AugmentationPipeline.standard(skel, representation="quaternion")
+        p = AugmentationPipeline.standard(skel, representation="quat")
         # rotate + mirror (iff lr_pairs) + noise + speed
         expected = 4 if skel.get("lr_pairs") else 3
         assert len(p) == expected
@@ -1064,7 +1065,7 @@ class TestPipelineStandardFactory:
         pos, quats = _get_quat_data(bvh_example)
         skel = get_skeleton_info(bvh_example)
         p = AugmentationPipeline.standard(
-            skel, representation="quaternion",
+            skel, representation="quat",
             up_axis=bvh_example.world_up)
         new_p, new_q = p(
             root_pos=pos, joint_data=quats,
@@ -1075,7 +1076,7 @@ class TestPipelineStandardFactory:
         from pybvh_ml.skeleton import get_skeleton_info
         skel = get_skeleton_info(bvh_example)
         p = AugmentationPipeline.standard(
-            skel, representation="quaternion",
+            skel, representation="quat",
             rotate_angle_range=None,
             mirror_prob=0.0,
             noise_sigma_deg=None,
@@ -1089,7 +1090,7 @@ class TestPipelineStandardFactory:
         skel = get_skeleton_info(bvh_example)
         skel_no_pairs = {**skel, "lr_pairs": []}
         p = AugmentationPipeline.standard(
-            skel_no_pairs, representation="quaternion")
+            skel_no_pairs, representation="quat")
         # rotate + noise + speed only (no mirror)
         assert len(p) == 3
 
@@ -1176,7 +1177,7 @@ class TestPreprocessing:
         assert result["num_clips"] == 2
 
     def test_representations(self, bvh_dir, tmp_path):
-        for repr_name in ["euler", "quaternion", "6d", "axisangle"]:
+        for repr_name in ["euler", "quat", "6d", "axisangle"]:
             out = tmp_path / f"dataset_{repr_name}.npz"
             result = preprocess_directory(
                 bvh_dir, out, representation=repr_name,
@@ -1726,11 +1727,11 @@ class TestTorchDatasets:
         quat_clips = []
         for c in sample_clips:
             rot6d = c["joint_data"]
-            quats = convert_arrays(rot6d, from_repr="6d", to_repr="quaternion")
+            quats = convert_arrays(rot6d, from_repr="6d", to_repr="quat")
             quat_clips.append({"root_pos": c["root_pos"].copy(),
                                "joint_data": quats})
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quaternion"}),
+            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
         ])
         return MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=seed)
@@ -1760,11 +1761,11 @@ class TestTorchDatasets:
         quat_clips = [
             {"root_pos": c["root_pos"].copy(),
              "joint_data": convert_arrays(
-                 c["joint_data"], from_repr="6d", to_repr="quaternion")}
+                 c["joint_data"], from_repr="6d", to_repr="quat")}
             for c in sample_clips
         ]
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quaternion"}),
+            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
         ])
         ds = MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=None)
@@ -1800,11 +1801,11 @@ class TestTorchDatasets:
         quat_clips = [
             {"root_pos": c["root_pos"].copy(),
              "joint_data": convert_arrays(
-                 c["joint_data"], from_repr="6d", to_repr="quaternion")}
+                 c["joint_data"], from_repr="6d", to_repr="quat")}
             for c in sample_clips
         ]
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quaternion"}),
+            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
         ])
         ds = MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=None)
@@ -1821,11 +1822,11 @@ class TestTorchDatasets:
             (rotate_vertical, 1.0, {
                 "angle_deg": lambda rng: rng.uniform(-180, 180),
                 "up_axis": "+y",
-                "representation": "quaternion",
+                "representation": "quat",
             }),
         ])
         ds = OnTheFlyDataset(
-            bvh_paths, representation="quaternion", target_length=30,
+            bvh_paths, representation="quat", target_length=30,
             augmentation=pipeline, seed=7)
         ds.set_epoch(0)
         a = ds[0]["data"].clone()
@@ -2024,14 +2025,14 @@ class TestJointNoise:
     def test_shape_preserved(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=1.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=1.0, representation="quat", rng=np.random.default_rng(42))
         assert new_q.shape == quats.shape
         assert new_p.shape == pos.shape
 
     def test_zero_noise_is_near_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=0.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=0.0, representation="quat", rng=np.random.default_rng(42))
         # sigma_deg=0 means angle is always 0, so noise quat ≈ identity
         # but axis is still random, so cos(0)=1, sin(0)=0 → q_noise = [1,0,0,0]
         np.testing.assert_allclose(new_p, pos, atol=1e-10)
@@ -2046,7 +2047,7 @@ class TestJointNoise:
         """Output quaternions should be unit length."""
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
         norms = np.linalg.norm(new_q, axis=-1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-10)
 
@@ -2054,7 +2055,7 @@ class TestJointNoise:
         """Non-zero sigma should produce different quaternions."""
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
         assert not np.allclose(new_q, quats, atol=1e-4)
 
     def test_small_noise_stays_close(self, bvh_example):
@@ -2062,7 +2063,7 @@ class TestJointNoise:
         from pybvh import rotations
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=0.1, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=0.1, representation="quat", rng=np.random.default_rng(42))
         # Geodesic distance: angle = 2 * arccos(|q1 . q2|)
         dots = np.abs(np.sum(quats * new_q, axis=-1))
         dots = np.clip(dots, 0, 1)
@@ -2073,22 +2074,22 @@ class TestJointNoise:
     def test_root_pos_noise(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=1.0, representation="quaternion", sigma_pos=0.5,
+            root_pos=pos, joint_data=quats, sigma_deg=1.0, representation="quat", sigma_pos=0.5,
             rng=np.random.default_rng(42))
         assert not np.allclose(new_p, pos, atol=1e-4)
 
     def test_no_root_pos_noise_by_default(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, _ = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
         np.testing.assert_array_equal(new_p, pos)
 
     def test_reproducible(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         p1, q1 = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=2.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=2.0, representation="quat", rng=np.random.default_rng(42))
         p2, q2 = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=2.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=2.0, representation="quat", rng=np.random.default_rng(42))
         np.testing.assert_array_equal(q1, q2)
         np.testing.assert_array_equal(p1, p2)
 
@@ -2097,7 +2098,7 @@ class TestJointNoise:
         from pybvh import rotations
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quaternion", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
         R = rotations.quat_to_rotmat(new_q)
         I = np.eye(3)
         for f in range(R.shape[0]):
@@ -2109,7 +2110,7 @@ class TestJointNoise:
         """Joint noise should work inside AugmentationPipeline."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quaternion"}),
+            (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         assert new_q.shape == quats.shape
@@ -2129,7 +2130,7 @@ class TestPipelineCallableKwargs:
             (rotate_vertical, 1.0, {
                 "angle_deg": lambda rng: rng.uniform(-180, 180),
                 "up_axis": "+y",
-                "representation": "quaternion",
+                "representation": "quat",
             }),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
@@ -2143,7 +2144,7 @@ class TestPipelineCallableKwargs:
             (rotate_vertical, 1.0, {
                 "angle_deg": lambda rng: rng.uniform(-180, 180),
                 "up_axis": "+y",
-                "representation": "quaternion",
+                "representation": "quat",
             }),
         ])
         p1, _ = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(1))
@@ -2156,7 +2157,7 @@ class TestPipelineCallableKwargs:
         pipeline = AugmentationPipeline([
             (speed_perturbation_arrays, 1.0, {
                 "factor": lambda rng: rng.uniform(0.8, 1.2),
-                "representation": "quaternion",
+                "representation": "quat",
             }),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
@@ -2170,7 +2171,7 @@ class TestPipelineCallableKwargs:
             (rotate_vertical, 1.0, {
                 "angle_deg": lambda rng: rng.uniform(-180, 180),
                 "up_axis": "+y",
-                "representation": "quaternion",
+                "representation": "quat",
             }),
         ])
         p1, q1 = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(99))
@@ -2182,11 +2183,11 @@ class TestPipelineCallableKwargs:
         """Existing static kwargs should not be broken."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quaternion"}),
+            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         # Should match direct call
-        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quaternion")
+        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_p, ref_p, atol=1e-12)
         np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
 
@@ -2202,7 +2203,7 @@ class TestPipelineRngForwarding:
         """add_joint_noise should be deterministic in pipeline."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quaternion"}),
+            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
         ])
         _, q1 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
         _, q2 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
@@ -2212,7 +2213,7 @@ class TestPipelineRngForwarding:
         """dropout_arrays should be deterministic in pipeline."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (dropout_arrays, 1.0, {"drop_rate": 0.3, "representation": "quaternion"}),
+            (dropout_arrays, 1.0, {"drop_rate": 0.3, "representation": "quat"}),
         ])
         p1, q1 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
         p2, q2 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
@@ -2223,11 +2224,11 @@ class TestPipelineRngForwarding:
         """Functions without rng param should still work."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quaternion"}),
+            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
         ])
         # Should not raise TypeError
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
-        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quaternion")
+        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
 
     def test_explicit_rng_kwarg_takes_precedence(self, bvh_example):
@@ -2237,7 +2238,7 @@ class TestPipelineRngForwarding:
         pipeline = AugmentationPipeline([
             (add_joint_noise, 1.0, {
                 "sigma_deg": 5.0,
-                "representation": "quaternion",
+                "representation": "quat",
                 "rng": lambda rng: custom_rng,  # explicit override
             }),
         ])
@@ -2245,7 +2246,7 @@ class TestPipelineRngForwarding:
         # Should use custom_rng(999), not pipeline's rng(42)
         custom_rng2 = np.random.default_rng(999)
         _, q2 = add_joint_noise(
-            root_pos=pos.copy(), joint_data=quats.copy(), sigma_deg=5.0, representation="quaternion", rng=custom_rng2)
+            root_pos=pos.copy(), joint_data=quats.copy(), sigma_deg=5.0, representation="quat", rng=custom_rng2)
         np.testing.assert_array_equal(q1, q2)
 
     def test_mixed_rng_and_no_rng_functions(self, bvh_example):
@@ -2255,9 +2256,9 @@ class TestPipelineRngForwarding:
             (rotate_vertical, 1.0, {
                 "angle_deg": lambda rng: rng.uniform(-180, 180),
                 "up_axis": "+y",
-                "representation": "quaternion",
+                "representation": "quat",
             }),
-            (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quaternion"}),
+            (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quat"}),
         ])
         p1, q1 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
         p2, q2 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
@@ -2329,11 +2330,11 @@ class TestPreprocessingFilter:
         preprocess_directory(
             bvh_dir, out,
             filter_fn=lambda stem: stem == "bvh_test1",
-            representation="quaternion",
+            representation="quat",
         )
         loaded = load_preprocessed(out)
         assert len(loaded["clips"]) == 1
-        assert loaded["representation"] == "quaternion"
+        assert loaded["representation"] == "quat"
         assert loaded["filenames"] == ["bvh_test1"]
 
 

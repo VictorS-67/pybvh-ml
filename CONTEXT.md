@@ -96,7 +96,7 @@ pybvh-ml/
 - Root position is always vertex 0, zero-padded to C channels if `C > 3`
 
 **`augmentation.py`** — Array-level augmentation (operates on pre-extracted numpy arrays, no Bvh object needed)
-- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Supported representations: `"quaternion"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`)
+- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Supported representations: `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`)
 - All public functions are **keyword-only**: `root_pos` and `joint_data` are shape-compatible ndarrays, so positional binding is refused to prevent silent-corruption swaps
 - Fast paths: `rotate_vertical` and `mirror` skip the quaternion round-trip when `representation="6d"` (direct rotation of the two column vectors / analytic sign mask)
 - Quat-internal ops (`add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert to/from quaternion space once; `AugmentationPipeline(cache_quats=True)` amortizes the conversion across consecutive steps
@@ -149,7 +149,7 @@ pybvh-ml/
 ## 5. Key Design Decisions
 
 ### 5.1 Unified augmentation across representations
-Array-level augmentation is a single function per operation, parameterized by a `representation=` kwarg that covers every representation pybvh supports (`"quaternion"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`). Internally:
+Array-level augmentation is a single function per operation, parameterized by a `representation=` kwarg that covers every representation pybvh supports (`"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`). Internally:
 - **Quaternion** — primary internal representation for rotation-space math (SLERP, Hamilton product, unit-sphere noise). Clean, no gimbal lock.
 - **6D** — fast paths in `rotate_vertical` and `mirror` operate directly on `(F, J, 6)` without a quat round-trip. Other ops (`add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert once, stay in quat, convert back — or, with `AugmentationPipeline(cache_quats=True)`, share the cache across consecutive steps.
 - **Axis-angle / rotmat / euler** — supported uniformly via convert-to-quat, mutate, convert-back. Euler additionally requires `euler_orders=`.
@@ -166,7 +166,7 @@ pybvh-ml uses these pybvh entry points:
 - `pybvh.read_bvh_file()`, `pybvh.read_bvh_directory()` — loading
 - `bvh.root_pos`, `bvh.joint_angles`, `bvh.joint_count`, `bvh.joint_names` — data access
 - `bvh.source_path` — on-disk origin used in error messages
-- `bvh.to_quaternions()`, `bvh.to_6d()`, `bvh.to_axisangle()`, `bvh.to_rotmat()` — representation conversion (2-tuple `(root_pos, joint_data)` since pybvh 0.6.0)
+- `bvh.to_quat()`, `bvh.to_6d()`, `bvh.to_axisangle()`, `bvh.to_rotmat()` — representation conversion (2-tuple `(root_pos, joint_data)` since pybvh 0.6.0)
 - `bvh.euler_orders` — per-joint Euler order strings
 - `bvh.change_euler_order(order)` — re-express angles in a uniform Euler order (used by `harmonize(target_euler_order=...)`)
 - `bvh.matches_hierarchy(other, match_offsets=False)` and `bvh.matches_channels(other)` — skeleton compatibility predicates (pybvh 0.7.0)

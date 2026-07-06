@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 0.5.0
+
+Coordinated migration to pybvh 0.8.0 (atomic, no shims). This section is consolidated at release time; entries below cover the migration step.
+
+### Breaking changes
+
+- **Minimum pybvh version: `>=0.8,<0.9`.** pybvh 0.8.0 renames the representation surface; pybvh-ml adopts the new names atomically with no dual-name support.
+- **Representation string `"quaternion"` → `"quat"`** everywhere a representation token is accepted or reported: `extract_repr`, `describe_features`, `convert_arrays`, all augmentation functions and `AugmentationPipeline` step kwargs, and `preprocess_directory(representation=...)`. Follows pybvh 0.8.0's short-token convention (`quat` / `6d` / `axisangle` / `rotmat` / `euler`), including the keys of `pybvh.rotations.REPRESENTATION_CHANNELS`, which pybvh-ml re-exports as `REPR_CHANNELS`.
+  - **Migration**: replace `representation="quaternion"` with `representation="quat"` at every call site; datasets preprocessed with the old token name need their stored `representation` metadata read as `"quat"` going forward (re-preprocess or rename the metadata field value).
+- **`bvh.to_quaternions()` / `bvh.from_quaternions()` call sites migrated to `bvh.to_quat()` / `bvh.from_quat()`** (silent breaking via pybvh 0.8.0). Affects any user code calling these pybvh methods around pybvh-ml pipelines; pybvh-ml's own internals are updated.
+- **`pybvh_ml.augmentation` no longer imports `pybvh.tools.rotX/rotY/rotZ`** (removed in pybvh 0.8.0). The internal cardinal-axis rotation matrix is now built via the public `pybvh.rotations.quat_to_rotmat`; results are identical up to float rounding (~1e-16).
+
+### Documentation
+
+- `packing._center` docstring now states explicitly that pybvh-ml's `center_root` subtracts the full 3D first-frame root position — distinct from pybvh 0.8.0's `centered="first"`, which is ground-plane-only.
+
 ## [0.4.0] - 2026-05-14
 
 Heterogeneous-dataset support pass driven by an external maintainer report

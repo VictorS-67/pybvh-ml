@@ -62,7 +62,7 @@ print("joints:", bvh.joint_count, "frames:", bvh.frame_count, "up:", bvh.world_u
 # ## Helper: apply an array-level augmentation and rebuild a `Bvh` for plotting
 #
 # pybvh-ml augmentations return `(new_root_pos, new_joint_data)` as NumPy arrays.
-# To render, we hand those back to pybvh via `bvh.from_quaternions(root_pos, quats)`.
+# To render, we hand those back to pybvh via `bvh.from_quat(root_pos, quats)`.
 #
 # This helper runs the full extract → augment → rebuild loop so each subsequent section
 # stays focused on the augmentation itself.
@@ -70,11 +70,11 @@ print("joints:", bvh.joint_count, "frames:", bvh.frame_count, "up:", bvh.world_u
 # %%
 def aug_as_bvh(bvh, aug_fn, **kwargs):
     '''Run an augmentation in quaternion space and rebuild a Bvh for plotting.'''
-    root_pos, quats = bvh.to_quaternions()
-    kwargs.setdefault("representation", "quaternion")
+    root_pos, quats = bvh.to_quat()
+    kwargs.setdefault("representation", "quat")
     new_root_pos, new_quats = aug_fn(
         root_pos=root_pos, joint_data=quats, **kwargs)
-    return bvh.from_quaternions(new_root_pos, new_quats)
+    return bvh.from_quat(new_root_pos, new_quats)
 
 
 # %% [markdown]
@@ -141,8 +141,8 @@ rng = np.random.default_rng(0)
 dropped = aug_as_bvh(bvh, dropout_arrays, drop_rate=0.3, rng=rng)
 print(f"original: {bvh.frame_count} frames; dropped: {dropped.frame_count} frames (same shape)")
 # Sanity: at least some frames differ from the original.
-_, q_orig = bvh.to_quaternions()
-_, q_drop = dropped.to_quaternions()
+_, q_orig = bvh.to_quat()
+_, q_drop = dropped.to_quat()
 diff_frames = (~np.all(np.isclose(q_orig, q_drop), axis=(1, 2))).sum()
 print(f"frames modified by dropout+SLERP: {diff_frames} / {bvh.frame_count}")
 
@@ -183,18 +183,18 @@ pipeline = AugmentationPipeline([
     (rotate_vertical, 1.0, {
         "angle_deg": lambda rng: rng.uniform(-180, 180),
         "up_axis": up_axis,
-        "representation": "quaternion",
+        "representation": "quat",
     }),
     (mirror, 0.5, {
         "lr_joint_pairs": lr_pairs,
         "lateral_axis": lateral_axis,
-        "representation": "quaternion",
+        "representation": "quat",
     }),
-    (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quaternion"}),
+    (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quat"}),
 ])
 
 # Build a single-clip dataset from our fixture and inspect the per-epoch behaviour.
-root_pos, quats = bvh.to_quaternions()
+root_pos, quats = bvh.to_quat()
 clip = {"root_pos": root_pos.copy(), "joint_data": quats}
 
 ds_a = MotionDataset([clip], target_length=32, augmentation=pipeline, seed=42)

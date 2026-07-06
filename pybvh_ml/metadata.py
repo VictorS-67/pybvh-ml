@@ -57,7 +57,7 @@ def describe_features(
         Number of joints (excluding end sites).
     representation : str
         Rotation representation name.  One of ``"euler"``,
-        ``"quaternion"``, ``"6d"``, ``"axisangle"``, ``"rotmat"``.
+        ``"quat"``, ``"6d"``, ``"axisangle"``, ``"rotmat"``.
     include_root_pos : bool
         Whether root position occupies the first 3 columns.
 

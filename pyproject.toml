@@ -21,7 +21,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Victor Schneider", email = "victor.schneider67@gmail.com" }]
 keywords = ["bvh", "motion capture", "machine learning", "deep learning", "skeleton", "augmentation", "dataset"]
 dependencies = [
-    "pybvh>=0.7.0",
+    "pybvh>=0.8,<0.9",
     "numpy>=1.21",
 ]
 

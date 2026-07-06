@@ -27,7 +27,7 @@ def convert_arrays(
     joint_data : ndarray, shape (F, J, C_from)
         Input joint rotation data.
     from_repr : str
-        Source representation: ``"euler"``, ``"quaternion"``,
+        Source representation: ``"euler"``, ``"quat"``,
         ``"6d"``, ``"axisangle"``, ``"rotmat"``.
     to_repr : str
         Target representation (same options).

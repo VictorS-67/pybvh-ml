@@ -23,7 +23,12 @@ def _center(
     root_pos: npt.NDArray[np.float64],
     center_root: bool,
 ) -> npt.NDArray[np.float64]:
-    """Optionally subtract first-frame root position."""
+    """Optionally subtract first-frame root position.
+
+    Subtracts all three components — pybvh-ml's root-relative tensor
+    convention.  This is NOT pybvh's ``centered="first"``, which is
+    ground-plane-only (the up coordinate is left untouched there).
+    """
     if center_root and root_pos.shape[0] > 0:
         return root_pos - root_pos[0:1]
     return root_pos.copy()

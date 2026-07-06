@@ -139,7 +139,7 @@ class AugmentationPipeline:
             ``representation="euler"``).
         representation : str
             Rotation representation threaded through every step.
-            One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+            One of ``"quat"``, ``"6d"``, ``"axisangle"``,
             ``"rotmat"``, ``"euler"``.
         up_axis, lateral_axis : str
             Signed-axis strings (e.g. ``"+y"``, ``"+x"``).  The
@@ -284,7 +284,7 @@ class AugmentationPipeline:
         resumes cold after the call.
         """
         # Initial representation is whatever the first step declares;
-        # if no step declares one (unusual), default to "quaternion" so
+        # if no step declares one (unusual), default to "quat" so
         # the state is consistent.  The representation we report back to
         # the caller at the end comes from the *last* step that carries
         # a "representation" kwarg.
@@ -343,12 +343,12 @@ class AugmentationPipeline:
         return root_pos, state.jd
 
     def _initial_representation(self) -> str:
-        """First step's ``representation`` kwarg, or ``"quaternion"``."""
+        """First step's ``representation`` kwarg, or ``"quat"``."""
         for _, _, kwargs in self.augmentations:
             v = kwargs.get("representation")
             if isinstance(v, str):
                 return v
-        return "quaternion"
+        return "quat"
 
     def _first_euler_orders(self) -> list[str] | None:
         """First step's ``euler_orders`` value (if any, and non-callable)."""

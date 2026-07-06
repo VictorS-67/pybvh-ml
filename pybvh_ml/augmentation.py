@@ -2,7 +2,7 @@
 
 Operates on pre-extracted NumPy arrays without Bvh objects.
 All functions accept any rotation representation supported by pybvh:
-``"quaternion"``, ``"6d"``, ``"axisangle"``, ``"rotmat"``, or ``"euler"``.
+``"quat"``, ``"6d"``, ``"axisangle"``, ``"rotmat"``, or ``"euler"``.
 Euler arrays additionally require an ``euler_orders`` kwarg.
 
 All functions take and return ``(root_pos, joint_data)`` — root position
@@ -18,14 +18,12 @@ import numpy as np
 import numpy.typing as npt
 
 from pybvh import rotations
-from pybvh.tools import rotX, rotY, rotZ
 
 
 # =========================================================================
 # Private helpers
 # =========================================================================
 
-_ROT_FUNCS = {0: rotX, 1: rotY, 2: rotZ}
 _AXIS_IDX = {"x": 0, "y": 1, "z": 2}
 
 
@@ -53,16 +51,16 @@ def _to_quats(
     euler_orders: list[str] | None,
 ) -> npt.NDArray[np.float64]:
     """Convert joint data to quaternion space for augmentation math."""
-    if representation == "quaternion":
+    if representation == "quat":
         return joint_data
     if representation == "euler":
         if euler_orders is None:
             raise ValueError(
                 "euler_orders is required when representation='euler'")
         return rotations.convert(
-            joint_data, "euler", "quaternion",
+            joint_data, "euler", "quat",
             order=euler_orders, degrees=True)
-    return rotations.convert(joint_data, representation, "quaternion")
+    return rotations.convert(joint_data, representation, "quat")
 
 
 def _from_quats(
@@ -71,13 +69,13 @@ def _from_quats(
     euler_orders: list[str] | None,
 ) -> npt.NDArray[np.float64]:
     """Convert quaternions back to the original representation."""
-    if representation == "quaternion":
+    if representation == "quat":
         return quats
     if representation == "euler":
         return rotations.convert(
-            quats, "quaternion", "euler",
+            quats, "quat", "euler",
             order=euler_orders, degrees=True)
-    return rotations.convert(quats, "quaternion", representation)
+    return rotations.convert(quats, "quat", representation)
 
 
 def _quat_multiply(
@@ -111,7 +109,7 @@ def _build_rotation_matrix(
     up_idx: int,
 ) -> npt.NDArray[np.float64]:
     """Build a 3×3 rotation matrix for rotation around a cardinal axis."""
-    return _ROT_FUNCS[up_idx](np.radians(angle_deg))
+    return rotations.quat_to_rotmat(_build_rotation_quat(angle_deg, up_idx))
 
 
 def _mirror_sign_quat(lateral_idx: int) -> npt.NDArray[np.float64]:
@@ -189,7 +187,7 @@ def rotate_vertical(
         so ``'+y'`` and ``'-y'`` produce opposite yaws for the same
         ``angle_deg``.  Typically ``bvh.world_up``.
     representation : str
-        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
     euler_orders : list of str, optional
         Per-joint Euler order strings (e.g. ``["ZYX", "ZYX", ...]``).
@@ -251,7 +249,7 @@ def mirror(
         with :func:`rotate_vertical` but does not affect the result
         (mirror is sign-invariant).
     representation : str
-        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
     euler_orders : list of str, optional
         Required when ``representation="euler"``, ignored otherwise.
@@ -273,7 +271,7 @@ def mirror(
         new_data *= _mirror_sign_rot6d(lateral_idx)
         return new_root_pos, new_data
 
-    if representation == "quaternion":
+    if representation == "quat":
         new_data *= _mirror_sign_quat(lateral_idx)
         return new_root_pos, new_data
 
@@ -310,7 +308,7 @@ def add_joint_noise(
     sigma_deg : float
         Standard deviation of rotation noise in degrees.
     representation : str
-        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
     sigma_pos : float
         Standard deviation of root position noise (default 0 = none).
@@ -373,7 +371,7 @@ def speed_perturbation_arrays(
         Speed factor.  ``> 1`` = faster (fewer frames),
         ``< 1`` = slower (more frames).
     representation : str
-        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
     euler_orders : list of str, optional
         Required when ``representation="euler"``, ignored otherwise.
@@ -447,7 +445,7 @@ def dropout_arrays(
     drop_rate : float
         Fraction of frames to drop, in ``[0, 1)``.
     representation : str
-        One of ``"quaternion"``, ``"6d"``, ``"axisangle"``,
+        One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
     rng : numpy Generator, optional
     euler_orders : list of str, optional

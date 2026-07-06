@@ -56,7 +56,7 @@ for name in ("bvh_test1.bvh", "bvh_test2.bvh", "bvh_test3.bvh"):
 # clip.  Hierarchy (names, parent indices, rest offsets) must always agree.
 # Per-joint Euler orders must additionally agree for order-sensitive
 # representations (``"euler"`` / ``"axisangle"``); rotation-invariant ones
-# (``"6d"`` / ``"quaternion"`` / ``"rotmat"``) accept mixed orders since
+# (``"6d"`` / ``"quat"`` / ``"rotmat"``) accept mixed orders since
 # the tensor channel layout is order-agnostic.  Mismatches raise `ValueError`:
 
 # %%

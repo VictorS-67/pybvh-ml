@@ -144,7 +144,7 @@ preprocess_directory(out_dir, "train.npz", representation="6d")
 
 ## Augmentation
 
-Array-level augmentation operates directly on NumPy arrays — no Bvh object reconstruction needed. All augmentation functions take keyword-only arguments, and every representation (`"quaternion"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`) is handled by the same unified functions:
+Array-level augmentation operates directly on NumPy arrays — no Bvh object reconstruction needed. All augmentation functions take keyword-only arguments, and every representation (`"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`) is handled by the same unified functions:
 
 ```python
 import numpy as np
@@ -161,7 +161,7 @@ rng = np.random.default_rng(42)
 root_pos, quats = rotate_vertical(
     root_pos=root_pos, joint_data=quats,
     angle_deg=90, up_axis=bvh.world_up,
-    representation="quaternion")
+    representation="quat")
 
 # Left-right mirroring — lateral_axis uses the same signed-string form
 # but is sign-invariant ('+x' and '-x' are equivalent).
@@ -169,18 +169,18 @@ lr_pairs = get_lr_pairs(bvh)
 root_pos, quats = mirror(
     root_pos=root_pos, joint_data=quats,
     lr_joint_pairs=lr_pairs, lateral_axis="+x",
-    representation="quaternion")
+    representation="quat")
 
 # Speed perturbation (SLERP interpolation), frame dropout, joint noise.
 root_pos, quats = speed_perturbation_arrays(
     root_pos=root_pos, joint_data=quats,
-    factor=1.2, representation="quaternion")
+    factor=1.2, representation="quat")
 root_pos, quats = dropout_arrays(
     root_pos=root_pos, joint_data=quats,
-    drop_rate=0.1, representation="quaternion", rng=rng)
+    drop_rate=0.1, representation="quat", rng=rng)
 root_pos, quats = add_joint_noise(
     root_pos=root_pos, joint_data=quats,
-    sigma_deg=1.0, representation="quaternion", rng=rng)
+    sigma_deg=1.0, representation="quat", rng=rng)
 ```
 
 Euler arrays additionally require `euler_orders=bvh.euler_orders`.
@@ -198,16 +198,16 @@ pipeline = AugmentationPipeline([
     (rotate_vertical, 1.0, {
         "angle_deg": lambda rng: rng.uniform(-180, 180),  # random each sample
         "up_axis": bvh.world_up,
-        "representation": "quaternion",
+        "representation": "quat",
     }),
     (mirror, 0.5, {
         "lr_joint_pairs": lr_pairs,
         "lateral_axis": "+x",
-        "representation": "quaternion",
+        "representation": "quat",
     }),
     (add_joint_noise, 1.0, {
         "sigma_deg": 1.0,
-        "representation": "quaternion",
+        "representation": "quat",
     }),
 ])
 
@@ -222,7 +222,7 @@ from pybvh_ml import AugmentationPipeline, get_skeleton_info
 
 pipeline = AugmentationPipeline.standard(
     get_skeleton_info(bvh),
-    representation="quaternion",
+    representation="quat",
     up_axis=bvh.world_up,
     # rotate_angle_range=(-180, 180), mirror_prob=0.5, noise_sigma_deg=1.0,
     # speed_factor_range=(0.8, 1.2)  — defaults shown; pass None to disable a step
@@ -303,10 +303,10 @@ rot6d = convert_arrays(euler_data, from_repr="euler", to_repr="6d",
                        euler_orders=bvh.euler_orders)
 
 # Quaternion to rotation matrix
-rotmat = convert_arrays(quats, from_repr="quaternion", to_repr="rotmat")
+rotmat = convert_arrays(quats, from_repr="quat", to_repr="rotmat")
 ```
 
-Supported: `"euler"`, `"quaternion"`, `"6d"`, `"axisangle"`, `"rotmat"`.
+Supported: `"euler"`, `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`.
 
 ### Sequence utilities
 

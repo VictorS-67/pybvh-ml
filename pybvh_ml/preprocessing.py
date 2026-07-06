@@ -34,7 +34,7 @@ def extract_repr(
     Parameters
     ----------
     bvh : Bvh
-    representation : {"euler", "quaternion", "6d", "axisangle"}
+    representation : {"euler", "quat", "6d", "axisangle"}
 
     Returns
     -------
@@ -43,15 +43,15 @@ def extract_repr(
     """
     if representation == "euler":
         return bvh.root_pos.copy(), bvh.joint_angles.copy()
-    if representation == "quaternion":
-        return bvh.to_quaternions()
+    if representation == "quat":
+        return bvh.to_quat()
     if representation == "6d":
         return bvh.to_6d()
     if representation == "axisangle":
         return bvh.to_axisangle()
     raise ValueError(
         f"Unknown representation '{representation}'. "
-        f"Choose from ['euler', 'quaternion', '6d', 'axisangle']")
+        f"Choose from ['euler', 'quat', '6d', 'axisangle']")
 
 
 def _extract_primary_and_quats(
@@ -77,14 +77,14 @@ def _extract_primary_and_quats(
         root_pos, joint_data = extract_repr(bvh, representation)
         return root_pos, joint_data, None
 
-    if representation == "quaternion":
-        root_pos, joint_data = bvh.to_quaternions()
+    if representation == "quat":
+        root_pos, joint_data = bvh.to_quat()
         return root_pos, joint_data, joint_data
 
     if representation == "euler":
-        # Euler doesn't compute FK, so call to_quaternions separately.
+        # Euler doesn't compute FK, so call to_quat separately.
         root_pos, joint_data = extract_repr(bvh, "euler")
-        _, quats = bvh.to_quaternions()
+        _, quats = bvh.to_quat()
         return root_pos, joint_data, quats
 
     # 6D and axisangle both pivot through rotmat — share one FK pass.
@@ -419,7 +419,7 @@ def _channel_layout_depends_on_euler_order(representation: str) -> bool:
 
     True for ``"euler"`` / ``"axisangle"`` — mixing orders across clips
     yields a tensor whose channels are misaligned per-joint.  False for
-    rotation-invariant representations (``"6d"`` / ``"quaternion"`` /
+    rotation-invariant representations (``"6d"`` / ``"quat"`` /
     ``"rotmat"``), where pybvh's conversion produces an order-agnostic
     layout.
     """
@@ -477,7 +477,7 @@ def _check_skeleton_compatibility(
                 f"order, so mixed orders corrupt the batch. Pass "
                 f"harmonize=True to unify Euler orders automatically, "
                 f"or pick a rotation-invariant representation "
-                f"('6d' / 'quaternion' / 'rotmat') for which "
+                f"('6d' / 'quat' / 'rotmat') for which "
                 f"channel layout is order-agnostic.")
 
 
@@ -519,7 +519,7 @@ def preprocess_directory(
     include_quaternions : bool
         If True, also store pre-computed quaternion arrays per clip
         (useful for runtime speed perturbation / dropout).  When
-        ``representation="quaternion"`` this flag is redundant and the
+        ``representation="quat"`` this flag is redundant and the
         main joint data is used without duplication.
     include_velocities : bool
         If True, compute per-joint linear velocities via

@@ -12,7 +12,7 @@ pipeline of rotate + mirror + noise + speed_perturbation):
 - 6d:         ~1.5× (fast paths for rotate/mirror already skip quat)
 - axisangle:  ~3×   (every quat-internal step was paying a roundtrip)
 - euler:      ~3×
-- quaternion: ~1×   (nothing to cache — representation IS the cache)
+- quat:       ~1×   (nothing to cache — representation IS the cache)
 
 Augmentations not in ``STAGED_DISPATCH`` are still supported; the
 pipeline transparently flushes the cache, converts the joint data
@@ -52,7 +52,7 @@ class _StagingState:
     Invariant: ``jd`` is a valid representation of the current rotations
     under ``current_repr``.  If ``quats`` is not ``None``, it is also a
     valid quaternion view of the same rotations (and may be the same
-    object as ``jd`` when ``current_repr == "quaternion"``).
+    object as ``jd`` when ``current_repr == "quat"``).
     """
 
     def __init__(
@@ -70,15 +70,15 @@ class _StagingState:
         """Return the quaternion view, computing it once and caching."""
         if self.quats is not None:
             return self.quats
-        if self.current_repr == "quaternion":
+        if self.current_repr == "quat":
             self.quats = self.jd
         elif self.current_repr == "euler":
             self.quats = rotations.convert(
-                self.jd, "euler", "quaternion",
+                self.jd, "euler", "quat",
                 order=self.euler_orders, degrees=True)
         else:
             self.quats = rotations.convert(
-                self.jd, self.current_repr, "quaternion")
+                self.jd, self.current_repr, "quat")
         return self.quats
 
     def ensure_repr(self, target_repr: str) -> None:
@@ -86,21 +86,21 @@ class _StagingState:
         if self.current_repr == target_repr:
             return
         q = self.materialize_quats()
-        if target_repr == "quaternion":
+        if target_repr == "quat":
             self.jd = q
         elif target_repr == "euler":
             self.jd = rotations.convert(
-                q, "quaternion", "euler",
+                q, "quat", "euler",
                 order=self.euler_orders, degrees=True)
         else:
-            self.jd = rotations.convert(q, "quaternion", target_repr)
+            self.jd = rotations.convert(q, "quat", target_repr)
         self.current_repr = target_repr
 
     def set_from_quats(self, new_quats: npt.NDArray[np.float64]) -> None:
         """Commit a quat-space op result.  ``jd`` becomes ``new_quats``."""
         self.quats = new_quats
         self.jd = new_quats
-        self.current_repr = "quaternion"
+        self.current_repr = "quat"
 
     def set_jd_invalidate_quats(
         self, new_jd: npt.NDArray[np.float64], new_repr: str,

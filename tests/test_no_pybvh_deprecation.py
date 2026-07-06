@@ -51,7 +51,7 @@ def bvh_example():
 def test_extract_repr_no_pybvh_deprecation(bvh_example):
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        for rep in ("euler", "6d", "quaternion", "axisangle"):
+        for rep in ("euler", "6d", "quat", "axisangle"):
             extract_repr(bvh_example, rep)
         assert _pybvh_deprecations(w) == []
 
