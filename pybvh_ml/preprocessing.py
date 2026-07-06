@@ -640,6 +640,7 @@ def preprocess_directory(
         Rotation representation for joint data.
     center_root : bool
         If True, subtract first frame's root position per clip.
+        The flag is recorded in the saved dataset's metadata and surfaced by :func:`load_preprocessed`, so downstream packing knows the arrays are already centered — pass ``center_root=False`` to the ``pack_to_*`` functions when repacking such clips (centering twice would zero the wrong origin).
     include_quaternions : bool
         If True, also store pre-computed quaternion arrays per clip
         (useful for runtime speed perturbation / dropout).  When
@@ -889,11 +890,13 @@ def preprocess_directory(
     if ext == ".hdf5" or ext == ".h5":
         _save_hdf5(output_path, all_root_pos, all_joint_data,
                    all_joint_quats, all_velocities, all_foot_contacts,
-                   labels, stats, skel_info, representation, stems)
+                   labels, stats, skel_info, representation, center_root,
+                   stems)
     else:
         _save_npz(output_path, all_root_pos, all_joint_data,
                   all_joint_quats, all_velocities, all_foot_contacts,
-                  labels, stats, skel_info, representation, stems)
+                  labels, stats, skel_info, representation, center_root,
+                  stems)
 
     return {
         "num_clips": len(clips),
@@ -915,12 +918,14 @@ def _save_npz(
     stats: dict,
     skel_info: dict,
     representation: str,
+    center_root: bool,
     stems: list[str],
 ) -> None:
     """Save to .npz format."""
     save_dict: dict[str, object] = {
         "num_clips": np.array(len(root_pos_list)),
         "representation": np.array(representation),
+        "center_root": np.array(center_root),
         "filenames": np.array(stems),
         "mean": stats["mean"],
         "std": stats["std"],
@@ -956,6 +961,7 @@ def _save_hdf5(
     stats: dict,
     skel_info: dict,
     representation: str,
+    center_root: bool,
     stems: list[str],
 ) -> None:
     """Save to HDF5 format."""
@@ -968,6 +974,7 @@ def _save_hdf5(
     with h5py.File(path, "w") as f:
         f.attrs["num_clips"] = len(root_pos_list)
         f.attrs["representation"] = representation
+        f.attrs["center_root"] = bool(center_root)
         f.attrs["skeleton_info_json"] = json.dumps(skel_info)
 
         f.create_dataset("mean", data=stats["mean"])
@@ -1006,9 +1013,11 @@ def load_preprocessed(path: str | Path) -> dict:
         Keys: ``clips`` (list of dicts with ``root_pos``,
         ``joint_data``, optionally ``joint_quats`` / ``velocities`` /
         ``foot_contacts``), ``labels``, ``mean``, ``std``,
-        ``skeleton_info``, ``representation``, ``filenames``.  Also
-        includes ``constant_channels`` when the file was written by
-        pybvh-ml >= 0.3 (absent for older files).
+        ``skeleton_info``, ``representation``, ``filenames``,
+        ``center_root``.  Also includes ``constant_channels`` when the
+        file was written by pybvh-ml >= 0.3 (absent for older files).
+
+        ``center_root`` is the flag the dataset was preprocessed with (files written before pybvh-ml 0.5.0 don't record it, so it loads as ``None``).  When it is ``True``, the stored ``root_pos`` arrays are already centered — repack them with ``pack_to_*(..., center_root=False)``.
     """
     path = Path(path)
     ext = path.suffix.lower()
@@ -1045,6 +1054,9 @@ def _load_npz(path: Path) -> dict:
         "skeleton_info": skel_info,
         "representation": representation,
         "filenames": filenames,
+        # Files written before pybvh-ml 0.5.0 don't record the flag.
+        "center_root": (bool(data["center_root"])
+                        if "center_root" in data.files else None),
     }
     if "constant_channels" in data.files:
         result["constant_channels"] = data["constant_channels"]
@@ -1089,6 +1101,9 @@ def _load_hdf5(path: Path) -> dict:
             "representation": representation,
             "filenames": [s.decode() if isinstance(s, bytes) else s
                           for s in f["filenames"][()]],
+            # Files written before pybvh-ml 0.5.0 don't record the flag.
+            "center_root": (bool(f.attrs["center_root"])
+                            if "center_root" in f.attrs else None),
         }
         if "constant_channels" in f:
             result["constant_channels"] = f["constant_channels"][()]

@@ -176,7 +176,6 @@ pybvh-ml uses these pybvh entry points:
 - `pybvh.rotations.*` — rotation conversion primitives
 - `pybvh.features.*` — motion analysis features (velocities, foot contacts, etc.)
 - `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`
-- `pybvh.tools.rotX`, `rotY`, `rotZ` — elementary rotation matrices
 
 Normalization is pybvh-ml's own public API since 0.5.0: `compute_normalization_stats` / `normalize_array` / `denormalize_array` live in `preprocessing.py` (absorbed from pybvh 0.8.0, which removed the trio from `pybvh.batch`). The Bvh-list entry point extracts via `extract_repr` and applies pybvh-ml's intentionally loose skeleton check (`_check_skeleton_compatibility`, bone-length variation accepted); `preprocess_directory` shares the same array-level core (`_normalization_stats_from_arrays`) on its already-extracted arrays.
 

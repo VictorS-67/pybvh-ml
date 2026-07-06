@@ -49,7 +49,7 @@ class MotionDataset(Dataset):
     labels : array-like or None
         Per-clip integer labels.
     target_length : int or None
-        If given, crop/pad all clips to this length.
+        If given, crop/pad all clips to this length.  The ``length`` reported by ``__getitem__`` is the number of valid frames actually present in the returned tensor — ``min(original_length, target_length)`` — so padded frames are excluded and cropped clips report ``target_length``.
     augmentation : AugmentationPipeline or None
         Applied on-the-fly during ``__getitem__``.
     seed : int or None
@@ -123,6 +123,9 @@ class MotionDataset(Dataset):
         length = flat.shape[0]
         if self.target_length is not None:
             flat = standardize_length(flat, self.target_length, method="pad")
+            # Cropping discards trailing frames — report only the valid
+            # frames actually present so collate masks stay correct.
+            length = min(length, self.target_length)
 
         tensor = torch.tensor(flat, dtype=torch.float32)
 
@@ -145,7 +148,7 @@ class OnTheFlyDataset(Dataset):
     representation : str
         Rotation representation for joint data.
     target_length : int or None
-        If given, crop/pad to this length.
+        If given, crop/pad to this length.  The reported ``length`` counts only the valid frames present in the returned tensor (see :class:`MotionDataset`).
     augmentation : AugmentationPipeline or None
     center_root : bool
     label_fn : callable or None
@@ -212,6 +215,9 @@ class OnTheFlyDataset(Dataset):
         length = flat.shape[0]
         if self.target_length is not None:
             flat = standardize_length(flat, self.target_length, method="pad")
+            # Cropping discards trailing frames — report only the valid
+            # frames actually present so collate masks stay correct.
+            length = min(length, self.target_length)
 
         tensor = torch.tensor(flat, dtype=torch.float32)
 

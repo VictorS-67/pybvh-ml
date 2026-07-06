@@ -234,13 +234,26 @@ class AugmentationPipeline:
         -------
         new_root_pos : ndarray
         new_joint_data : ndarray
+            Always freshly allocated — the outputs never alias the input arrays, even when no augmentation fires.
         """
         if rng is None:
             rng = np.random.default_rng()
 
         if self.cache_quats:
-            return self._call_staged(root_pos, joint_data, rng)
-        return self._call_direct(root_pos, joint_data, rng)
+            new_root_pos, new_joint_data = self._call_staged(
+                root_pos, joint_data, rng)
+        else:
+            new_root_pos, new_joint_data = self._call_direct(
+                root_pos, joint_data, rng)
+
+        # When no step fires (and, staged, no representation change runs)
+        # both paths would hand the inputs straight through; copy on that
+        # fall-through so callers can always mutate the outputs safely.
+        if new_root_pos is root_pos:
+            new_root_pos = root_pos.copy()
+        if new_joint_data is joint_data:
+            new_joint_data = joint_data.copy()
+        return new_root_pos, new_joint_data
 
     def _call_direct(
         self,

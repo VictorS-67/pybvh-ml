@@ -1024,6 +1024,28 @@ class TestAugmentationPipeline:
         with pytest.raises(TypeError):
             pipeline(pos, quats)
 
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_no_fire_outputs_are_fresh_arrays(self, bvh_example, cache_quats):
+        """All probabilities 0: outputs equal the inputs but never alias them.
+
+        Regression: the staged path used to hand back the caller's own
+        arrays when no step fired and no representation change ran, so
+        in-place edits on the output would corrupt the caller's data.
+        """
+        pos, quats = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_vertical, 0.0,
+                {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (add_joint_noise, 0.0,
+                {"sigma_deg": 2.0, "representation": "quat"}),
+        ], cache_quats=cache_quats)
+        new_p, new_q = pipeline(
+            root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(new_q, quats)
+        np.testing.assert_array_equal(new_p, pos)
+        assert not np.shares_memory(new_p, pos)
+        assert not np.shares_memory(new_q, quats)
+
 
 class TestKeywordOnlyAugmentation:
     """Augmentation functions refuse positional root_pos / joint_data."""
@@ -1165,6 +1187,27 @@ class TestPreprocessing:
         loaded = load_preprocessed(out)
         root_pos = loaded["clips"][0]["root_pos"]
         np.testing.assert_allclose(root_pos[0], 0.0, atol=1e-10)
+
+    @pytest.mark.parametrize("fmt", ["npz", "hdf5"])
+    @pytest.mark.parametrize("center", [True, False])
+    def test_center_root_flag_roundtrip(self, bvh_dir, tmp_path, fmt, center):
+        """The center_root flag is recorded in the saved metadata so downstream packing can avoid double-centering."""
+        out = tmp_path / f"dataset.{fmt}"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh",
+                              center_root=center)
+        loaded = load_preprocessed(out)
+        assert loaded["center_root"] is center
+
+    def test_center_root_flag_absent_in_legacy_files(self, bvh_dir, tmp_path):
+        """Datasets written before 0.5.0 carry no flag: it loads as None."""
+        out = tmp_path / "dataset.npz"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh")
+        legacy_arrays = dict(np.load(out, allow_pickle=False))
+        del legacy_arrays["center_root"]
+        legacy = tmp_path / "legacy.npz"
+        np.savez(legacy, **legacy_arrays)
+        loaded = load_preprocessed(legacy)
+        assert loaded["center_root"] is None
 
     def test_multiple_files(self, bvh_dir, tmp_path):
         """Two clips sharing a skeleton should preprocess into one dataset."""
@@ -1798,7 +1841,14 @@ class TestTorchDatasets:
         ds = MotionDataset(sample_clips, target_length=50)
         item = ds[0]
         assert item["data"].shape[0] == 50
-        assert item["length"] == 30  # original length
+        assert item["length"] == 30  # valid frames (clip shorter than target)
+
+    def test_motion_dataset_target_length_crops(self, sample_clips):
+        """Regression: a cropped clip reports the frames actually present, not its pre-crop length."""
+        ds = MotionDataset(sample_clips, target_length=25)
+        item = ds[0]  # 30-frame clip cropped to 25
+        assert item["data"].shape[0] == 25
+        assert item["length"] == 25
 
     # --- OnTheFlyDataset ---
 
@@ -1812,6 +1862,21 @@ class TestTorchDatasets:
         assert "data" in item
         assert isinstance(item["data"], torch.Tensor)
         assert item["data"].dtype == torch.float32
+
+    def test_onthefly_target_length_reports_valid_frames(self, bvh_paths):
+        """Same length semantics as MotionDataset: valid frames in the returned tensor."""
+        num_frames = OnTheFlyDataset(bvh_paths, representation="6d")[0]["length"]
+        assert num_frames > 10  # sanity: the fixture clip must be croppable
+
+        cropped = OnTheFlyDataset(
+            bvh_paths, representation="6d", target_length=10)[0]
+        assert cropped["data"].shape[0] == 10
+        assert cropped["length"] == 10
+
+        padded = OnTheFlyDataset(
+            bvh_paths, representation="6d", target_length=num_frames + 5)[0]
+        assert padded["data"].shape[0] == num_frames + 5
+        assert padded["length"] == num_frames
 
     # --- collate_motion_batch ---
 
@@ -1838,6 +1903,18 @@ class TestTorchDatasets:
         # Clip 0: 30 frames → mask[0, :30] = True, mask[0, 30:] = False
         assert collated["mask"][0, :30].all()
         assert not collated["mask"][0, 30:].any()
+
+    def test_collate_mask_with_cropped_and_padded_clips(self, sample_clips):
+        """Regression: the mask must reflect the frames in the tensor, not the pre-standardization clip lengths."""
+        ds = MotionDataset(sample_clips, target_length=25)
+        batch = [ds[0], ds[1]]  # clip 0: 30→25 cropped; clip 1: 20→25 padded
+        collated = collate_motion_batch(batch)
+        assert collated["lengths"].tolist() == [25, 20]
+        # Cropped clip: every frame in the tensor is valid.
+        assert collated["mask"][0].all()
+        # Padded clip: True exactly for the valid prefix.
+        assert collated["mask"][1, :20].all()
+        assert not collated["mask"][1, 20:].any()
 
     def test_collate_labels(self, sample_clips):
         labels = np.array([5, 3, 7])
@@ -2254,6 +2331,18 @@ class TestJointNoise:
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         assert new_q.shape == quats.shape
+
+    def test_staged_zero_sigma_pos_root_not_aliased(self, bvh_example):
+        """Regression: the staged variant used to return the caller's own root_pos when sigma_pos=0, so later in-place edits could mutate the input."""
+        from pybvh_ml._staged import _StagingState, _add_joint_noise_staged
+        pos, quats = _get_quat_data(bvh_example)
+        state = _StagingState(quats, "quat", None)
+        new_p = _add_joint_noise_staged(
+            pos, state, sigma_deg=1.0, representation="quat",
+            rng=np.random.default_rng(42))
+        assert not np.shares_memory(new_p, pos)
+        # sigma_pos=0 leaves the values themselves unchanged.
+        np.testing.assert_array_equal(new_p, pos)
 
 
 # =============================================================================

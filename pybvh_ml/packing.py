@@ -49,6 +49,7 @@ def pack_to_ctv(
         Per-joint rotation data (Euler, quaternion, 6D, etc.).
     center_root : bool
         If True, subtract first frame's root position.
+        This flag is for standalone packing of raw extractions.  Clips from a dataset preprocessed with ``center_root=True`` (see :func:`~pybvh_ml.preprocessing.preprocess_directory` and the ``center_root`` key of :func:`~pybvh_ml.preprocessing.load_preprocessed`) are already centered — pass ``False`` for those to avoid centering twice.
 
     Returns
     -------
@@ -84,6 +85,7 @@ def pack_to_tvc(
     root_pos : ndarray, shape (F, 3)
     joint_data : ndarray, shape (F, J, C_joint)
     center_root : bool
+        If True, subtract first frame's root position.  Arrays from a preprocessed dataset saved with ``center_root=True`` are already centered — see :func:`pack_to_ctv`.
 
     Returns
     -------
@@ -118,6 +120,7 @@ def pack_to_flat(
     root_pos : ndarray, shape (F, 3)
     joint_data : ndarray, shape (F, J, C_joint)
     center_root : bool
+        If True, subtract first frame's root position.  Arrays from a preprocessed dataset saved with ``center_root=True`` are already centered — see :func:`pack_to_ctv`.
 
     Returns
     -------

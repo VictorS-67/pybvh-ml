@@ -12,14 +12,14 @@ def collate_motion_batch(
     Parameters
     ----------
     batch : list of dict
-        Each dict must have ``data`` (tensor), ``length`` (int).
+        Each dict must have ``data`` (tensor) and ``length`` (int) — the number of valid frames in ``data``, i.e. ``length <= data.shape[0]`` with any frames beyond it being padding (the contract :class:`~pybvh_ml.torch.MotionDataset` and :class:`~pybvh_ml.torch.OnTheFlyDataset` provide).
         Optionally ``label`` (int).
 
     Returns
     -------
     dict
         ``data`` : ``(B, T_max, D)`` float tensor, zero-padded.
-        ``lengths`` : ``(B,)`` long tensor of original lengths.
+        ``lengths`` : ``(B,)`` long tensor of valid frame counts.
         ``mask`` : ``(B, T_max)`` bool tensor (True = valid frame).
         ``labels`` : ``(B,)`` long tensor (if labels present).
     """

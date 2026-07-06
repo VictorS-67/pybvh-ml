@@ -212,10 +212,12 @@ def _add_joint_noise_staged(
     noisy /= np.linalg.norm(noisy, axis=-1, keepdims=True)
     state.set_from_quats(noisy)
 
-    new_rp = root_pos
     if sigma_pos > 0:
-        new_rp = root_pos + rng.normal(0, sigma_pos, root_pos.shape)
-    return new_rp
+        return root_pos + rng.normal(0, sigma_pos, root_pos.shape)
+    # Copy even without positional noise: staged functions must never
+    # hand the caller's own root_pos back (aliasing would let later
+    # in-place edits reach the caller's array).
+    return root_pos.copy()
 
 
 def _speed_perturbation_staged(
