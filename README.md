@@ -158,7 +158,7 @@ preprocess_directory(out_dir, "train.npz", representation="6d")
 
 ## Augmentation
 
-Array-level augmentation operates directly on NumPy arrays — no Bvh object reconstruction needed. All augmentation functions take keyword-only arguments, and every representation (`"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`) is handled by the same unified functions:
+Array-level augmentation operates directly on NumPy arrays — no Bvh object reconstruction needed. All augmentation functions take keyword-only arguments, angles are in radians (matching pybvh), and every representation (`"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`) is handled by the same unified functions:
 
 ```python
 import numpy as np
@@ -174,7 +174,7 @@ rng = np.random.default_rng(42)
 # The sign flips the rotation direction, so '+y' and '-y' yaw oppositely.
 root_pos, quats = rotate_vertical(
     root_pos=root_pos, joint_data=quats,
-    angle_deg=90, up_axis=bvh.world_up,
+    angle=np.pi / 2, up_axis=bvh.world_up,
     representation="quat")
 
 # Left-right mirroring — lateral_axis uses the same signed-string form
@@ -194,7 +194,7 @@ root_pos, quats = dropout_arrays(
     drop_rate=0.1, representation="quat", rng=rng)
 root_pos, quats = add_joint_noise(
     root_pos=root_pos, joint_data=quats,
-    sigma_deg=1.0, representation="quat", rng=rng)
+    sigma=np.radians(1.0), representation="quat", rng=rng)
 ```
 
 Euler arrays additionally require `euler_orders=bvh.euler_orders`.
@@ -210,7 +210,7 @@ from pybvh_ml.augmentation import rotate_vertical, mirror, add_joint_noise
 
 pipeline = AugmentationPipeline([
     (rotate_vertical, 1.0, {
-        "angle_deg": lambda rng: rng.uniform(-180, 180),  # random each sample
+        "angle": lambda rng: rng.uniform(-np.pi, np.pi),  # random each sample
         "up_axis": bvh.world_up,
         "representation": "quat",
     }),
@@ -220,7 +220,7 @@ pipeline = AugmentationPipeline([
         "representation": "quat",
     }),
     (add_joint_noise, 1.0, {
-        "sigma_deg": 1.0,
+        "sigma": np.radians(1.0),
         "representation": "quat",
     }),
 ])
@@ -238,7 +238,7 @@ pipeline = AugmentationPipeline.standard(
     get_skeleton_info(bvh),
     representation="quat",
     up_axis=bvh.world_up,
-    # rotate_angle_range=(-180, 180), mirror_prob=0.5, noise_sigma_deg=1.0,
+    # rotate_angle_range=(-np.pi, np.pi), mirror_prob=0.5, noise_sigma=np.radians(1.0),
     # speed_factor_range=(0.8, 1.2)  — defaults shown; pass None to disable a step
 )
 ```

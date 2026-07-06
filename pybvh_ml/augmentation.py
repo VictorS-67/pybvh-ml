@@ -10,7 +10,9 @@ first, matching pybvh's ``Bvh.from_*`` / ``Bvh.to_*`` convention.  All
 parameters are keyword-only: since ``root_pos`` and ``joint_data`` are
 shape-compatible ndarrays, accepting them positionally would make a
 swapped call silently corrupt data.  Call with
-``rotate_vertical(root_pos=..., joint_data=..., angle_deg=..., ...)``.
+``rotate_vertical(root_pos=..., joint_data=..., angle=..., ...)``.
+
+Angles are in **radians** throughout, matching pybvh's convention.
 """
 from __future__ import annotations
 
@@ -43,6 +45,20 @@ def _parse_axis(axis: str) -> tuple[int, float]:
             f"axis must be one of '+x', '-x', '+y', '-y', '+z', '-z'; "
             f"got {axis!r}")
     return _AXIS_IDX[axis[1]], 1.0 if axis[0] == "+" else -1.0
+
+
+def _validate_noise_sigmas(sigma: float, sigma_pos: float) -> None:
+    """Reject negative noise standard deviations."""
+    if sigma < 0:
+        raise ValueError(f"sigma must be >= 0, got {sigma}")
+    if sigma_pos < 0:
+        raise ValueError(f"sigma_pos must be >= 0, got {sigma_pos}")
+
+
+def _validate_drop_rate(drop_rate: float) -> None:
+    """Reject drop rates outside the documented ``[0, 1)`` range."""
+    if not 0.0 <= drop_rate < 1.0:
+        raise ValueError(f"drop_rate must be in [0, 1), got {drop_rate}")
 
 
 def _to_quats(
@@ -78,38 +94,23 @@ def _from_quats(
     return rotations.convert(quats, "quat", representation)
 
 
-def _quat_multiply(
-    q1: npt.NDArray[np.float64],
-    q2: npt.NDArray[np.float64],
-) -> npt.NDArray[np.float64]:
-    """Hamilton product of two quaternion arrays (w, x, y, z)."""
-    w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
-    w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
-    return np.stack([
-        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-    ], axis=-1)
-
-
 def _build_rotation_quat(
-    angle_deg: float,
+    angle: float,
     up_idx: int,
 ) -> npt.NDArray[np.float64]:
-    """Build a unit quaternion for rotation around a cardinal axis."""
-    half = np.radians(angle_deg) / 2.0
+    """Build a unit quaternion for rotation around a cardinal axis (radians)."""
+    half = angle / 2.0
     q = np.array([np.cos(half), 0.0, 0.0, 0.0])
     q[1 + up_idx] = np.sin(half)
     return q
 
 
 def _build_rotation_matrix(
-    angle_deg: float,
+    angle: float,
     up_idx: int,
 ) -> npt.NDArray[np.float64]:
-    """Build a 3×3 rotation matrix for rotation around a cardinal axis."""
-    return rotations.quat_to_rotmat(_build_rotation_quat(angle_deg, up_idx))
+    """Build a 3×3 rotation matrix for rotation around a cardinal axis (radians)."""
+    return rotations.quat_to_rotmat(_build_rotation_quat(angle, up_idx))
 
 
 def _mirror_sign_quat(lateral_idx: int) -> npt.NDArray[np.float64]:
@@ -158,7 +159,7 @@ def rotate_vertical(
     *,
     root_pos: npt.NDArray[np.float64],
     joint_data: npt.NDArray[np.float64],
-    angle_deg: float,
+    angle: float,
     up_axis: str,
     representation: str,
     euler_orders: list[str] | None = None,
@@ -179,13 +180,13 @@ def rotate_vertical(
         Root translation per frame.
     joint_data : ndarray, shape (F, J, C)
         Joint rotation data in ``representation`` format.
-    angle_deg : float
-        Rotation angle in degrees.
+    angle : float
+        Rotation angle in radians.
     up_axis : str
         Signed axis string: ``'+x'``, ``'-x'``, ``'+y'``, ``'-y'``,
         ``'+z'``, or ``'-z'``.  The sign flips the rotation direction,
         so ``'+y'`` and ``'-y'`` produce opposite yaws for the same
-        ``angle_deg``.  Typically ``bvh.world_up``.
+        ``angle``.  Typically ``bvh.world_up``.
     representation : str
         One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
@@ -202,7 +203,7 @@ def rotate_vertical(
     root_pos = np.array(root_pos, dtype=np.float64)
 
     up_idx, up_sign = _parse_axis(up_axis)
-    signed_angle = angle_deg * up_sign
+    signed_angle = angle * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_root_pos = (R_vert @ root_pos.T).T
 
@@ -219,7 +220,7 @@ def rotate_vertical(
     quats = _to_quats(joint_data, representation, euler_orders)
     q_rot = _build_rotation_quat(signed_angle, up_idx)
     new_quats = quats.copy()
-    new_quats[:, 0] = _quat_multiply(q_rot, quats[:, 0])
+    new_quats[:, 0] = rotations.quat_multiply(q_rot, quats[:, 0])
     return new_root_pos, _from_quats(new_quats, representation, euler_orders)
 
 
@@ -286,7 +287,7 @@ def add_joint_noise(
     *,
     root_pos: npt.NDArray[np.float64],
     joint_data: npt.NDArray[np.float64],
-    sigma_deg: float,
+    sigma: float,
     representation: str,
     sigma_pos: float = 0.0,
     rng: np.random.Generator | None = None,
@@ -296,7 +297,7 @@ def add_joint_noise(
 
     For each joint at each frame, generates a small random rotation
     (axis uniformly random on the unit sphere, angle sampled from
-    ``N(0, sigma_deg)`` in degrees) and composes it with the original
+    ``N(0, sigma)`` in radians) and composes it with the original
     rotation: ``q_noisy = q_noise * q_original``.
 
     Optionally adds Gaussian noise to root positions as well.
@@ -305,13 +306,14 @@ def add_joint_noise(
     ----------
     root_pos : ndarray, shape (F, 3)
     joint_data : ndarray, shape (F, J, C)
-    sigma_deg : float
-        Standard deviation of rotation noise in degrees.
+    sigma : float
+        Standard deviation of rotation noise in radians.
     representation : str
         One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
     sigma_pos : float
-        Standard deviation of root position noise (default 0 = none).
+        Standard deviation of root position noise, in the data's
+        positional units (default 0 = none).
     rng : numpy Generator, optional
     euler_orders : list of str, optional
         Required when ``representation="euler"``, ignored otherwise.
@@ -321,6 +323,7 @@ def add_joint_noise(
     new_root_pos : ndarray, shape (F, 3)
     new_joint_data : ndarray, shape (F, J, C)
     """
+    _validate_noise_sigmas(sigma, sigma_pos)
     if rng is None:
         rng = np.random.default_rng()
 
@@ -335,12 +338,12 @@ def add_joint_noise(
     norm = np.where(norm < 1e-15, 1.0, norm)
     axis = axis / norm
 
-    half_angle = np.radians(rng.normal(0, sigma_deg, (F, J))) / 2.0
+    half_angle = rng.normal(0, sigma, (F, J)) / 2.0
     q_noise = np.empty((F, J, 4), dtype=np.float64)
     q_noise[..., 0] = np.cos(half_angle)
     q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
 
-    noisy_quats = _quat_multiply(q_noise, quats)
+    noisy_quats = rotations.quat_multiply(q_noise, quats)
     noisy_quats /= np.linalg.norm(noisy_quats, axis=-1, keepdims=True)
 
     new_root_pos = root_pos.copy()
@@ -456,6 +459,7 @@ def dropout_arrays(
     new_root_pos : ndarray, shape (F, 3)
     new_joint_data : ndarray, shape (F, J, C)
     """
+    _validate_drop_rate(drop_rate)
     if rng is None:
         rng = np.random.default_rng()
 
@@ -463,7 +467,7 @@ def dropout_arrays(
     root_pos = np.asarray(root_pos, dtype=np.float64)
 
     F = root_pos.shape[0]
-    if F < 2 or drop_rate <= 0:
+    if F < 2 or drop_rate == 0:
         return root_pos.copy(), joint_data.copy()
 
     keep_mask = rng.random(F) >= drop_rate

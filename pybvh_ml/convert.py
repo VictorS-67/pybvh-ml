@@ -10,8 +10,7 @@ import numpy as np
 import numpy.typing as npt
 
 from pybvh import rotations
-
-from .metadata import REPR_CHANNELS
+from pybvh.rotations import REPRESENTATION_CHANNELS
 
 
 def convert_arrays(
@@ -42,10 +41,10 @@ def convert_arrays(
         is 9 (flattened 3x3).
     """
     for name, val in [("from_repr", from_repr), ("to_repr", to_repr)]:
-        if val not in REPR_CHANNELS:
+        if val not in REPRESENTATION_CHANNELS:
             raise ValueError(
                 f"Unknown {name} '{val}'. "
-                f"Choose from {list(REPR_CHANNELS)}")
+                f"Choose from {list(REPRESENTATION_CHANNELS)}")
 
     joint_data = np.asarray(joint_data, dtype=np.float64)
     if from_repr == to_repr:

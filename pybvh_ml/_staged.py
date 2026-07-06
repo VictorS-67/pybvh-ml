@@ -32,8 +32,9 @@ from .augmentation import (
     _mirror_sign_quat,
     _mirror_sign_rot6d,
     _parse_axis,
-    _quat_multiply,
     _swap_lr_pairs,
+    _validate_drop_rate,
+    _validate_noise_sigmas,
     add_joint_noise,
     dropout_arrays,
     mirror,
@@ -123,14 +124,14 @@ class _StagingState:
 def _rotate_vertical_staged(
     root_pos: npt.NDArray[np.float64],
     state: _StagingState,
-    angle_deg: float,
+    angle: float,
     up_axis: str,
     representation: str,
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
     up_idx, up_sign = _parse_axis(up_axis)
-    signed_angle = angle_deg * up_sign
+    signed_angle = angle * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_rp = (R_vert @ root_pos.T).T
 
@@ -150,7 +151,7 @@ def _rotate_vertical_staged(
     q = state.materialize_quats()
     q_rot = _build_rotation_quat(signed_angle, up_idx)
     new_q = q.copy()
-    new_q[:, 0] = _quat_multiply(q_rot, q[:, 0])
+    new_q[:, 0] = rotations.quat_multiply(q_rot, q[:, 0])
     state.set_from_quats(new_q)
     return new_rp
 
@@ -186,13 +187,14 @@ def _mirror_staged(
 def _add_joint_noise_staged(
     root_pos: npt.NDArray[np.float64],
     state: _StagingState,
-    sigma_deg: float,
+    sigma: float,
     representation: str,  # kept for signature symmetry; not used in math
     sigma_pos: float = 0.0,
     rng: np.random.Generator | None = None,
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
+    _validate_noise_sigmas(sigma, sigma_pos)
     if rng is None:
         rng = np.random.default_rng()
 
@@ -203,12 +205,12 @@ def _add_joint_noise_staged(
     norm = np.where(norm < 1e-15, 1.0, norm)
     axis = axis / norm
 
-    half_angle = np.radians(rng.normal(0, sigma_deg, (F, J))) / 2.0
+    half_angle = rng.normal(0, sigma, (F, J)) / 2.0
     q_noise = np.empty((F, J, 4), dtype=np.float64)
     q_noise[..., 0] = np.cos(half_angle)
     q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
 
-    noisy = _quat_multiply(q_noise, q)
+    noisy = rotations.quat_multiply(q_noise, q)
     noisy /= np.linalg.norm(noisy, axis=-1, keepdims=True)
     state.set_from_quats(noisy)
 
@@ -266,10 +268,11 @@ def _dropout_staged(
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
+    _validate_drop_rate(drop_rate)
     if rng is None:
         rng = np.random.default_rng()
     F = root_pos.shape[0]
-    if F < 2 or drop_rate <= 0:
+    if F < 2 or drop_rate == 0:
         return root_pos.copy()
 
     keep_mask = rng.random(F) >= drop_rate

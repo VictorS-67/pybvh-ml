@@ -11,7 +11,10 @@ Conventions
 - **V** = vertices / joints (root is vertex 0, joints are 1..J)
 - **D** = flat feature dimension (3 + J * C_joint)
 
-Root position (3 channels) is zero-padded to C when C > 3.
+The root vertex carries 3 position channels; when C > 3 (e.g. quat,
+6D, or rotmat joint data), the root vertex's remaining ``C - 3``
+channels are zero padding — the position values themselves are
+unchanged.
 """
 from __future__ import annotations
 
@@ -55,7 +58,8 @@ def pack_to_ctv(
     -------
     ndarray, shape (C, T, V)
         ``C = max(3, C_joint)``, ``T = F``, ``V = 1 + J``.
-        Root is vertex 0, zero-padded to C channels if C_joint > 3.
+        Root is vertex 0: its position fills channels ``0:3``, and
+        when ``C_joint > 3`` its channels ``3:C`` are zero padding.
     """
     root_pos = np.asarray(root_pos, dtype=np.float64)
     joint_data = np.asarray(joint_data, dtype=np.float64)

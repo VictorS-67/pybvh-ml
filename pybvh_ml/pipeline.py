@@ -81,7 +81,7 @@ class AugmentationPipeline:
     >>> from pybvh_ml.augmentation import rotate_vertical, mirror
     >>> pipeline = AugmentationPipeline([
     ...     (rotate_vertical, 1.0, {
-    ...         "angle_deg": lambda rng: rng.uniform(-180, 180),
+    ...         "angle": lambda rng: rng.uniform(-np.pi, np.pi),
     ...         "up_axis": bvh.world_up,
     ...         "representation": "6d",
     ...     }),
@@ -111,9 +111,9 @@ class AugmentationPipeline:
         representation: str = "6d",
         up_axis: str = "+y",
         lateral_axis: str = "+x",
-        rotate_angle_range: tuple[float, float] | None = (-180.0, 180.0),
+        rotate_angle_range: tuple[float, float] | None = (-np.pi, np.pi),
         mirror_prob: float = 0.5,
-        noise_sigma_deg: float | None = 1.0,
+        noise_sigma: float | None = np.radians(1.0),
         speed_factor_range: tuple[float, float] | None = (0.8, 1.2),
         cache_quats: bool = True,
     ) -> "AugmentationPipeline":
@@ -147,14 +147,14 @@ class AugmentationPipeline:
             set from ``bvh.world_up`` and the dataset's lateral
             convention otherwise.
         rotate_angle_range : (float, float) or None
-            Random yaw range in degrees; ``None`` skips rotation.
+            Random yaw range in radians; ``None`` skips rotation.
         mirror_prob : float
             Probability of left/right mirror.  ``0`` skips it.
             Silently skipped when ``skeleton_info["lr_pairs"]`` is
             empty (no pairs detected on this skeleton).
-        noise_sigma_deg : float or None
-            Per-joint rotation noise standard deviation in degrees;
-            ``None`` skips noise.
+        noise_sigma : float or None
+            Per-joint rotation noise standard deviation in radians
+            (default one degree); ``None`` skips noise.
         speed_factor_range : (float, float) or None
             Random speed factor range; ``None`` skips speed
             perturbation.  Runs last because it changes ``F``.
@@ -178,7 +178,7 @@ class AugmentationPipeline:
         if rotate_angle_range is not None:
             lo, hi = rotate_angle_range
             steps.append((rotate_vertical, 1.0, {
-                "angle_deg": lambda rng, lo=lo, hi=hi: rng.uniform(lo, hi),
+                "angle": lambda rng, lo=lo, hi=hi: rng.uniform(lo, hi),
                 "up_axis": up_axis,
                 "representation": representation,
                 "euler_orders": euler_orders,
@@ -192,9 +192,9 @@ class AugmentationPipeline:
                 "euler_orders": euler_orders,
             }))
 
-        if noise_sigma_deg is not None:
+        if noise_sigma is not None:
             steps.append((add_joint_noise, 1.0, {
-                "sigma_deg": noise_sigma_deg,
+                "sigma": noise_sigma,
                 "representation": representation,
                 "euler_orders": euler_orders,
             }))
@@ -296,11 +296,14 @@ class AugmentationPipeline:
         ``joint_data`` in its declared representation, and staging
         resumes cold after the call.
         """
-        # Initial representation is whatever the first step declares;
-        # if no step declares one (unusual), default to "quat" so
-        # the state is consistent.  The representation we report back to
-        # the caller at the end comes from the *last* step that carries
-        # a "representation" kwarg.
+        if not self.augmentations:
+            return root_pos, joint_data
+
+        # Initial representation is whatever the first step declares
+        # (a pipeline with steps but no declared representation raises —
+        # staging cannot guess what joint_data is).  The representation
+        # we report back to the caller at the end comes from the *last*
+        # step that carries a "representation" kwarg.
         initial_repr = self._initial_representation()
         euler_orders = self._first_euler_orders()
         state = _StagingState(joint_data, initial_repr, euler_orders)
@@ -308,47 +311,46 @@ class AugmentationPipeline:
         final_repr = initial_repr
 
         for fn, prob, kwargs in self.augmentations:
-            if rng.random() >= prob:
-                continue
-            resolved = {
-                k: v(rng) if callable(v) else v
-                for k, v in kwargs.items()
-            }
+            if rng.random() < prob:
+                resolved = {
+                    k: v(rng) if callable(v) else v
+                    for k, v in kwargs.items()
+                }
 
-            # Track the representation the user wants at the end.
-            step_repr = resolved.get("representation")
-            if step_repr is not None:
-                final_repr = step_repr
-
-            # Keep euler_orders in sync for state-level conversions.
-            if "euler_orders" in resolved and resolved["euler_orders"] is not None:
-                state.euler_orders = resolved["euler_orders"]
-
-            staged_fn = STAGED_DISPATCH.get(fn)
-            if staged_fn is not None:
-                # Forward rng if the staged function accepts it and the user
-                # didn't provide one in kwargs.
-                if "rng" not in resolved:
-                    sig = inspect.signature(staged_fn)
-                    if "rng" in sig.parameters:
-                        resolved["rng"] = rng
-                root_pos = staged_fn(root_pos, state, **resolved)
-            else:
-                # Fallback: flush the cache, convert jd to the rep this
-                # unknown step expects, call it normally, then reset state.
+                # Track the representation the user wants at the end.
+                step_repr = resolved.get("representation")
                 if step_repr is not None:
-                    state.ensure_repr(step_repr)
-                if "rng" not in resolved:
-                    sig = inspect.signature(fn)
-                    if "rng" in sig.parameters:
-                        resolved["rng"] = rng
-                root_pos, new_jd = fn(
-                    root_pos=root_pos, joint_data=state.jd, **resolved)
-                # We don't know what the unknown function did internally;
-                # treat the result as opaque in `step_repr` (or
-                # ``state.current_repr`` if the step didn't declare one).
-                state.set_jd_invalidate_quats(
-                    new_jd, step_repr or state.current_repr)
+                    final_repr = step_repr
+
+                # Keep euler_orders in sync for state-level conversions.
+                if "euler_orders" in resolved and resolved["euler_orders"] is not None:
+                    state.euler_orders = resolved["euler_orders"]
+
+                staged_fn = STAGED_DISPATCH.get(fn)
+                if staged_fn is not None:
+                    # Forward rng if the staged function accepts it and the
+                    # user didn't provide one in kwargs.
+                    if "rng" not in resolved:
+                        sig = inspect.signature(staged_fn)
+                        if "rng" in sig.parameters:
+                            resolved["rng"] = rng
+                    root_pos = staged_fn(root_pos, state, **resolved)
+                else:
+                    # Fallback: flush the cache, convert jd to the rep this
+                    # unknown step expects, call it normally, then reset state.
+                    if step_repr is not None:
+                        state.ensure_repr(step_repr)
+                    if "rng" not in resolved:
+                        sig = inspect.signature(fn)
+                        if "rng" in sig.parameters:
+                            resolved["rng"] = rng
+                    root_pos, new_jd = fn(
+                        root_pos=root_pos, joint_data=state.jd, **resolved)
+                    # We don't know what the unknown function did internally;
+                    # treat the result as opaque in `step_repr` (or
+                    # ``state.current_repr`` if the step didn't declare one).
+                    state.set_jd_invalidate_quats(
+                        new_jd, step_repr or state.current_repr)
 
         # At the end, ensure joint_data is back in the representation
         # the user expects.
@@ -356,12 +358,26 @@ class AugmentationPipeline:
         return root_pos, state.jd
 
     def _initial_representation(self) -> str:
-        """First step's ``representation`` kwarg, or ``"quat"``."""
+        """First step's ``representation`` kwarg.
+
+        Raises
+        ------
+        ValueError
+            If no step declares a ``representation`` kwarg.  The staged
+            path needs to know what representation ``joint_data`` is in
+            to manage its quaternion cache; guessing silently would
+            corrupt data for non-quat inputs.
+        """
         for _, _, kwargs in self.augmentations:
             v = kwargs.get("representation")
             if isinstance(v, str):
                 return v
-        return "quat"
+        raise ValueError(
+            "No pipeline step declares a 'representation' kwarg. "
+            "The quat-caching path (cache_quats=True) needs it to know "
+            "what representation joint_data is in — declare "
+            "representation=... on at least one step, or build the "
+            "pipeline with cache_quats=False.")
 
     def _first_euler_orders(self) -> list[str] | None:
         """First step's ``euler_orders`` value (if any, and non-callable)."""

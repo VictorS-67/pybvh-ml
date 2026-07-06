@@ -88,7 +88,7 @@ def aug_as_bvh(bvh, aug_fn, **kwargs):
 up_axis = bvh.world_up
 
 rotated = aug_as_bvh(bvh, rotate_vertical,
-                     angle_deg=90.0, up_axis=up_axis)
+                     angle=np.radians(90.0), up_axis=up_axis)
 fig, axes = bvhplot.frame([bvh, rotated],
                           frame=0,
                           labels=["original", "+90° vertical"],
@@ -150,16 +150,16 @@ print(f"frames modified by dropout+SLERP: {diff_frames} / {bvh.frame_count}")
 # ## Joint noise
 #
 # Adds small Gaussian rotation perturbations (composed as quaternion multiplies, not naive
-# element-wise noise). `sigma_deg` controls the standard deviation of the noise magnitude
-# in degrees. Optionally perturbs root positions too via `sigma_pos`.
+# element-wise noise). `sigma` controls the standard deviation of the noise magnitude
+# in radians. Optionally perturbs root positions too via `sigma_pos`.
 
 # %%
 rng = np.random.default_rng(0)
-noisy = aug_as_bvh(bvh, add_joint_noise, sigma_deg=3.0, rng=rng)
+noisy = aug_as_bvh(bvh, add_joint_noise, sigma=np.radians(3.0), rng=rng)
 
 fig, axes = bvhplot.frame([bvh, noisy],
                           frame=0,
-                          labels=["original", "sigma_deg=3°"],
+                          labels=["original", "sigma=3°"],
                           camera=(70,30))
 plt.show()
 
@@ -181,7 +181,7 @@ from pybvh_ml.torch import MotionDataset
 
 pipeline = AugmentationPipeline([
     (rotate_vertical, 1.0, {
-        "angle_deg": lambda rng: rng.uniform(-180, 180),
+        "angle": lambda rng: rng.uniform(-np.pi, np.pi),
         "up_axis": up_axis,
         "representation": "quat",
     }),
@@ -190,7 +190,7 @@ pipeline = AugmentationPipeline([
         "lateral_axis": lateral_axis,
         "representation": "quat",
     }),
-    (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quat"}),
+    (add_joint_noise, 1.0, {"sigma": np.radians(2.0), "representation": "quat"}),
 ])
 
 # Build a single-clip dataset from our fixture and inspect the per-epoch behaviour.

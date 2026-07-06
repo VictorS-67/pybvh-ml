@@ -16,12 +16,22 @@ Coordinated migration to pybvh 0.8.0 (atomic, no shims). This section is consoli
   - **Migration**: replace `representation="quaternion"` with `representation="quat"` at every call site; datasets preprocessed with the old token name need their stored `representation` metadata read as `"quat"` going forward (re-preprocess or rename the metadata field value).
 - **`bvh.to_quaternions()` / `bvh.from_quaternions()` call sites migrated to `bvh.to_quat()` / `bvh.from_quat()`** (silent breaking via pybvh 0.8.0). Affects any user code calling these pybvh methods around pybvh-ml pipelines; pybvh-ml's own internals are updated.
 - **`pybvh_ml.augmentation` no longer imports `pybvh.tools.rotX/rotY/rotZ`** (removed in pybvh 0.8.0). The internal cardinal-axis rotation matrix is now built via the public `pybvh.rotations.quat_to_rotmat`; results are identical up to float rounding (~1e-16).
+- **Radians everywhere in augmentation parameters.** `rotate_vertical(angle_deg=...)` → `rotate_vertical(angle=...)` and `add_joint_noise(sigma_deg=...)` → `add_joint_noise(sigma=...)`, both in radians; `AugmentationPipeline.standard(noise_sigma_deg=...)` → `noise_sigma=` (radians, default one degree) and `rotate_angle_range` defaults to `(-np.pi, np.pi)`. `sigma_pos` is in positional units and is unchanged. Matches pybvh 0.8.0's radians-first API — the pybvh ecosystem now speaks radians end to end.
+  - **Migration**: rename the kwarg and wrap old degree values in `np.radians(...)` — `rotate_vertical(..., angle_deg=90)` becomes `rotate_vertical(..., angle=np.radians(90))`; same for `sigma` and the `standard()` kwargs.
+- **Out-of-range augmentation parameters now raise `ValueError`.** `add_joint_noise` rejects negative `sigma` / `sigma_pos`, and `dropout_arrays` rejects `drop_rate` outside the documented `[0, 1)` — in both the public functions and the staged pipeline variants. Previously a negative `sigma_pos` or `drop_rate` was a silent no-op and a negative `sigma` surfaced as an opaque NumPy error.
+- **`AugmentationPipeline` with `cache_quats=True` (the default) raises `ValueError` when no step declares a `representation` kwarg** instead of silently assuming `"quat"` — the quat-caching path cannot know what representation `joint_data` is in, and guessing would corrupt non-quat inputs run through representation-less custom steps. Declare `representation=...` on at least one step, or pass `cache_quats=False`. Empty pipelines remain valid no-ops.
 
 ### Added
 
 - **Normalization trio moved here from pybvh** — `compute_normalization_stats`, `normalize_array`, and `denormalize_array` are now pybvh-ml public API (pybvh 0.8.0 removed them from `pybvh.batch`; dataset z-score normalization is an ML-pipeline concern). Same signatures and `Mean.npy` / `Std.npy`-compatible output as the pybvh originals: `{"mean", "std", "constant_channels"}` with zero-std channels guarded to `1.0`. The Bvh-list entry point extracts through pybvh-ml's own `extract_repr` and uses the representation-aware loose skeleton check (bone-length variation across actors is accepted), so supported representations are `"euler"` / `"quat"` / `"6d"` / `"axisangle"` — `"rotmat"` is not part of pybvh-ml's extraction surface. `preprocess_directory`'s stored stats share the same array-level core.
   - **Migration**: one line — `from pybvh import compute_normalization_stats, normalize_array, denormalize_array` becomes `from pybvh_ml import compute_normalization_stats, normalize_array, denormalize_array`.
 - **`center_root` recorded in preprocessed dataset metadata.** `preprocess_directory` now writes the flag into both output formats (`.npz` key / HDF5 root attribute `center_root`) and `load_preprocessed` surfaces it in the result dict, so downstream code can tell whether the stored `root_pos` arrays are already centered instead of silently centering them a second time through `pack_to_*(center_root=True)`. Files written by older pybvh-ml versions load with `center_root=None` (unknown). The `pack_to_*` docstrings now state that their flag is for standalone packing of raw extractions — preprocessed arrays saved with `center_root=True` are already centered.
+
+### Changed
+
+- **Quaternion Hamilton product now comes from pybvh.** The private `_quat_multiply` in `augmentation.py` was deleted in favor of `pybvh.rotations.quat_multiply` (new in pybvh 0.8.0) — verified bit-identical on batched and broadcast inputs (same Hamilton convention, wxyz scalar-first order).
+- **`convert_arrays` imports `REPRESENTATION_CHANNELS` directly from `pybvh.rotations`** instead of through `pybvh_ml.metadata`; the `REPR_CHANNELS` re-export in `pybvh_ml.metadata` is unchanged.
+- **Both `AugmentationPipeline` dispatch paths use the same probability-check direction** (`draw < prob` applies the step); the staged path previously spelled it as `draw >= prob: continue`. The two forms are exact complements — no behavioral change.
 
 ### Fixed
 
@@ -31,6 +41,7 @@ Coordinated migration to pybvh 0.8.0 (atomic, no shims). This section is consoli
 ### Documentation
 
 - `packing._center` docstring now states explicitly that pybvh-ml's `center_root` subtracts the full 3D first-frame root position — distinct from pybvh 0.8.0's `centered="first"`, which is ground-plane-only.
+- `pybvh_ml.packing` docstrings clarify the root zero-padding: in `(C, T, V)` / `(T, V, C)` layouts the root vertex's position fills channels `0:3`, and when the joint representation has more than 3 channels the root's channels `3:C` are zero padding — the position values themselves are unchanged.
 
 ## [0.4.0] - 2026-05-14
 

@@ -493,19 +493,19 @@ class TestQuaternionAugmentation:
 
     def test_rotate_quat_shape(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=45.0, up_axis="+y", representation="quat")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(45.0), up_axis="+y", representation="quat")
         assert new_quats.shape == quats.shape
         assert new_pos.shape == pos.shape
 
     def test_rotate_quat_zero_is_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=0.0, up_axis="+y", representation="quat")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=0.0, up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_quats, quats, atol=1e-10)
         np.testing.assert_allclose(new_pos, pos, atol=1e-10)
 
     def test_rotate_quat_360_is_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=360.0, up_axis="+y", representation="quat")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(360.0), up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_pos, pos, atol=1e-10)
         # Quaternions: q and -q represent same rotation
         for f in range(quats.shape[0]):
@@ -518,13 +518,13 @@ class TestQuaternionAugmentation:
 
     def test_rotate_quat_nonroot_unchanged(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        _, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
+        _, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_quats[:, 1:], quats[:, 1:], atol=1e-10)
 
     def test_rotate_quat_root_pos_rotated(self, bvh_example):
         """Root position should be transformed by the rotation matrix."""
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+y", representation="quat")
         # 90° around Y: (x, y, z) → (z, y, -x)
         np.testing.assert_allclose(new_pos[:, 0], pos[:, 2], atol=1e-10)
         np.testing.assert_allclose(new_pos[:, 1], pos[:, 1], atol=1e-10)
@@ -533,8 +533,8 @@ class TestQuaternionAugmentation:
     def test_rotate_quat_negative_axis_flips_direction(self, bvh_example):
         """'+y' and '-y' of the same angle should rotate in opposite directions."""
         pos, quats = _get_quat_data(bvh_example)
-        pos_plus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
-        pos_minus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="-y", representation="quat")
+        pos_plus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+y", representation="quat")
+        pos_minus, _ = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="-y", representation="quat")
         # Same magnitude, opposite sign on the non-up components.
         np.testing.assert_allclose(pos_plus[:, 1], pos_minus[:, 1], atol=1e-10)
         np.testing.assert_allclose(pos_plus[:, 0], -pos_minus[:, 0], atol=1e-10)
@@ -543,30 +543,29 @@ class TestQuaternionAugmentation:
     def test_rotate_quat_bad_axis_raises(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(ValueError, match="axis must be"):
-            rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="y", representation="quat")
+            rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="y", representation="quat")
         with pytest.raises(ValueError, match="axis must be"):
-            rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+w", representation="quat")
+            rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+w", representation="quat")
 
     @pytest.mark.parametrize("up_idx", [0, 1, 2])
     def test_rotate_quat_consistency_with_euler(self, bvh_example, up_idx):
         """Quaternion rotation should match pybvh's Euler rotation after conversion.
 
-        pybvh 0.7.0 made bvh.joint_angles radians-native — rotate_angles_vertical
-        operates on radians, so the cross-check converts the quaternion result
-        back via rotmat_to_euler(..., degrees=False) to match.
+        The whole chain is radians: bvh.joint_angles is radians-native
+        (pybvh 0.7.0), rotate_angles_vertical takes radians (pybvh 0.8.0),
+        and pybvh-ml's rotate_vertical takes radians (pybvh-ml 0.5.0).
         """
         from pybvh.transforms import rotate_angles_vertical
-        angle = 73.0
-        # Euler-level rotation (pybvh's int-axis API). pybvh 0.8.0 made the
-        # angle radians-first; degrees=True matches pybvh-ml's degree input.
+        angle = np.radians(73.0)
+        # Euler-level rotation (pybvh's int-axis API)
         root_order = ''.join(bvh_example.nodes[0].rot_channels)
         euler_angles, euler_pos = rotate_angles_vertical(
             bvh_example.joint_angles, bvh_example.root_pos,
-            angle, up_idx, root_order, degrees=True)
+            angle, up_idx, root_order)
         # Quaternion-level rotation (pybvh-ml's signed-axis API)
         up_axis = "+" + "xyz"[up_idx]
         pos, quats = _get_quat_data(bvh_example)
-        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quat")
+        new_pos, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=angle, up_axis=up_axis, representation="quat")
         # Compare root positions
         np.testing.assert_allclose(new_pos, euler_pos, atol=1e-6)
         # Convert quaternion result to radians-Euler and compare
@@ -716,32 +715,32 @@ class TestRot6dAugmentation:
 
     def test_rotate_6d_shape(self, bvh_example):
         pos, rot6d = _get_6d_data(bvh_example)
-        new_pos, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=45.0, up_axis="+y", representation="6d")
+        new_pos, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=np.radians(45.0), up_axis="+y", representation="6d")
         assert new_6d.shape == rot6d.shape
         assert new_pos.shape == pos.shape
 
     def test_rotate_6d_zero_identity(self, bvh_example):
         pos, rot6d = _get_6d_data(bvh_example)
-        new_pos, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=0.0, up_axis="+y", representation="6d")
+        new_pos, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=0.0, up_axis="+y", representation="6d")
         np.testing.assert_allclose(new_6d, rot6d, atol=1e-10)
         np.testing.assert_allclose(new_pos, pos, atol=1e-10)
 
     def test_rotate_6d_nonroot_unchanged(self, bvh_example):
         pos, rot6d = _get_6d_data(bvh_example)
-        _, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=90.0, up_axis="+y", representation="6d")
+        _, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=np.radians(90.0), up_axis="+y", representation="6d")
         np.testing.assert_allclose(new_6d[:, 1:], rot6d[:, 1:], atol=1e-10)
 
     def test_rotate_6d_root_pos_rotated(self, bvh_example):
         pos, rot6d = _get_6d_data(bvh_example)
-        new_pos, _ = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=90.0, up_axis="+y", representation="6d")
+        new_pos, _ = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=np.radians(90.0), up_axis="+y", representation="6d")
         np.testing.assert_allclose(new_pos[:, 0], pos[:, 2], atol=1e-10)
         np.testing.assert_allclose(new_pos[:, 1], pos[:, 1], atol=1e-10)
         np.testing.assert_allclose(new_pos[:, 2], -pos[:, 0], atol=1e-10)
 
     def test_rotate_6d_negative_axis_flips_direction(self, bvh_example):
         pos, rot6d = _get_6d_data(bvh_example)
-        pos_plus, _ = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=90.0, up_axis="+y", representation="6d")
-        pos_minus, _ = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=90.0, up_axis="-y", representation="6d")
+        pos_plus, _ = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=np.radians(90.0), up_axis="+y", representation="6d")
+        pos_minus, _ = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=np.radians(90.0), up_axis="-y", representation="6d")
         np.testing.assert_allclose(pos_plus[:, 1], pos_minus[:, 1], atol=1e-10)
         np.testing.assert_allclose(pos_plus[:, 0], -pos_minus[:, 0], atol=1e-10)
         np.testing.assert_allclose(pos_plus[:, 2], -pos_minus[:, 2], atol=1e-10)
@@ -755,9 +754,9 @@ class TestRot6dAugmentation:
         pos, quats = _get_quat_data(bvh_example)
         _, rot6d = _get_6d_data(bvh_example)
         # Quaternion rotation
-        new_pos_q, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=angle, up_axis=up_axis, representation="quat")
+        new_pos_q, new_quats = rotate_vertical(root_pos=pos, joint_data=quats, angle=angle, up_axis=up_axis, representation="quat")
         # 6D rotation
-        new_pos_6d, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=angle, up_axis=up_axis, representation="6d")
+        new_pos_6d, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=angle, up_axis=up_axis, representation="6d")
         # Root positions should match
         np.testing.assert_allclose(new_pos_6d, new_pos_q, atol=1e-10)
         # Convert both to rotmat and compare
@@ -805,7 +804,7 @@ class TestRot6dAugmentation:
         """Output 6D should decode to valid rotation matrices."""
         from pybvh import rotations
         pos, rot6d = _get_6d_data(bvh_example)
-        _, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle_deg=73.0, up_axis="+y", representation="6d")
+        _, new_6d = rotate_vertical(root_pos=pos, joint_data=rot6d, angle=np.radians(73.0), up_axis="+y", representation="6d")
         R = rotations.rot6d_to_rotmat(new_6d)
         # Check orthogonality: R @ R.T ≈ I
         I = np.eye(3)
@@ -951,7 +950,7 @@ class TestAugmentationPipeline:
     def test_prob_zero_skips(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 0.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 0.0, {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         np.testing.assert_array_equal(new_q, quats)
@@ -960,7 +959,7 @@ class TestAugmentationPipeline:
     def test_prob_one_applies(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 1.0, {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         # Should NOT be identical
@@ -971,7 +970,7 @@ class TestAugmentationPipeline:
         pairs, lateral_axis, up_axis = _get_mirror_metadata(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 0.5,
-                {"angle_deg": 45, "up_axis": up_axis, "representation": "quat"}),
+                {"angle": np.radians(45), "up_axis": up_axis, "representation": "quat"}),
             (mirror, 0.5,
                 {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis, "representation": "quat"}),
         ])
@@ -985,7 +984,7 @@ class TestAugmentationPipeline:
         pairs, lateral_axis, up_axis = _get_mirror_metadata(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0,
-                {"angle_deg": 45, "up_axis": up_axis, "representation": "quat"}),
+                {"angle": np.radians(45), "up_axis": up_axis, "representation": "quat"}),
             (mirror, 1.0,
                 {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis, "representation": "quat"}),
         ])
@@ -996,14 +995,14 @@ class TestAugmentationPipeline:
 
     def test_len(self):
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 0.5, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 0.5, {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
             (mirror, 0.5, {"lr_joint_pairs": [], "lateral_axis": "+x", "representation": "quat"}),
         ])
         assert len(pipeline) == 2
 
     def test_repr(self):
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 0.5, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 0.5, {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
         ])
         r = repr(pipeline)
         assert "rotate_vertical" in r
@@ -1012,7 +1011,7 @@ class TestAugmentationPipeline:
         """Pipeline should work without explicit rng."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 45, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 1.0, {"angle": np.radians(45), "up_axis": "+y", "representation": "quat"}),
         ])
         # Should not raise
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats)
@@ -1035,9 +1034,9 @@ class TestAugmentationPipeline:
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 0.0,
-                {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+                {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
             (add_joint_noise, 0.0,
-                {"sigma_deg": 2.0, "representation": "quat"}),
+                {"sigma": np.radians(2.0), "representation": "quat"}),
         ], cache_quats=cache_quats)
         new_p, new_q = pipeline(
             root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
@@ -1045,6 +1044,30 @@ class TestAugmentationPipeline:
         np.testing.assert_array_equal(new_p, pos)
         assert not np.shares_memory(new_p, pos)
         assert not np.shares_memory(new_q, quats)
+
+    def test_staged_requires_declared_representation(self, bvh_example):
+        """cache_quats=True raises when no step declares representation=.
+
+        The quat-caching path has to know what representation joint_data
+        is in; it used to silently assume "quat", corrupting non-quat
+        inputs run through representation-less custom steps.
+        """
+        pos, quats = _get_quat_data(bvh_example)
+
+        def _shift_root(*, root_pos, joint_data):
+            return root_pos + 1.0, joint_data.copy()
+
+        pipeline = AugmentationPipeline([(_shift_root, 1.0, {})])
+        with pytest.raises(ValueError, match="representation"):
+            pipeline(root_pos=pos, joint_data=quats,
+                     rng=np.random.default_rng(0))
+
+        # cache_quats=False has no cache to manage — no declaration needed.
+        direct = AugmentationPipeline(
+            [(_shift_root, 1.0, {})], cache_quats=False)
+        new_p, _ = direct(root_pos=pos, joint_data=quats,
+                          rng=np.random.default_rng(0))
+        np.testing.assert_allclose(new_p, pos + 1.0)
 
 
 class TestKeywordOnlyAugmentation:
@@ -1054,7 +1077,7 @@ class TestKeywordOnlyAugmentation:
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(TypeError):
             rotate_vertical(
-                pos, quats, angle_deg=45.0, up_axis="+y",
+                pos, quats, angle=np.radians(45.0), up_axis="+y",
                 representation="quat")
 
     def test_mirror_refuses_positional(self, bvh_example):
@@ -1068,7 +1091,52 @@ class TestKeywordOnlyAugmentation:
         pos, quats = _get_quat_data(bvh_example)
         with pytest.raises(TypeError):
             add_joint_noise(
-                pos, quats, sigma_deg=1.0, representation="quat")
+                pos, quats, sigma=np.radians(1.0), representation="quat")
+
+
+class TestAugmentationParamValidation:
+    """Out-of-range parameters raise instead of silently no-oping."""
+
+    def test_negative_sigma_raises(self, bvh_example):
+        pos, quats = _get_quat_data(bvh_example)
+        with pytest.raises(ValueError, match="sigma must be"):
+            add_joint_noise(
+                root_pos=pos, joint_data=quats, sigma=-0.1,
+                representation="quat")
+
+    def test_negative_sigma_pos_raises(self, bvh_example):
+        pos, quats = _get_quat_data(bvh_example)
+        with pytest.raises(ValueError, match="sigma_pos must be"):
+            add_joint_noise(
+                root_pos=pos, joint_data=quats, sigma=0.1, sigma_pos=-0.5,
+                representation="quat")
+
+    @pytest.mark.parametrize("drop_rate", [-0.1, 1.0, 1.5])
+    def test_drop_rate_out_of_range_raises(self, bvh_example, drop_rate):
+        pos, quats = _get_quat_data(bvh_example)
+        with pytest.raises(ValueError, match=r"drop_rate must be in \[0, 1\)"):
+            dropout_arrays(
+                root_pos=pos, joint_data=quats, drop_rate=drop_rate,
+                representation="quat")
+
+    def test_negative_sigma_raises_staged(self, bvh_example):
+        from pybvh_ml._staged import _StagingState, _add_joint_noise_staged
+        pos, quats = _get_quat_data(bvh_example)
+        state = _StagingState(quats, "quat", None)
+        with pytest.raises(ValueError, match="sigma must be"):
+            _add_joint_noise_staged(
+                pos, state, sigma=-0.1, representation="quat",
+                rng=np.random.default_rng(0))
+
+    @pytest.mark.parametrize("drop_rate", [-0.1, 1.0])
+    def test_drop_rate_out_of_range_raises_staged(self, bvh_example, drop_rate):
+        from pybvh_ml._staged import _StagingState, _dropout_staged
+        pos, quats = _get_quat_data(bvh_example)
+        state = _StagingState(quats, "quat", None)
+        with pytest.raises(ValueError, match=r"drop_rate must be in \[0, 1\)"):
+            _dropout_staged(
+                pos, state, drop_rate=drop_rate, representation="quat",
+                rng=np.random.default_rng(0))
 
 
 class TestPipelineStandardFactory:
@@ -1101,7 +1169,7 @@ class TestPipelineStandardFactory:
             skel, representation="quat",
             rotate_angle_range=None,
             mirror_prob=0.0,
-            noise_sigma_deg=None,
+            noise_sigma=None,
             speed_factor_range=None,
         )
         assert len(p) == 0
@@ -1948,7 +2016,7 @@ class TestTorchDatasets:
             quat_clips.append({"root_pos": c["root_pos"].copy(),
                                "joint_data": quats})
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
+            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         return MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=seed)
@@ -1982,7 +2050,7 @@ class TestTorchDatasets:
             for c in sample_clips
         ]
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
+            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         ds = MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=None)
@@ -2022,7 +2090,7 @@ class TestTorchDatasets:
             for c in sample_clips
         ]
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
+            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         ds = MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=None)
@@ -2037,7 +2105,7 @@ class TestTorchDatasets:
         from pybvh_ml.pipeline import AugmentationPipeline
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0, {
-                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
                 "up_axis": "+y",
                 "representation": "quat",
             }),
@@ -2242,15 +2310,15 @@ class TestJointNoise:
     def test_shape_preserved(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=1.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(1.0), representation="quat", rng=np.random.default_rng(42))
         assert new_q.shape == quats.shape
         assert new_p.shape == pos.shape
 
     def test_zero_noise_is_near_identity(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=0.0, representation="quat", rng=np.random.default_rng(42))
-        # sigma_deg=0 means angle is always 0, so noise quat ≈ identity
+            root_pos=pos, joint_data=quats, sigma=0.0, representation="quat", rng=np.random.default_rng(42))
+        # sigma=0 means angle is always 0, so noise quat ≈ identity
         # but axis is still random, so cos(0)=1, sin(0)=0 → q_noise = [1,0,0,0]
         np.testing.assert_allclose(new_p, pos, atol=1e-10)
         # Quaternions should be very close (numerical noise only)
@@ -2264,7 +2332,7 @@ class TestJointNoise:
         """Output quaternions should be unit length."""
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(5.0), representation="quat", rng=np.random.default_rng(42))
         norms = np.linalg.norm(new_q, axis=-1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-10)
 
@@ -2272,7 +2340,7 @@ class TestJointNoise:
         """Non-zero sigma should produce different quaternions."""
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(5.0), representation="quat", rng=np.random.default_rng(42))
         assert not np.allclose(new_q, quats, atol=1e-4)
 
     def test_small_noise_stays_close(self, bvh_example):
@@ -2280,7 +2348,7 @@ class TestJointNoise:
         from pybvh import rotations
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=0.1, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(0.1), representation="quat", rng=np.random.default_rng(42))
         # Geodesic distance: angle = 2 * arccos(|q1 . q2|)
         dots = np.abs(np.sum(quats * new_q, axis=-1))
         dots = np.clip(dots, 0, 1)
@@ -2291,22 +2359,22 @@ class TestJointNoise:
     def test_root_pos_noise(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=1.0, representation="quat", sigma_pos=0.5,
+            root_pos=pos, joint_data=quats, sigma=np.radians(1.0), representation="quat", sigma_pos=0.5,
             rng=np.random.default_rng(42))
         assert not np.allclose(new_p, pos, atol=1e-4)
 
     def test_no_root_pos_noise_by_default(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         new_p, _ = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(5.0), representation="quat", rng=np.random.default_rng(42))
         np.testing.assert_array_equal(new_p, pos)
 
     def test_reproducible(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
         p1, q1 = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=2.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(2.0), representation="quat", rng=np.random.default_rng(42))
         p2, q2 = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=2.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(2.0), representation="quat", rng=np.random.default_rng(42))
         np.testing.assert_array_equal(q1, q2)
         np.testing.assert_array_equal(p1, p2)
 
@@ -2315,7 +2383,7 @@ class TestJointNoise:
         from pybvh import rotations
         pos, quats = _get_quat_data(bvh_example)
         _, new_q = add_joint_noise(
-            root_pos=pos, joint_data=quats, sigma_deg=5.0, representation="quat", rng=np.random.default_rng(42))
+            root_pos=pos, joint_data=quats, sigma=np.radians(5.0), representation="quat", rng=np.random.default_rng(42))
         R = rotations.quat_to_rotmat(new_q)
         I = np.eye(3)
         for f in range(R.shape[0]):
@@ -2327,7 +2395,7 @@ class TestJointNoise:
         """Joint noise should work inside AugmentationPipeline."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quat"}),
+            (add_joint_noise, 1.0, {"sigma": np.radians(2.0), "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         assert new_q.shape == quats.shape
@@ -2338,7 +2406,7 @@ class TestJointNoise:
         pos, quats = _get_quat_data(bvh_example)
         state = _StagingState(quats, "quat", None)
         new_p = _add_joint_noise_staged(
-            pos, state, sigma_deg=1.0, representation="quat",
+            pos, state, sigma=np.radians(1.0), representation="quat",
             rng=np.random.default_rng(42))
         assert not np.shares_memory(new_p, pos)
         # sigma_pos=0 leaves the values themselves unchanged.
@@ -2357,7 +2425,7 @@ class TestPipelineCallableKwargs:
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0, {
-                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
                 "up_axis": "+y",
                 "representation": "quat",
             }),
@@ -2371,7 +2439,7 @@ class TestPipelineCallableKwargs:
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0, {
-                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
                 "up_axis": "+y",
                 "representation": "quat",
             }),
@@ -2398,7 +2466,7 @@ class TestPipelineCallableKwargs:
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0, {
-                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
                 "up_axis": "+y",
                 "representation": "quat",
             }),
@@ -2412,11 +2480,11 @@ class TestPipelineCallableKwargs:
         """Existing static kwargs should not be broken."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 1.0, {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
         ])
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
         # Should match direct call
-        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
+        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_p, ref_p, atol=1e-12)
         np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
 
@@ -2432,7 +2500,7 @@ class TestPipelineRngForwarding:
         """add_joint_noise should be deterministic in pipeline."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma_deg": 5.0, "representation": "quat"}),
+            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         _, q1 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
         _, q2 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
@@ -2453,11 +2521,11 @@ class TestPipelineRngForwarding:
         """Functions without rng param should still work."""
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
-            (rotate_vertical, 1.0, {"angle_deg": 90, "up_axis": "+y", "representation": "quat"}),
+            (rotate_vertical, 1.0, {"angle": np.radians(90), "up_axis": "+y", "representation": "quat"}),
         ])
         # Should not raise TypeError
         new_p, new_q = pipeline(root_pos=pos, joint_data=quats, rng=np.random.default_rng(42))
-        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle_deg=90.0, up_axis="+y", representation="quat")
+        ref_p, ref_q = rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+y", representation="quat")
         np.testing.assert_allclose(new_q, ref_q, atol=1e-12)
 
     def test_explicit_rng_kwarg_takes_precedence(self, bvh_example):
@@ -2466,7 +2534,7 @@ class TestPipelineRngForwarding:
         custom_rng = np.random.default_rng(999)
         pipeline = AugmentationPipeline([
             (add_joint_noise, 1.0, {
-                "sigma_deg": 5.0,
+                "sigma": np.radians(5.0),
                 "representation": "quat",
                 "rng": lambda rng: custom_rng,  # explicit override
             }),
@@ -2475,7 +2543,7 @@ class TestPipelineRngForwarding:
         # Should use custom_rng(999), not pipeline's rng(42)
         custom_rng2 = np.random.default_rng(999)
         _, q2 = add_joint_noise(
-            root_pos=pos.copy(), joint_data=quats.copy(), sigma_deg=5.0, representation="quat", rng=custom_rng2)
+            root_pos=pos.copy(), joint_data=quats.copy(), sigma=np.radians(5.0), representation="quat", rng=custom_rng2)
         np.testing.assert_array_equal(q1, q2)
 
     def test_mixed_rng_and_no_rng_functions(self, bvh_example):
@@ -2483,11 +2551,11 @@ class TestPipelineRngForwarding:
         pos, quats = _get_quat_data(bvh_example)
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0, {
-                "angle_deg": lambda rng: rng.uniform(-180, 180),
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
                 "up_axis": "+y",
                 "representation": "quat",
             }),
-            (add_joint_noise, 1.0, {"sigma_deg": 2.0, "representation": "quat"}),
+            (add_joint_noise, 1.0, {"sigma": np.radians(2.0), "representation": "quat"}),
         ])
         p1, q1 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))
         p2, q2 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(), rng=np.random.default_rng(42))

@@ -146,9 +146,9 @@ lateral_axis = reference_bvh.left_at(0)
 # 6D-native augmentations operate directly on (F, J, 6) arrays —
 # no quaternion round-trip, so this is safe inside a DataLoader worker.
 pipeline = AugmentationPipeline([
-    # 100% of the time: random vertical rotation in [-180, 180] degrees
+    # 100% of the time: random vertical rotation in [-pi, pi] radians
     (rotate_vertical, 1.0, {
-        "angle_deg": lambda rng: rng.uniform(-180, 180),
+        "angle": lambda rng: rng.uniform(-np.pi, np.pi),
         "up_axis": up_axis,
         "representation": "6d",
     }),
