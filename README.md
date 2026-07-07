@@ -27,7 +27,7 @@ It replaces the ~150 lines of preprocessing, augmentation, and dataset-class boi
 
 **pybvh-ml is in 0.x — expect breaking changes between minor versions.**
 
-We treat 0.x as design space: when a past choice turns out to be wrong, we fix it at the root rather than carry scar tissue forward. No deprecation cycles, no compatibility shims; each release ships a single clean migration path, documented in the [CHANGELOG](CHANGELOG.md). If you depend on pybvh-ml from production code, **pin to an exact version** (`pybvh-ml==0.4.0`) and read the upgrade notes before bumping.
+We treat 0.x as design space: when a past choice turns out to be wrong, we fix it at the root rather than carry scar tissue forward. No deprecation cycles, no compatibility shims; each release ships a single clean migration path, documented in the [CHANGELOG](CHANGELOG.md). If you depend on pybvh-ml from production code, **pin to an exact version** (`pybvh-ml==0.5.0`) and read the upgrade notes before bumping.
 
 This will change at **1.0**: from then on, pybvh-ml will commit to strict semver — no breaking changes within a major version, deprecation warnings (at least one minor release) before any future removal. Until 1.0, "make the library better" wins over "preserve the old behavior."
 
@@ -36,6 +36,8 @@ This will change at **1.0**: from then on, pybvh-ml will commit to strict semver
 ```bash
 pip install pybvh-ml
 ```
+
+This pulls in [pybvh](https://github.com/VictorS-67/pybvh) `>= 0.8, < 0.9` automatically — pybvh-ml 0.5 tracks pybvh 0.8's API (short representation tokens, radians-first parameters).
 
 With optional dependencies:
 
@@ -110,9 +112,11 @@ Power-user kwargs for richer outputs:
 Per-channel z-score normalization following the `Mean.npy` / `Std.npy` convention used by HumanML3D and MDM:
 
 ```python
+from pybvh import read_bvh_directory
 from pybvh_ml import compute_normalization_stats, normalize_array, denormalize_array
 
-stats = compute_normalization_stats(clips, representation="6d")  # {"mean", "std", "constant_channels"}
+bvhs = read_bvh_directory("dataset/")
+stats = compute_normalization_stats(bvhs, representation="6d")  # {"mean", "std", "constant_channels"}
 x_norm = normalize_array(x, stats)     # (x - mean) / std
 x = denormalize_array(x_norm, stats)   # back to BVH units
 ```
@@ -124,6 +128,8 @@ x = denormalize_array(x_norm, stats)   # back to BVH units
 When clips come from different skeletons, frame rates, up-axis conventions, or — for order-sensitive representations like `"euler"` / `"axisangle"` — different per-joint Euler orders, pass `harmonize=True`:
 
 ```python
+from pybvh_ml import preprocess_directory
+
 preprocess_directory(
     "raw/", "train.npz",
     representation="euler",
@@ -139,6 +145,7 @@ For workflows that need to inspect or persist intermediates, call `pybvh.harmoni
 
 ```python
 from pybvh import read_bvh_directory, harmonize, write_bvh_file
+from pybvh_ml import preprocess_directory
 from pathlib import Path
 
 clips = read_bvh_directory("raw/", parallel=True, skip_errors=True)
@@ -253,8 +260,9 @@ from pybvh_ml.torch import MotionDataset, collate_motion_batch
 from torch.utils.data import DataLoader
 import pybvh
 
-# 1. One-time preprocess.
-preprocess_directory("walks/", "train.npz", representation="6d")
+# 1. One-time preprocess (label_fn: map filename stem → integer class).
+preprocess_directory("walks/", "train.npz", representation="6d",
+                     label_fn=lambda stem: 0)
 
 # 2. Build dataset + augmentation pipeline.
 data = load_preprocessed("train.npz")
@@ -297,9 +305,9 @@ edges = pybvh_ml.get_edge_list(bvh)           # [(child, parent), ...]
 lr_pairs = pybvh_ml.get_lr_pairs(bvh)         # [(left, right), ...]
 partitions = pybvh_ml.get_body_partitions(bvh) # {"torso": [...], "left_arm": [...], ...}
 
-# All-in-one
+# All-in-one (include_partitions=True adds "body_partitions")
 info = pybvh_ml.get_skeleton_info(bvh)
-# {"edges", "lr_pairs", "lr_mapping", "body_partitions",
+# {"edges", "lr_pairs", "lr_mapping",
 #  "joint_names", "euler_orders", "num_joints"}
 ```
 
@@ -363,7 +371,7 @@ For the richer layout that covers velocities and foot contacts, use pybvh's `Bvh
 ## Requirements
 
 - Python >= 3.9
-- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.7.0
+- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8, < 0.9
 - NumPy >= 1.21
 
 Optional: PyTorch >= 2.0 (`pip install "pybvh-ml[torch]"`), h5py >= 3.0 (`pip install "pybvh-ml[hdf5]"`).

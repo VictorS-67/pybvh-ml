@@ -29,7 +29,7 @@ pybvh-ml depends on pybvh. It never reimplements pybvh functionality. The divisi
 | Bvh object transforms (rotate, mirror, speed perturb, etc.) | pybvh |
 | Motion analysis (velocities, foot contacts, trajectory) | pybvh |
 | Batch BVH loading | pybvh |
-| Normalization stats computation | pybvh |
+| **Dataset z-score normalization (stats + apply/invert)** | **pybvh-ml** (since 0.5.0; absorbed from pybvh 0.8.0) |
 | **Tensor layout packing (CTV, TVC, flat)** | **pybvh-ml** |
 | **Array-level augmentation (no Bvh object needed)** | **pybvh-ml** |
 | **Skeleton graph metadata (edge lists, partitions)** | **pybvh-ml** |
@@ -54,7 +54,7 @@ This env has:
 - numpy, matplotlib, pytest
 - torch 2.8.0+cpu (CPU-only)
 - h5py 3.14.0
-- pybvh 0.7.0 (editable install) — minimum required by pybvh-ml 0.4
+- pybvh 0.8.0 (editable install) — pybvh-ml 0.5 pins `pybvh>=0.8,<0.9`
 
 **Important**: pybvh has its own separate conda env (`pybvh`) with no torch/h5py. pybvh-ml code must never require torch or h5py for core functionality — they are optional, guarded with try/except.
 
@@ -65,14 +65,15 @@ This env has:
 ```
 pybvh-ml/
 ├── pybvh_ml/
-│   ├── __init__.py              # Public API (27 exports)
+│   ├── __init__.py              # Public API (28 exports)
 │   ├── packing.py               # Tensor layout conversion (CTV, TVC, flat)
-│   ├── augmentation.py          # Array-level augmentation (quat + 6D, no Bvh objects)
+│   ├── augmentation.py          # Array-level augmentation (all representations, no Bvh objects)
 │   ├── convert.py               # Representation conversion dispatch
 │   ├── pipeline.py              # Composable AugmentationPipeline
+│   ├── _staged.py               # Internal quat-cache staging for AugmentationPipeline
 │   ├── sequences.py             # Sequence length utilities (windowing, standardization)
 │   ├── skeleton.py              # Skeleton graph metadata (edges, partitions)
-│   ├── preprocessing.py         # Batch BVH → on-disk dataset pipelines
+│   ├── preprocessing.py         # Batch BVH → on-disk dataset pipelines + normalization trio
 │   ├── metadata.py              # Feature column descriptors
 │   └── torch/                   # Optional PyTorch integration
 │       ├── __init__.py
@@ -80,7 +81,10 @@ pybvh-ml/
 │       └── collate.py           # Collate functions for variable-length sequences
 ├── bvh_data/                    # Test BVH files (bvh_test1-3, standard_skeleton)
 ├── tests/
-│   └── test_pybvh_ml.py         # 191 tests across 14 test classes
+│   ├── test_pybvh_ml.py         # 282 unit tests across 21 test classes
+│   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
+│   └── integration/             # real-data sweeps, seeding determinism, staging parity
+├── tutorials/                   # 3 runnable notebooks (executed in CI via pytest --nbmake)
 ├── pyproject.toml
 └── README.md
 ```
@@ -118,7 +122,7 @@ pybvh-ml/
 **`skeleton.py`** — Skeleton graph metadata
 - `get_edge_list(bvh, include_end_sites=False)` → `list[(child_idx, parent_idx)]`
 - `get_body_partitions(bvh)` → `dict[str, list[int]]` mapping body part names to joint indices
-- `get_lr_pairs(bvh)` → `list[(left_idx, right_idx)]` (wraps pybvh's `auto_detect_lr_mapping` into index pairs)
+- `get_lr_pairs(bvh)` → `list[(left_idx, right_idx)]` (returns `list(bvh.lr_pairs)`, pybvh's cached index-space property)
 - `get_skeleton_info(bvh)` → unified dict with edges, partitions, L/R pairs, joint names, euler orders
 
 **`preprocessing.py`** — Batch preprocessing pipelines
@@ -132,7 +136,7 @@ pybvh-ml/
 
 **`metadata.py`** — Feature column descriptors
 - `FeatureDescriptor` — describes which columns correspond to which features in a packed array
-- `describe_features(representation, include_root_pos, include_velocities, ...)` → `FeatureDescriptor`
+- `describe_features(num_joints, representation="6d", include_root_pos=True)` → `FeatureDescriptor`
 - Enables programmatic access to feature slices without hardcoded column indices
 
 **`torch/datasets.py`** — PyTorch Dataset classes (optional, only if torch is installed)
@@ -142,7 +146,7 @@ pybvh-ml/
 
 **`torch/collate.py`** — Collate functions
 - `collate_motion_batch(batch)` — handles variable-length sequences with padding and mask generation
-- Returns `(data_tensor, lengths_tensor, mask_tensor, labels_tensor)`
+- Returns a dict: `data` `(B, T_max, D)` zero-padded, `lengths` `(B,)` valid-frame counts, `mask` `(B, T_max)` bool (True = valid frame), plus `labels` `(B,)` when labels are present. Since 0.5.0 each item's `length` means valid frames in the returned tensor — cropped clips report `target_length`, not the original clip length.
 
 ---
 
@@ -172,9 +176,9 @@ pybvh-ml uses these pybvh entry points:
 - `bvh.matches_hierarchy(other, match_offsets=False)` and `bvh.matches_channels(other)` — skeleton compatibility predicates (pybvh 0.7.0)
 - `bvh.edges` — skeleton edge list as `(child_idx, parent_idx)` tuples
 - `bvh.nodes`, `bvh.node_index` — skeleton topology
-- `pybvh.transforms.auto_detect_lr_pairs()` — L/R joint pair detection as index tuples
-- `pybvh.rotations.*` — rotation conversion primitives
-- `pybvh.features.*` — motion analysis features (velocities, foot contacts, etc.)
+- `bvh.lr_pairs`, `bvh.lr_mapping` — cached L/R joint pair detection (index pairs / name-keyed dict)
+- `pybvh.rotations.*` — rotation conversion primitives, `quat_multiply`, `REPRESENTATION_CHANNELS`
+- `bvh.joint_velocities()`, `bvh.foot_contacts()` — motion analysis for the optional `include_velocities` / `include_foot_contacts` preprocessing outputs
 - `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`
 
 Normalization is pybvh-ml's own public API since 0.5.0: `compute_normalization_stats` / `normalize_array` / `denormalize_array` live in `preprocessing.py` (absorbed from pybvh 0.8.0, which removed the trio from `pybvh.batch`). The Bvh-list entry point extracts via `extract_repr` and applies pybvh-ml's intentionally loose skeleton check (`_check_skeleton_compatibility`, bone-length variation accepted); `preprocess_directory` shares the same array-level core (`_normalization_stats_from_arrays`) on its already-extracted arrays.
@@ -227,7 +231,7 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 
 ## 8. Test Patterns
 
-Tests are in `tests/test_pybvh_ml.py` (201 tests, 16 test classes). Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (282 tests, 21 test classes); `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures**:
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)
@@ -252,4 +256,4 @@ Tests are in `tests/test_pybvh_ml.py` (201 tests, 16 test classes). Test BVH fil
 
 2. **Euler angle round-trips are not unique** — converting Euler → rotmat → Euler may give different angles that represent the same rotation (especially near gimbal lock). Always compare via rotation matrices, not raw Euler angles.
 
-3. **`standardize_length(method="resample")` uses linear interpolation** — not suitable for rotation data. A `warnings.warn` is emitted at runtime. Users should call `pybvh.Bvh.resample()` (SLERP-based) before extracting arrays instead.
+3. **`standardize_length(method="resample_linear")` uses linear interpolation** — correct for positional channels only, not for rotation arrays. Resample rotations with `pybvh.Bvh.resample()` (SLERP-based) before extracting arrays instead; the docstring states this plainly.

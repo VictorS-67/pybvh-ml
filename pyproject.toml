@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pybvh-ml"
-version = "0.4.0"
+version = "0.5.0"
 description = "ML bridge layer for pybvh — tensor packing, augmentation, preprocessing, and PyTorch datasets for motion capture data"
 readme = "README.md"
 requires-python = ">=3.9"

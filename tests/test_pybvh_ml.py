@@ -2641,11 +2641,21 @@ class TestPreprocessingFilter:
 
 
 class TestVersionFloor:
-    """pybvh-ml 0.4 requires pybvh >= 0.7."""
+    """pybvh-ml 0.5 requires pybvh >= 0.8 (pyproject pin: pybvh>=0.8,<0.9)."""
 
     def test_pybvh_version_floor(self):
         import pybvh
         major, minor = (int(x) for x in pybvh.__version__.split(".")[:2])
-        assert (major, minor) >= (0, 7), (
-            f"pybvh-ml >= 0.4 requires pybvh >= 0.7.0, "
+        assert (major, minor) >= (0, 8), (
+            f"pybvh-ml >= 0.5 requires pybvh >= 0.8.0, "
             f"got {pybvh.__version__}")
+
+    def test_version_matches_pyproject(self):
+        # Guards the pyproject/__init__ version drift that shipped in 0.3/0.4.
+        import re
+        import pybvh_ml
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        match = re.search(
+            r'^version = "(.+)"$', pyproject.read_text(), re.MULTILINE)
+        assert match is not None
+        assert match.group(1) == pybvh_ml.__version__

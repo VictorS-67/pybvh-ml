@@ -5,9 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 0.5.0
+## [0.5.0] - 2026-07-07
 
-Coordinated migration to pybvh 0.8.0 (atomic, no shims). This section is consolidated at release time; entries below cover the migration step.
+Coordinated release with pybvh 0.8.0 (atomic migration, no shims): pybvh-ml adopts pybvh's short representation tokens and radians-first API in the same release, absorbs the normalization trio pybvh removed, and fixes a collate-mask bug plus two output-aliasing traps in the augmentation pipeline.
+
+### Breaking changes & migration at a glance
+
+| Change | Migration |
+|---|---|
+| Requires **pybvh >= 0.8, < 0.9** | Upgrade pybvh first; pybvh 0.8.0 ships its own consolidated migration table in its CHANGELOG. |
+| Representation token `"quaternion"` → `"quat"` | Pass `representation="quat"` at every call site; stored dataset metadata now reads back as `"quat"`. |
+| `bvh.to_quaternions()` / `bvh.from_quaternions()` → `bvh.to_quat()` / `bvh.from_quat()` (via pybvh 0.8.0) | Rename the method calls in your own pipeline code — no dual names. |
+| Angles are radians: `rotate_vertical(angle_deg=…)` → `angle=…`, `add_joint_noise(sigma_deg=…)` → `sigma=…`, `AugmentationPipeline.standard(noise_sigma_deg=…)` → `noise_sigma=…` | Rename the kwarg and wrap old degree values in `np.radians(...)`; `rotate_angle_range` defaults to `(-np.pi, np.pi)`. |
+| Dataset `length` / batch `lengths` now mean valid frames in the returned tensor | Cropped clips report `target_length`, not the original clip length; recover original lengths from your clip arrays before the dataset if you need them. |
+| Out-of-range augmentation parameters raise `ValueError` (negative `sigma` / `sigma_pos`; `drop_rate` outside `[0, 1)`) | Fix the offending values — they were silent no-ops before. |
+| `AugmentationPipeline(cache_quats=True)` (the default) requires a `representation=` declaration | Declare `representation=...` on at least one step, or pass `cache_quats=False`. |
+| Normalization trio moved here from pybvh | `from pybvh_ml import compute_normalization_stats, normalize_array, denormalize_array` (was `from pybvh import ...`). |
+| `center_root` recorded in preprocessed dataset metadata | New `.npz` key / HDF5 root attribute; older files load with `center_root=None`. Preprocessed arrays saved with `center_root=True` are already centered — don't re-center via `pack_to_*(center_root=True)`. |
 
 ### Breaking changes
 
