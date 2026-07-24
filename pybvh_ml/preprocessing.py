@@ -21,6 +21,32 @@ from pybvh import rotations
 from pybvh_ml.skeleton import get_skeleton_info
 
 
+_SUPPORTED_REPRESENTATIONS = ("euler", "quat", "6d", "axisangle")
+_KNOWN_SUFFIXES = (".npz", ".hdf5", ".h5")
+
+
+def _validate_representation(representation: str) -> None:
+    """Reject representations outside pybvh-ml's extraction surface."""
+    if representation not in _SUPPORTED_REPRESENTATIONS:
+        raise ValueError(
+            f"Unknown representation '{representation}'. "
+            f"Choose from {list(_SUPPORTED_REPRESENTATIONS)}")
+
+
+def _validate_output_suffix(path: Path) -> None:
+    """Reject output/input paths with unrecognized dataset extensions.
+
+    ``np.savez`` silently appends ``.npz`` to unknown suffixes, so a
+    typo'd extension used to write to a file the caller never named —
+    and ``load_preprocessed`` on the original path then failed with
+    ``FileNotFoundError``.
+    """
+    if path.suffix.lower() not in _KNOWN_SUFFIXES:
+        raise ValueError(
+            f"Unrecognized dataset extension '{path.suffix}' in "
+            f"'{path}'. Choose from {list(_KNOWN_SUFFIXES)}")
+
+
 def extract_repr(
     bvh: Bvh,
     representation: str,
@@ -41,17 +67,14 @@ def extract_repr(
     root_pos : ndarray, shape (F, 3)
     joint_data : ndarray, shape (F, J, C_repr)
     """
+    _validate_representation(representation)
     if representation == "euler":
         return bvh.root_pos.copy(), bvh.joint_angles.copy()
     if representation == "quat":
         return bvh.to_quat()
     if representation == "6d":
         return bvh.to_6d()
-    if representation == "axisangle":
-        return bvh.to_axisangle()
-    raise ValueError(
-        f"Unknown representation '{representation}'. "
-        f"Choose from ['euler', 'quat', '6d', 'axisangle']")
+    return bvh.to_axisangle()
 
 
 def _extract_primary_and_quats(
@@ -272,10 +295,16 @@ _REP_NEEDS_CHANNEL_MATCH = {"euler", "axisangle"}
 
 def _majority_value(distribution: dict[str, list[str]]) -> str | None:
     """Return the key with the most entries in ``distribution`` (ties broken
-    by lexical order for determinism), or ``None`` if empty."""
-    if not distribution:
+    by lexical order for determinism), or ``None`` if empty.
+
+    ``None`` keys are excluded — ``Bvh.rest_up`` is ``None`` for
+    degenerate rigs, and ``None`` can neither win a lexical tie-break
+    against a string nor serve as a reorientation target.
+    """
+    keys = [k for k in distribution if k is not None]
+    if not keys:
         return None
-    return max(distribution.keys(), key=lambda k: (len(distribution[k]), k))
+    return max(keys, key=lambda k: (len(distribution[k]), k))
 
 
 def _majority_euler_order(clips: list[Bvh]) -> str | None:
@@ -317,19 +346,26 @@ def _resolve_harmonize_targets(
     drop it (mixing orders is harmless in those tensors).
     """
     targets: dict[str, str] = {}
+
+    def _fill_from_majority(key: str, distribution: dict) -> None:
+        # _majority_value returns None when every clip's value is None
+        # (degenerate rigs) — skipping the target beats passing None.
+        majority = _majority_value(distribution)
+        if majority is not None:
+            targets[key] = majority
+
     if target_world_up is not None:
         targets["target_world_up"] = target_world_up
     elif len(uniformity["world_up"]) > 1:
-        targets["target_world_up"] = _majority_value(uniformity["world_up"])
+        _fill_from_majority("target_world_up", uniformity["world_up"])
     if target_rest_up is not None:
         targets["target_rest_up"] = target_rest_up
     elif uniformity["rest_anim_mismatch"]:
-        targets["target_rest_up"] = _majority_value(uniformity["rest_up"])
+        _fill_from_majority("target_rest_up", uniformity["rest_up"])
     if target_rest_forward is not None:
         targets["target_rest_forward"] = target_rest_forward
     elif len(uniformity["rest_forward"]) > 1:
-        targets["target_rest_forward"] = _majority_value(
-            uniformity["rest_forward"])
+        _fill_from_majority("target_rest_forward", uniformity["rest_forward"])
 
     if _channel_layout_depends_on_euler_order(representation):
         if target_euler_order is not None:
@@ -515,8 +551,8 @@ def _check_skeleton_compatibility(
                 f"order, so mixed orders corrupt the batch. Pass "
                 f"harmonize=True to unify Euler orders automatically, "
                 f"or pick a rotation-invariant representation "
-                f"('6d' / 'quat' / 'rotmat') for which "
-                f"channel layout is order-agnostic.")
+                f"('6d' / 'quat') for which channel layout is "
+                f"order-agnostic.")
 
 
 # =========================================================================
@@ -579,6 +615,7 @@ def compute_normalization_stats(
     """
     if not bvh_list:
         raise ValueError("bvh_list is empty.")
+    _validate_representation(representation)
 
     labels = [f"bvh_list[{i}]" for i in range(len(bvh_list))]
     _check_skeleton_compatibility(bvh_list, labels, representation)
@@ -825,6 +862,10 @@ def preprocess_directory(
     """
     bvh_dir = Path(bvh_dir)
     output_path = Path(output_path)
+    # Fail before any file is parsed: a bad representation or output
+    # extension used to surface only after the full directory load.
+    _validate_representation(representation)
+    _validate_output_suffix(output_path)
 
     all_paths = sorted(bvh_dir.glob(file_pattern))
     if filter_fn is not None:
@@ -1084,11 +1125,11 @@ def load_preprocessed(path: str | Path) -> dict:
         ``center_root`` is the flag the dataset was preprocessed with (files written before pybvh-ml 0.5.0 don't record it, so it loads as ``None``).  When it is ``True``, the stored ``root_pos`` arrays are already centered — repack them with ``pack_to_*(..., center_root=False)``.
     """
     path = Path(path)
+    _validate_output_suffix(path)
     ext = path.suffix.lower()
     if ext == ".hdf5" or ext == ".h5":
         return _load_hdf5(path)
-    else:
-        return _load_npz(path)
+    return _load_npz(path)
 
 
 def _load_npz(path: Path) -> dict:

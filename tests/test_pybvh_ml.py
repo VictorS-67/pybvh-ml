@@ -1996,6 +1996,46 @@ class TestPreprocessing:
         assert len(messages) == 1
         assert expected in messages[0]
 
+    def test_bad_output_extension_raises_before_parsing(self, tmp_path):
+        """Unknown extensions fail up front — np.savez used to silently
+        append .npz and write to a path the caller never named.  The
+        nonexistent input dir proves validation runs before any I/O."""
+        with pytest.raises(ValueError, match="Unrecognized dataset extension"):
+            preprocess_directory(
+                tmp_path / "does_not_exist", tmp_path / "out.dat")
+
+    def test_bad_extension_raises_on_load(self, tmp_path):
+        with pytest.raises(ValueError, match="Unrecognized dataset extension"):
+            load_preprocessed(tmp_path / "dataset.dat")
+
+    def test_bad_representation_raises_before_parsing(self, tmp_path):
+        with pytest.raises(ValueError, match="Unknown representation"):
+            preprocess_directory(
+                tmp_path / "does_not_exist", tmp_path / "out.npz",
+                representation="rotmat")
+
+    def test_majority_value_ignores_none_keys(self):
+        """Degenerate rigs put a None key in the rest_up distribution;
+        it must neither crash the tie-break nor win the majority."""
+        from pybvh_ml.preprocessing import _majority_value
+        assert _majority_value({"+y": ["a"], None: ["b", "c"]}) == "+y"
+        assert _majority_value({None: ["a", "b"]}) is None
+        assert _majority_value({}) is None
+        # Regression: None vs str comparison in the lexical tie-break.
+        assert _majority_value({"+y": ["a"], None: ["b"]}) == "+y"
+
+    def test_resolve_targets_skips_all_none_rest_up(self):
+        from pybvh_ml.preprocessing import _resolve_harmonize_targets
+        uniformity = {
+            "world_up": {"+y": ["a", "b"]},
+            "rest_forward": {"+x": ["a", "b"]},
+            "rest_up": {None: ["a", "b"]},
+            "rest_anim_mismatch": ["a", "b"],
+        }
+        targets = _resolve_harmonize_targets(
+            [], uniformity, "6d", None, None, None, None)
+        assert "target_rest_up" not in targets
+
     def test_same_graph_different_offsets_accepted(self, bvh_dir, tmp_path):
         """Multi-actor case: clips share the skeleton graph (same names +
         parent indices) but have different bone offsets. The compatibility
