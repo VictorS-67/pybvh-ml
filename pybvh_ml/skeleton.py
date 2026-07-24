@@ -62,9 +62,15 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
     -------
     dict
         Keys: ``num_joints``, ``joint_names``, ``edges``,
-        ``euler_orders``, ``lr_pairs``, ``lr_mapping``.  Optionally
-        ``body_partitions``.  ``lr_mapping`` is the name-keyed dict
-        from ``bvh.lr_mapping`` (``None`` when no pairs detected).
+        ``euler_orders``, ``lr_pairs``, ``lr_mapping``, ``world_up``,
+        ``rest_forward``, ``rest_up``.  Optionally ``body_partitions``.
+        ``lr_mapping`` is the name-keyed dict from ``bvh.lr_mapping``
+        (``None`` when no pairs detected).  The three axis strings feed
+        runtime augmentation without reopening the source BVH —
+        ``world_up`` is the ``up_axis`` for
+        :func:`~pybvh_ml.augmentation.rotate_vertical` and
+        :meth:`AugmentationPipeline.standard`; ``rest_up`` is ``None``
+        for degenerate rigs.
     """
     info = {
         'num_joints': bvh.joint_count,
@@ -73,6 +79,9 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
         'euler_orders': list(bvh.euler_orders),
         'lr_pairs': get_lr_pairs(bvh),
         'lr_mapping': dict(bvh.lr_mapping) if bvh.lr_mapping else None,
+        'world_up': bvh.world_up,
+        'rest_forward': bvh.rest_forward,
+        'rest_up': bvh.rest_up,
     }
     if include_partitions:
         info['body_partitions'] = get_body_partitions(bvh)

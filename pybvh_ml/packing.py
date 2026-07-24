@@ -52,7 +52,7 @@ def pack_to_ctv(
         Per-joint rotation data (Euler, quaternion, 6D, etc.).
     center_root : bool
         If True, subtract first frame's root position.
-        This flag is for standalone packing of raw extractions.  Clips from a dataset preprocessed with ``center_root=True`` (see :func:`~pybvh_ml.preprocessing.preprocess_directory` and the ``center_root`` key of :func:`~pybvh_ml.preprocessing.load_preprocessed`) are already centered — pass ``False`` for those to avoid centering twice.
+        This flag is for standalone packing of raw extractions.  Clips from a dataset preprocessed with ``center_root=True`` (see :func:`~pybvh_ml.preprocessing.preprocess_directory` and the ``center_root`` key of :func:`~pybvh_ml.preprocessing.load_preprocessed`) are already centered — pass ``False`` for those.  Re-centering a whole already-centered clip is a harmless no-op, but re-centering a *windowed sub-clip* zeroes the window's first frame and destroys the clip-relative trajectory.
 
     Returns
     -------

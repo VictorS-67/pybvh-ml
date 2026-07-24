@@ -197,7 +197,8 @@ class TestSkeleton:
         info = get_skeleton_info(bvh_example)
         assert set(info.keys()) == {
             'num_joints', 'joint_names', 'edges', 'euler_orders',
-            'lr_pairs', 'lr_mapping'}
+            'lr_pairs', 'lr_mapping', 'world_up', 'rest_forward',
+            'rest_up'}
 
     def test_skeleton_info_values(self, bvh_example):
         info = get_skeleton_info(bvh_example)
@@ -2036,6 +2037,69 @@ class TestPreprocessing:
             [], uniformity, "6d", None, None, None, None)
         assert "target_rest_up" not in targets
 
+    def test_explicit_foot_joints_roundtrip(self, bvh_dir, tmp_path):
+        """An explicit foot_joints list bypasses auto-detection, drives
+        contact extraction, and lands in skeleton_info."""
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        explicit = bvh.auto_detect_foot_joints()
+        assert explicit, "fixture should have detectable feet"
+        out = tmp_path / "dataset.npz"
+        preprocess_directory(
+            bvh_dir, out, file_pattern="bvh_test1.bvh",
+            include_foot_contacts=True, foot_joints=explicit)
+        loaded = load_preprocessed(out)
+        assert loaded["skeleton_info"]["foot_joints"] == explicit
+        fc = loaded["clips"][0]["foot_contacts"]
+        assert fc.shape[1] == len(explicit)
+
+    def test_hdf5_non_ascii_stems(self, bvh_dir, tmp_path):
+        """Non-ASCII filenames survive the HDF5 round trip (dtype='S'
+        used to crash with UnicodeEncodeError)."""
+        pytest.importorskip("h5py")
+        import shutil
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        shutil.copy(bvh_dir / "bvh_test1.bvh", work_dir / "mocap_é.bvh")
+        out = tmp_path / "dataset.hdf5"
+        preprocess_directory(work_dir, out)
+        loaded = load_preprocessed(out)
+        assert loaded["filenames"] == ["mocap_é"]
+
+    @pytest.mark.parametrize("suffix", [".npz", ".hdf5"])
+    def test_quat_dataset_stores_no_duplicate_quats(
+            self, bvh_dir, tmp_path, suffix):
+        """representation='quat' + include_quaternions=True stores the
+        quaternions once; the loader aliases joint_quats to joint_data."""
+        if suffix == ".hdf5":
+            pytest.importorskip("h5py")
+        out = tmp_path / ("dataset" + suffix)
+        preprocess_directory(
+            bvh_dir, out, file_pattern="bvh_test1.bvh",
+            representation="quat", include_quaternions=True)
+        if suffix == ".npz":
+            raw = np.load(out)
+            assert "clip_0_joint_quats" not in raw.files
+        else:
+            import h5py
+            with h5py.File(out, "r") as f:
+                assert "joint_quats" not in f["clip_0"]
+        loaded = load_preprocessed(out)
+        clip = loaded["clips"][0]
+        assert clip["joint_quats"] is clip["joint_data"]
+        assert clip["joint_quats"].shape[-1] == 4
+
+    def test_skeleton_info_axis_keys_roundtrip(self, bvh_dir, tmp_path):
+        """world_up / rest_forward / rest_up ride along in skeleton_info
+        so augmentation can be configured without reopening BVHs."""
+        out = tmp_path / "dataset.npz"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh")
+        loaded = load_preprocessed(out)
+        info = loaded["skeleton_info"]
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        assert info["world_up"] == bvh.world_up
+        assert info["rest_forward"] == bvh.rest_forward
+        assert info["rest_up"] == bvh.rest_up
+
     def test_same_graph_different_offsets_accepted(self, bvh_dir, tmp_path):
         """Multi-actor case: clips share the skeleton graph (same names +
         parent indices) but have different bone offsets. The compatibility
@@ -2274,20 +2338,29 @@ class TestNormalization:
             compute_normalization_stats([bvh_example, bvh_test3])
 
     def test_matches_preprocess_directory_stats(self, tmp_path):
-        """Uncentered stats agree with preprocess_directory's stored stats on
-        rotation channels (root_pos differs intentionally: preprocess centers
-        it by default)."""
+        """center_root=True reproduces preprocess_directory's stored stats
+        exactly (including root channels); center_root=False still agrees
+        on rotation channels but differs on the centered root."""
         bvh_dir = Path(__file__).parent.parent / "bvh_data"
         out = tmp_path / "dataset.npz"
         preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh",
                              representation="6d")
         loaded = load_preprocessed(out)
         bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
-        stats = compute_normalization_stats([bvh], representation="6d")
-        np.testing.assert_allclose(
-            stats["mean"][3:], loaded["mean"][3:], atol=1e-10)
-        np.testing.assert_allclose(
-            stats["std"][3:], loaded["std"][3:], atol=1e-10)
+
+        centered = compute_normalization_stats(
+            [bvh], representation="6d", center_root=True)
+        np.testing.assert_allclose(centered["mean"], loaded["mean"],
+                                   atol=1e-10)
+        np.testing.assert_allclose(centered["std"], loaded["std"],
+                                   atol=1e-10)
+
+        raw = compute_normalization_stats([bvh], representation="6d")
+        np.testing.assert_allclose(raw["mean"][3:], loaded["mean"][3:],
+                                   atol=1e-10)
+        np.testing.assert_allclose(raw["std"][3:], loaded["std"][3:],
+                                   atol=1e-10)
+        assert not np.allclose(raw["mean"][:3], loaded["mean"][:3])
 
 
 # =============================================================================

@@ -61,6 +61,10 @@ def extract_repr(
     ----------
     bvh : Bvh
     representation : {"euler", "quat", "6d", "axisangle"}
+        ``"euler"`` returns ``bvh.joint_angles`` — radians, matching
+        pybvh.  ``"rotmat"`` is not part of the extraction surface
+        (use :func:`~pybvh_ml.convert.convert_arrays` to derive it
+        from any extracted representation).
 
     Returns
     -------
@@ -563,6 +567,7 @@ def compute_normalization_stats(
     bvh_list: list[Bvh],
     representation: str = "euler",
     include_root_pos: bool = True,
+    center_root: bool = False,
 ) -> dict[str, npt.NDArray]:
     """Compute per-channel mean and std across a dataset of BVH objects.
 
@@ -588,6 +593,13 @@ def compute_normalization_stats(
         ``'6d'``, or ``'axisangle'``.
     include_root_pos : bool, optional
         If True (default), include root position in the features.
+    center_root : bool, optional
+        If True, subtract each clip's first-frame root position before
+        computing the stats — reproducing exactly the ``mean`` / ``std``
+        that :func:`preprocess_directory` stores under its default
+        ``center_root=True`` (whose arrays are centered before the
+        stats pass).  Default ``False`` computes stats on raw root
+        positions.
 
     Returns
     -------
@@ -624,6 +636,8 @@ def compute_normalization_stats(
     joint_data_list: list[npt.NDArray[np.float64]] = []
     for bvh in bvh_list:
         root_pos, joint_data = extract_repr(bvh, representation)
+        if center_root and root_pos.shape[0] > 0:
+            root_pos = root_pos - root_pos[0:1]
         root_pos_list.append(root_pos)
         joint_data_list.append(joint_data)
 
@@ -683,6 +697,7 @@ def preprocess_directory(
     include_quaternions: bool = False,
     include_velocities: bool = False,
     include_foot_contacts: bool = False,
+    foot_joints: list[str] | None = None,
     label_fn: Callable[[str], int] | None = None,
     filter_fn: Callable[[str], bool] | None = None,
     file_pattern: str = "*.bvh",
@@ -711,12 +726,14 @@ def preprocess_directory(
         Rotation representation for joint data.
     center_root : bool
         If True, subtract first frame's root position per clip.
-        The flag is recorded in the saved dataset's metadata and surfaced by :func:`load_preprocessed`, so downstream packing knows the arrays are already centered — pass ``center_root=False`` to the ``pack_to_*`` functions when repacking such clips (centering twice would zero the wrong origin).
+        The flag is recorded in the saved dataset's metadata and surfaced by :func:`load_preprocessed`, so downstream packing knows the arrays are already centered — pass ``center_root=False`` to the ``pack_to_*`` functions when repacking such clips.  (Re-centering a whole already-centered clip is a harmless no-op; the real hazard is windowed sub-clips, where re-centering zeroes the window's first frame and destroys the clip-relative trajectory.)
     include_quaternions : bool
         If True, also store pre-computed quaternion arrays per clip
         (useful for runtime speed perturbation / dropout).  When
-        ``representation="quat"`` this flag is redundant and the
-        main joint data is used without duplication.
+        ``representation="quat"`` the main joint data already is the
+        quaternion array, so no duplicate is stored on disk —
+        :func:`load_preprocessed` aliases ``clip["joint_quats"]`` to
+        ``clip["joint_data"]`` in that case.
     include_velocities : bool
         If True, compute per-joint linear velocities via
         :meth:`pybvh.Bvh.joint_velocities` (central stencil, edge
@@ -728,9 +745,15 @@ def preprocess_directory(
     include_foot_contacts : bool
         If True, compute binary foot-contact labels via
         :meth:`pybvh.Bvh.foot_contacts` (default ``method="combined"``)
-        and store them per clip along with the detected foot joint
-        names in ``skeleton_info["foot_joints"]``.  Static features,
-        same caveat as ``include_velocities``.
+        and store them per clip along with the foot joint names in
+        ``skeleton_info["foot_joints"]``.  Static features, same caveat
+        as ``include_velocities``.
+    foot_joints : list of str, optional
+        Explicit foot joint names for contact detection.  ``None``
+        (default) auto-detects from the first clip.  Required for
+        footless or nonstandard rigs, where auto-detection finds
+        nothing and pybvh's detector raises.  Only used with
+        ``include_foot_contacts=True``.
     label_fn : callable, optional
         ``label_fn(filename_stem) -> int``.  If provided, stores
         per-clip integer labels.
@@ -934,21 +957,23 @@ def preprocess_directory(
     all_velocities: list[npt.NDArray[np.float64]] = []
     all_foot_contacts: list[npt.NDArray[np.float64]] = []
 
-    # Pin foot-joint auto-detection to the first clip so all clips
-    # produce contact arrays with the same shape.
-    foot_joints: list[str] | None = None
-    if include_foot_contacts:
+    # Pin foot joints to one list (explicit, or auto-detected from the
+    # first clip) so all clips produce contact arrays with the same shape.
+    if include_foot_contacts and foot_joints is None:
         foot_joints = clips[0].auto_detect_foot_joints()
 
+    # For representation="quat" the primary joint_data already is the
+    # quaternion array — don't extract (or later store) a duplicate.
+    want_quats = include_quaternions and representation != "quat"
     for bvh in clips:
         root_pos, joint_data, quats = _extract_primary_and_quats(
-            bvh, representation, want_quaternions=include_quaternions)
+            bvh, representation, want_quaternions=want_quats)
         if center_root and root_pos.shape[0] > 0:
             root_pos = root_pos - root_pos[0:1]
         all_root_pos.append(root_pos)
         all_joint_data.append(joint_data)
 
-        if include_quaternions:
+        if want_quats:
             assert quats is not None
             all_joint_quats.append(quats)
 
@@ -1078,7 +1103,11 @@ def _save_hdf5(
         f.create_dataset("std", data=stats["std"])
         if "constant_channels" in stats:
             f.create_dataset("constant_channels", data=stats["constant_channels"])
-        f.create_dataset("filenames", data=np.array(stems, dtype="S"))
+        # Variable-length UTF-8 strings — dtype="S" (fixed ASCII bytes)
+        # crashes with UnicodeEncodeError on non-ASCII filename stems.
+        f.create_dataset(
+            "filenames", data=stems,
+            dtype=h5py.string_dtype(encoding="utf-8"))
 
         if labels is not None:
             f.create_dataset("labels", data=labels)
@@ -1150,6 +1179,10 @@ def _load_npz(path: Path) -> dict:
             key = f"clip_{i}_{extra}"
             if key in data:
                 clip[extra] = data[key]
+        # Quat datasets carry no duplicate joint_quats on disk — the
+        # primary joint_data already is the quaternion array.
+        if representation == "quat" and "joint_quats" not in clip:
+            clip["joint_quats"] = clip["joint_data"]
         clips.append(clip)
 
     result: dict = {
@@ -1199,6 +1232,10 @@ def _load_hdf5(path: Path) -> dict:
             for extra in ("joint_quats", "velocities", "foot_contacts"):
                 if extra in grp:
                     clip[extra] = grp[extra][()]
+            # Quat datasets carry no duplicate joint_quats on disk — the
+            # primary joint_data already is the quaternion array.
+            if representation == "quat" and "joint_quats" not in clip:
+                clip["joint_quats"] = clip["joint_data"]
             clips.append(clip)
 
         result: dict = {
