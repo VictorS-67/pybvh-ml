@@ -31,6 +31,7 @@
 # %%
 import shutil
 import tempfile
+import warnings
 from pathlib import Path
 
 from pybvh import read_bvh_file, read_bvh_directory, harmonize, write_bvh_file
@@ -39,10 +40,17 @@ from pybvh_ml import preprocess_directory
 REPO_ROOT = Path.cwd().parent if Path.cwd().name == "tutorials" else Path.cwd()
 BVH_DIR = REPO_ROOT / "bvh_data"
 
-# Peek at the fixtures' skeletons.
-for name in ("bvh_test1.bvh", "bvh_test2.bvh", "bvh_test3.bvh"):
-    b = read_bvh_file(BVH_DIR / name)
-    print(f"{name:22s}  joints={b.joint_count:2d}  fps={1/b.frame_time:6.2f}  up={b.world_up}")
+# Peek at the fixtures' skeletons.  We capture pybvh's rest-vs-animation
+# up-axis warning and print just its message: letting Jupyter render the
+# raw warning would bake this machine's absolute file paths into the
+# committed notebook output.
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    for name in ("bvh_test1.bvh", "bvh_test2.bvh", "bvh_test3.bvh"):
+        b = read_bvh_file(BVH_DIR / name)
+        print(f"{name:22s}  joints={b.joint_count:2d}  fps={1/b.frame_time:6.2f}  up={b.world_up}")
+for w in caught:
+    print(f"\n[{w.category.__name__}] {w.message}")
 
 # %% [markdown]
 # The fixtures have different skeletons (different joint counts and/or axes).
@@ -151,10 +159,13 @@ shutil.rmtree(axis_dir)
 # loading: it picks majority values from the uniformity audit for any
 # `target_*` you didn't set explicitly, and applies world-up / rest-up /
 # rest-forward reorientation plus — for order-sensitive representations —
-# Euler-order unification, all in one pass.  Hierarchy mismatches raise
-# loudly (no silent drops); the returned `uniformity["harmonized_to"]`
-# carries the resolved targets, per-stage modification counts, and the
-# full `HarmonizeReport` for downstream audit trails.
+# Euler-order unification, all in one pass.  Each actor's bone lengths
+# are preserved; add `retarget=True` when the whole dataset should share
+# one skeleton geometry (bone offsets copied from the first clip).
+# Hierarchy mismatches raise loudly (no silent drops); the
+# `uniformity["harmonized_to"]` audit — resolved targets, the `retarget`
+# choice, per-stage modification counts, and the full `HarmonizeReport` —
+# is returned *and* persisted in the saved dataset.
 
 # %%
 # Build a mixed dataset that shares hierarchy but disagrees on Euler order.
@@ -190,18 +201,26 @@ print("  stage counts:",
 # `pybvh.harmonize` directly with the kwargs you need:
 
 # %%
-clips = read_bvh_directory(work_dir, parallel=False)
-print(f"Loaded {len(clips)} clips: {[b.joint_count for b in clips]} joints each")
+# Loading emits pybvh's per-file rest-vs-animation warning and
+# harmonize(verbose=True) emits one summary UserWarning listing the
+# drops; capture both and print just the messages (the raw warning
+# display embeds paths).
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    clips = read_bvh_directory(work_dir, parallel=False)
+    print(f"Loaded {len(clips)} clips: {[b.joint_count for b in clips]} joints each")
 
-reference = clips[0]
-harmonized = harmonize(
-    clips,
-    reference=reference,         # hierarchy must match this
-    target_fps=30,               # SLERP-resample any fps mismatch
-    target_world_up="+z",        # rotate the world if up axes disagree
-    on_incompatible="drop",      # drop mismatches (alternative: "raise")
-    verbose=True,                # one summary UserWarning at end of call
-)
+    reference = clips[0]
+    harmonized = harmonize(
+        clips,
+        reference=reference,         # hierarchy must match this
+        target_fps=30,               # SLERP-resample any fps mismatch
+        target_world_up="+z",        # rotate the world if up axes disagree
+        on_incompatible="drop",      # drop mismatches (alternative: "raise")
+        verbose=True,                # one summary UserWarning at end of call
+    )
+for w in caught:
+    print(f"[{w.category.__name__}] {w.message}")
 
 print(f"\n{len(harmonized)} clips survived; joints: {[b.joint_count for b in harmonized]}")
 
@@ -228,14 +247,19 @@ shutil.rmtree(hetero_dir)
 # first bad file.
 
 # %%
-# Drop a deliberately broken file into our clean directory.  Jupyter will
-# render preprocess_directory's "skipping …" UserWarning inline.
+# Drop a deliberately broken file into our clean directory, then capture
+# and print the "skipping …" warning message ourselves — same reasoning
+# as the setup cell: the raw warning display would embed machine paths.
 (harmonized_dir / "broken.bvh").write_text("not a valid bvh file\n")
 
-summary = preprocess_directory(
-    harmonized_dir, harmonized_dir / "robust.npz",
-    representation="6d", skip_errors=True,
-)
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    summary = preprocess_directory(
+        harmonized_dir, harmonized_dir / "robust.npz",
+        representation="6d", skip_errors=True,
+    )
+for w in caught:
+    print(f"[{w.category.__name__}] {w.message}\n")
 print(f"num_clips preprocessed: {summary['num_clips']}")
 
 # %% [markdown]

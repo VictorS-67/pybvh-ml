@@ -51,7 +51,7 @@ print("pybvh version:", pybvh.__version__)
 # For this demo we use two fixtures that share a topology:
 
 # %%
-# The repo's bvh_data/ directory contains 5 fixture BVHs, but only two share a skeleton.
+# The repo's bvh_data/ directory contains 4 fixture BVHs, but only two share a skeleton.
 REPO_ROOT = Path.cwd().parent if Path.cwd().name == "tutorials" else Path.cwd()
 BVH_DIR = REPO_ROOT / "bvh_data"
 
