@@ -290,7 +290,7 @@ for epoch in range(num_epochs):
         # model(data_tensor, mask) ...
 ```
 
-**Reproducible per-epoch augmentation.** When `seed` is set on `MotionDataset` / `OnTheFlyDataset`, the tuple `(seed, epoch, idx)` feeds a `numpy.random.SeedSequence`, so two runs with the same seed produce the same augmentation trajectory while each epoch still sees a different draw. Call `dataset.set_epoch(epoch)` at the top of each epoch — same contract as `torch.utils.data.distributed.DistributedSampler`. With `seed=None`, every call uses fresh OS entropy (simplest; no reproducibility).
+**Reproducible per-epoch augmentation.** When `seed` is set on `MotionDataset` / `OnTheFlyDataset`, the tuple `(seed, epoch, idx)` feeds a `numpy.random.SeedSequence`, so two runs with the same seed produce the same augmentation trajectory while each epoch still sees a different draw — and the result is bit-identical regardless of `num_workers` or shuffle order. Call `dataset.set_epoch(epoch)` at the top of each epoch — same contract as `torch.utils.data.distributed.DistributedSampler`. The epoch lives in shared memory, so this works with multi-process DataLoaders including `persistent_workers=True`. (One consequence: dataset instances can't be `deepcopy`-ed or `torch.save`-ed directly — shared state only travels to DataLoader workers via process inheritance.) With `seed=None`, every call uses fresh OS entropy (simplest; no reproducibility).
 
 `OnTheFlyDataset` skips the preprocessed file and loads BVH paths directly, converting on the fly — useful when you want augmentation but don't want the preprocessing artifact on disk.
 

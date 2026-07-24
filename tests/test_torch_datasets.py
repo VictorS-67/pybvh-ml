@@ -280,3 +280,61 @@ class TestTorchDatasets:
         torch.testing.assert_close(a, a2)
 
 
+
+
+class TestSetEpochWorkers:
+    """set_epoch must reach DataLoader worker processes.
+
+    Regression: the epoch used to be a plain int attribute — workers
+    held a pickled copy, so with persistent_workers=True every epoch
+    silently replayed the epoch-0 augmentation (and the
+    missing-set_epoch warning was pickled as already-emitted).  The
+    epoch now lives in shared memory.
+    """
+
+    @pytest.fixture
+    def seeded_pair(self, bvh_example):
+        """Two identically-constructed seeded datasets (loader + reference)."""
+        root_pos, rot6d = bvh_example.to_6d()
+        def make():
+            clips = [
+                {"root_pos": root_pos[:30].copy(),
+                 "joint_data": rot6d[:30].copy()},
+                {"root_pos": root_pos[:20].copy(),
+                 "joint_data": rot6d[:20].copy()},
+                {"root_pos": root_pos[:40].copy(),
+                 "joint_data": rot6d[:40].copy()},
+            ]
+            pipeline = AugmentationPipeline([
+                (add_joint_noise, 1.0,
+                 {"sigma": np.radians(5.0), "representation": "6d"}),
+            ])
+            return MotionDataset(clips, target_length=30,
+                                 augmentation=pipeline, seed=7)
+        return make(), make()
+
+    def test_set_epoch_reaches_persistent_workers(self, seeded_pair):
+        from torch.utils.data import DataLoader
+        ds, ref = seeded_pair
+        loader = DataLoader(
+            ds, batch_size=1, shuffle=False, num_workers=2,
+            persistent_workers=True, collate_fn=collate_motion_batch)
+        per_epoch = []
+        for epoch in (0, 1):
+            ds.set_epoch(epoch)
+            ref.set_epoch(epoch)
+            samples = [batch["data"][0] for batch in loader]
+            # Bit-equal to the single-process reference: the
+            # (seed, epoch, idx) design is worker-count-invariant.
+            for i, sample in enumerate(samples):
+                torch.testing.assert_close(
+                    sample, ref[i]["data"], rtol=0, atol=0)
+            per_epoch.append(torch.stack(samples))
+        assert not torch.equal(per_epoch[0], per_epoch[1])
+
+    def test_set_epoch_negative_raises(self, seeded_pair):
+        ds, _ = seeded_pair
+        with pytest.raises(ValueError, match="epoch must be >= 0"):
+            ds.set_epoch(-1)
+        with pytest.raises(ValueError, match="epoch must be >= 0"):
+            ds.set_epoch(-5)

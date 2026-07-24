@@ -1,6 +1,7 @@
 """PyTorch Dataset classes for motion capture data."""
 from __future__ import annotations
 
+import multiprocessing
 import warnings
 from pathlib import Path
 from typing import Callable
@@ -35,6 +36,55 @@ _MISSING_SET_EPOCH_MSG = (
     "seed=None for fresh OS entropy each call.")
 
 
+class _EpochState:
+    """Shared-memory epoch counter for DataLoader-worker visibility.
+
+    The epoch lives in a ``multiprocessing.Value`` so that
+    ``set_epoch()`` in the main process is observed by DataLoader
+    workers — including persistent ones (``persistent_workers=True``),
+    which are created once and never re-receive the dataset.  Workers
+    inherit the shared handle when the DataLoader passes the dataset
+    as ``Process`` args, which works under both fork and spawn start
+    methods.
+
+    ``-1`` is the never-set sentinel (replaces a separate boolean).
+    Deliberately no ``__getstate__``/``__setstate__``: swapping the
+    Value for a plain int during pickling would silently break sharing
+    under spawn (worker creation uses the same pickle machinery).  The
+    cost is that holders cannot be ``copy.deepcopy``-ed or
+    ``torch.save``-ed directly — shared ctypes only travel via process
+    inheritance.
+    """
+
+    def __init__(self) -> None:
+        self._epoch = multiprocessing.Value("i", -1)
+        # Warn-once bookkeeping stays per-process: one warning per
+        # worker is acceptable, and a shared flag would need a lock
+        # dance for no real benefit.
+        self._warned = False
+
+    def set(self, epoch: int) -> None:
+        epoch = int(epoch)
+        if epoch < 0:
+            raise ValueError(f"epoch must be >= 0, got {epoch}")
+        with self._epoch.get_lock():
+            self._epoch.value = epoch
+
+    def effective(self, cls_name: str, seed: int | None,
+                  augmentation_active: bool) -> int:
+        """Current epoch, warning once if it was never set."""
+        with self._epoch.get_lock():
+            epoch = self._epoch.value
+        if epoch >= 0:
+            return epoch
+        if augmentation_active and seed is not None and not self._warned:
+            warnings.warn(
+                _MISSING_SET_EPOCH_MSG.format(cls=cls_name, seed=seed),
+                UserWarning, stacklevel=3)
+            self._warned = True
+        return 0
+
+
 class MotionDataset(Dataset):
     """Dataset that loads preprocessed motion clips.
 
@@ -64,10 +114,17 @@ class MotionDataset(Dataset):
     **Per-epoch augmentation variety**: call
     ``dataset.set_epoch(epoch)`` at the start of each training epoch
     so the seeded augmentation changes across epochs — same contract
-    as :class:`torch.utils.data.distributed.DistributedSampler`.  When
+    as :class:`torch.utils.data.distributed.DistributedSampler`.  The
+    epoch lives in shared memory, so this works with
+    ``num_workers > 0`` including ``persistent_workers=True``.  When
     ``seed`` is set and ``set_epoch`` is never called, every epoch
     sees the same augmentation per sample index (useful for
     debugging, harmful for training dynamics).
+
+    **Pickling**: because of the shared-memory epoch, instances cannot
+    be ``copy.deepcopy``-ed or ``torch.save``-ed directly — shared
+    state only travels via process inheritance (which is exactly how
+    the DataLoader hands the dataset to its workers).
     """
 
     def __init__(
@@ -83,17 +140,16 @@ class MotionDataset(Dataset):
         self.target_length = target_length
         self.augmentation = augmentation
         self.seed = seed
-        self._epoch = 0
-        self._epoch_set = False
-        self._warned_missing_set_epoch = False
+        self._epoch_state = _EpochState()
 
     def set_epoch(self, epoch: int) -> None:
         """Set the current epoch for per-epoch reproducible augmentation.
 
-        Mirrors :meth:`torch.utils.data.distributed.DistributedSampler.set_epoch`.
+        Mirrors :meth:`torch.utils.data.distributed.DistributedSampler.set_epoch`;
+        reaches DataLoader workers (persistent ones included) via
+        shared memory.
         """
-        self._epoch = int(epoch)
-        self._epoch_set = True
+        self._epoch_state.set(epoch)
 
     def __len__(self) -> int:
         return len(self.clips)
@@ -103,18 +159,10 @@ class MotionDataset(Dataset):
         root_pos = clip["root_pos"].copy()
         joint_data = clip["joint_data"].copy()
 
-        if (self.augmentation is not None
-                and self.seed is not None
-                and not self._epoch_set
-                and not self._warned_missing_set_epoch):
-            warnings.warn(
-                _MISSING_SET_EPOCH_MSG.format(
-                    cls="MotionDataset", seed=self.seed),
-                UserWarning, stacklevel=2)
-            self._warned_missing_set_epoch = True
-
         if self.augmentation is not None:
-            rng = _compose_rng(self.seed, self._epoch, idx)
+            epoch = self._epoch_state.effective(
+                "MotionDataset", self.seed, True)
+            rng = _compose_rng(self.seed, epoch, idx)
             root_pos, joint_data = self.augmentation(
                 root_pos=root_pos, joint_data=joint_data, rng=rng)
 
@@ -156,7 +204,9 @@ class OnTheFlyDataset(Dataset):
     seed : int or None
         See :class:`MotionDataset` for seeding semantics.  Call
         :meth:`set_epoch` at the start of each epoch for reproducible
-        per-epoch variety.
+        per-epoch variety — reaches DataLoader workers (persistent
+        ones included) via shared memory; see :class:`MotionDataset`
+        for the pickling caveat.
     """
 
     def __init__(
@@ -176,14 +226,11 @@ class OnTheFlyDataset(Dataset):
         self.center_root = center_root
         self.label_fn = label_fn
         self.seed = seed
-        self._epoch = 0
-        self._epoch_set = False
-        self._warned_missing_set_epoch = False
+        self._epoch_state = _EpochState()
 
     def set_epoch(self, epoch: int) -> None:
         """Set the current epoch for reproducible per-epoch augmentation."""
-        self._epoch = int(epoch)
-        self._epoch_set = True
+        self._epoch_state.set(epoch)
 
     def __len__(self) -> int:
         return len(self.bvh_paths)
@@ -195,18 +242,10 @@ class OnTheFlyDataset(Dataset):
         if self.center_root and root_pos.shape[0] > 0:
             root_pos = root_pos - root_pos[0:1]
 
-        if (self.augmentation is not None
-                and self.seed is not None
-                and not self._epoch_set
-                and not self._warned_missing_set_epoch):
-            warnings.warn(
-                _MISSING_SET_EPOCH_MSG.format(
-                    cls="OnTheFlyDataset", seed=self.seed),
-                UserWarning, stacklevel=2)
-            self._warned_missing_set_epoch = True
-
         if self.augmentation is not None:
-            rng = _compose_rng(self.seed, self._epoch, idx)
+            epoch = self._epoch_state.effective(
+                "OnTheFlyDataset", self.seed, True)
+            rng = _compose_rng(self.seed, epoch, idx)
             root_pos, joint_data = self.augmentation(
                 root_pos=root_pos, joint_data=joint_data, rng=rng)
 
