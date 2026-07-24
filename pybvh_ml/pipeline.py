@@ -12,6 +12,7 @@ import numpy as np
 import numpy.typing as npt
 
 from ._staged import STAGED_DISPATCH, _StagingState
+from .augmentation import _validate_frame_counts
 
 
 class AugmentationPipeline:
@@ -304,6 +305,8 @@ class AugmentationPipeline:
         """
         if not self.augmentations:
             return root_pos, joint_data
+        # The staged ops bypass the public functions' own validation.
+        _validate_frame_counts(root_pos, joint_data)
 
         # Initial representation is whatever the first step declares
         # (a pipeline with steps but no declared representation raises —

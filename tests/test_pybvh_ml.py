@@ -1402,6 +1402,76 @@ class TestAugmentationParamValidation:
                 pos, state, drop_rate=drop_rate, representation="quat",
                 rng=np.random.default_rng(0))
 
+    @pytest.mark.parametrize("fn,kwargs", [
+        (rotate_vertical, {"angle": 0.5, "up_axis": "+y"}),
+        (mirror, {"lr_joint_pairs": [], "lateral_axis": "+x"}),
+        (add_joint_noise, {"sigma": 0.01}),
+        (speed_perturbation_arrays, {"factor": 1.2}),
+        (dropout_arrays, {"drop_rate": 0.2}),
+    ])
+    def test_frame_count_mismatch_raises(self, bvh_example, fn, kwargs):
+        pos, quats = _get_quat_data(bvh_example)
+        with pytest.raises(ValueError, match="disagree on frame count"):
+            fn(root_pos=pos[:-1], joint_data=quats,
+               representation="quat", **kwargs)
+
+    def test_frame_count_mismatch_raises_staged_pipeline(self, bvh_example):
+        pos, quats = _get_quat_data(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_vertical, 1.0,
+             {"angle": 0.5, "up_axis": "+y", "representation": "quat"}),
+        ], cache_quats=True)
+        with pytest.raises(ValueError, match="disagree on frame count"):
+            pipeline(root_pos=pos[:-1], joint_data=quats,
+                     rng=np.random.default_rng(0))
+
+    @pytest.mark.parametrize("cache_quats", [False, True])
+    def test_rotate_vertical_no_joints_raises(self, bvh_example, cache_quats):
+        pos, quats = _get_quat_data(bvh_example)
+        empty = quats[:, :0, :]
+        if cache_quats:
+            pipeline = AugmentationPipeline([
+                (rotate_vertical, 1.0,
+                 {"angle": 0.5, "up_axis": "+y", "representation": "quat"}),
+            ], cache_quats=True)
+            with pytest.raises(ValueError, match="at least one joint"):
+                pipeline(root_pos=pos, joint_data=empty,
+                         rng=np.random.default_rng(0))
+        else:
+            with pytest.raises(ValueError, match="at least one joint"):
+                rotate_vertical(root_pos=pos, joint_data=empty,
+                                angle=0.5, up_axis="+y",
+                                representation="quat")
+
+    @pytest.mark.parametrize("cache_quats", [False, True])
+    def test_zero_norm_quat_raises(self, bvh_example, cache_quats):
+        pos, quats = _get_quat_data(bvh_example)
+        bad = quats.copy()
+        bad[0, 0] = 0.0
+        if cache_quats:
+            pipeline = AugmentationPipeline([
+                (add_joint_noise, 1.0,
+                 {"sigma": 0.01, "representation": "quat"}),
+            ], cache_quats=True)
+            with pytest.raises(ValueError, match="zero-norm quaternion"):
+                pipeline(root_pos=pos, joint_data=bad,
+                         rng=np.random.default_rng(0))
+        else:
+            with pytest.raises(ValueError, match="zero-norm quaternion"):
+                add_joint_noise(root_pos=pos, joint_data=bad,
+                                sigma=0.01, representation="quat",
+                                rng=np.random.default_rng(0))
+
+    def test_speed_perturbation_single_frame_noop(self, bvh_example):
+        pos, quats = _get_quat_data(bvh_example)
+        p1, q1 = pos[:1], quats[:1]
+        new_pos, new_quats = speed_perturbation_arrays(
+            root_pos=p1, joint_data=q1, factor=2.0, representation="quat")
+        np.testing.assert_array_equal(new_pos, p1)
+        np.testing.assert_array_equal(new_quats, q1)
+        assert not np.shares_memory(new_pos, p1)
+        assert not np.shares_memory(new_quats, q1)
+
 
 class TestPipelineStandardFactory:
     """Tests for AugmentationPipeline.standard()."""

@@ -119,6 +119,10 @@ def _rotate_vertical_staged(
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
+    if state.jd.shape[1] == 0:
+        raise ValueError(
+            "rotate_vertical requires at least one joint (joint 0 is "
+            "the root whose rotation carries the yaw); got J=0")
     up_idx, up_sign = _parse_axis(up_axis)
     signed_angle = angle * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
@@ -200,7 +204,14 @@ def _add_joint_noise_staged(
     q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
 
     noisy = rotations.quat_multiply(q_noise, q)
-    noisy /= np.linalg.norm(noisy, axis=-1, keepdims=True)
+    norms = np.linalg.norm(noisy, axis=-1, keepdims=True)
+    # q_noise is unit by construction — zero norm means a zero-norm
+    # input quaternion; fail loudly like the public function.
+    if np.any(norms == 0.0):
+        raise ValueError(
+            "joint_data contains a zero-norm quaternion; the zero "
+            "quaternion does not represent a rotation")
+    noisy /= norms
     state.set_from_quats(noisy)
 
     if sigma_pos > 0:
@@ -275,8 +286,9 @@ def _dropout_staged(
     ins = np.searchsorted(kept, dropped, side='right')
     left_idx = kept[np.clip(ins - 1, 0, len(kept) - 1)]
     right_idx = kept[np.clip(ins, 0, len(kept) - 1)]
-    dt = np.where(right_idx - left_idx < 1e-15,
-                  1.0, right_idx - left_idx).astype(np.float64)
+    # left_idx < dropped < right_idx by construction (frames 0 and F-1
+    # are always kept), so dt >= 1 always.
+    dt = (right_idx - left_idx).astype(np.float64)
     alpha = (dropped - left_idx).astype(np.float64) / dt
 
     new_rp = root_pos.copy()

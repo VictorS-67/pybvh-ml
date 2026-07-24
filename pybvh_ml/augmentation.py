@@ -61,6 +61,25 @@ def _validate_drop_rate(drop_rate: float) -> None:
         raise ValueError(f"drop_rate must be in [0, 1), got {drop_rate}")
 
 
+def _validate_frame_counts(
+    root_pos: npt.NDArray[np.float64],
+    joint_data: npt.NDArray[np.float64],
+) -> None:
+    """Reject root_pos / joint_data arrays with different frame counts.
+
+    A mismatch means the caller paired arrays from different clips (or
+    different slices of one clip) — downstream math would silently
+    interpolate or index the wrong frames.
+    """
+    rp_shape = np.shape(root_pos)
+    jd_shape = np.shape(joint_data)
+    if rp_shape[0] != jd_shape[0]:
+        raise ValueError(
+            f"root_pos and joint_data disagree on frame count: "
+            f"root_pos has {rp_shape[0]} frames (shape {rp_shape}), "
+            f"joint_data has {jd_shape[0]} (shape {jd_shape})")
+
+
 def _to_quats(
     joint_data: npt.NDArray[np.float64],
     representation: str,
@@ -209,6 +228,11 @@ def rotate_vertical(
     """
     joint_data = np.array(joint_data, dtype=np.float64)
     root_pos = np.array(root_pos, dtype=np.float64)
+    _validate_frame_counts(root_pos, joint_data)
+    if joint_data.shape[1] == 0:
+        raise ValueError(
+            "rotate_vertical requires at least one joint (joint 0 is "
+            "the root whose rotation carries the yaw); got J=0")
 
     up_idx, up_sign = _parse_axis(up_axis)
     signed_angle = angle * up_sign
@@ -270,6 +294,7 @@ def mirror(
     """
     new_data = np.array(joint_data, dtype=np.float64)
     new_root_pos = np.array(root_pos, dtype=np.float64)
+    _validate_frame_counts(new_root_pos, new_data)
 
     lateral_idx, _ = _parse_axis(lateral_axis)
     new_root_pos[:, lateral_idx] *= -1.0
@@ -346,6 +371,7 @@ def add_joint_noise(
 
     joint_data = np.asarray(joint_data, dtype=np.float64)
     root_pos = np.asarray(root_pos, dtype=np.float64)
+    _validate_frame_counts(root_pos, joint_data)
 
     quats = _to_quats(joint_data, representation, euler_orders)
     F, J, _ = quats.shape
@@ -361,7 +387,15 @@ def add_joint_noise(
     q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
 
     noisy_quats = rotations.quat_multiply(q_noise, quats)
-    noisy_quats /= np.linalg.norm(noisy_quats, axis=-1, keepdims=True)
+    norms = np.linalg.norm(noisy_quats, axis=-1, keepdims=True)
+    # q_noise is unit by construction, so a zero norm here means a
+    # zero-norm *input* quaternion — not a rotation; match pybvh's
+    # quat_to_rotmat contract and fail loudly instead of emitting NaN.
+    if np.any(norms == 0.0):
+        raise ValueError(
+            "joint_data contains a zero-norm quaternion; the zero "
+            "quaternion does not represent a rotation")
+    noisy_quats /= norms
 
     new_root_pos = root_pos.copy()
     if sigma_pos > 0:
@@ -400,13 +434,17 @@ def speed_perturbation_arrays(
     -------
     new_root_pos : ndarray, shape (F', 3)
     new_joint_data : ndarray, shape (F', J, C)
-        ``F' = max(2, round(F / factor))``.
+        For ``F >= 2``, ``F' = max(2, round(F / factor))`` (Python
+        banker's rounding — ``round(2.5) == 2``).  Inputs with fewer
+        than 2 frames have nothing to interpolate between and are
+        returned as unchanged copies.
     """
     if factor <= 0:
         raise ValueError(f"factor must be > 0, got {factor}")
 
     joint_data = np.asarray(joint_data, dtype=np.float64)
     root_pos = np.asarray(root_pos, dtype=np.float64)
+    _validate_frame_counts(root_pos, joint_data)
 
     F = root_pos.shape[0]
     if F < 2:
@@ -482,6 +520,7 @@ def dropout_arrays(
 
     joint_data = np.asarray(joint_data, dtype=np.float64)
     root_pos = np.asarray(root_pos, dtype=np.float64)
+    _validate_frame_counts(root_pos, joint_data)
 
     F = root_pos.shape[0]
     if F < 2 or drop_rate == 0:
@@ -500,8 +539,9 @@ def dropout_arrays(
     left_idx = kept_indices[np.clip(ins - 1, 0, len(kept_indices) - 1)]
     right_idx = kept_indices[np.clip(ins, 0, len(kept_indices) - 1)]
 
+    # left_idx < dropped < right_idx by construction (frames 0 and F-1
+    # are always kept), so dt >= 1 always.
     dt = (right_idx - left_idx).astype(np.float64)
-    dt = np.where(dt < 1e-15, 1.0, dt)
     alpha = (dropped - left_idx).astype(np.float64) / dt
 
     new_root_pos = root_pos.copy()
