@@ -1,0 +1,30 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # torch is needed so mkdocstrings can import pybvh_ml.torch for the
+      # API reference (h5py is lazy-imported and not needed). Like test.yml,
+      # this resolves pybvh>=0.8,<0.9 from PyPI — red until pybvh 0.8.0
+      # ships, which is fine: pushes to main only happen at release time,
+      # after pybvh publishes.
+      - run: pip install -e ".[docs,torch]"
+
+      # --strict fails the deploy on any broken internal link or cross-reference.
+      - run: mkdocs build --strict
+
+      - run: mkdocs gh-deploy --force
