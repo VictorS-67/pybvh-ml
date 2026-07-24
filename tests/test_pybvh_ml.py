@@ -1023,6 +1023,102 @@ class TestEulerRadians:
 
 
 # =============================================================================
+# Rotmat augmentation
+# =============================================================================
+
+class TestRotmatAugmentation:
+    """Flat (F, J, 9) rotmat joint data through every augmentation function.
+
+    Regression tests for the pre-0.5.0 crash where augmentation passed
+    pybvh-ml's flat rotmat layout straight to pybvh's
+    ``rotations.convert``, which expects ``(..., 3, 3)``.
+    """
+
+    def _rotmat_vs_quat(self, bvh, fn, kwargs, rng_seed=None):
+        """Run fn on rotmat and quat inputs; return positions + rotmats."""
+        pos, quats = bvh.to_quat()
+        rm = convert_arrays(quats, "quat", "rotmat")
+        kw_rm = dict(kwargs, representation="rotmat")
+        kw_quat = dict(kwargs, representation="quat")
+        if rng_seed is not None:
+            kw_rm["rng"] = np.random.default_rng(rng_seed)
+            kw_quat["rng"] = np.random.default_rng(rng_seed)
+        pos_r, jd_r = fn(root_pos=pos, joint_data=rm, **kw_rm)
+        pos_q, jd_q = fn(root_pos=pos, joint_data=quats, **kw_quat)
+        assert jd_r.shape[-1] == 9
+        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        return (pos_r, jd_r), (pos_q, R_q)
+
+    def test_rotate_vertical_rotmat_matches_quat(self, bvh_example):
+        (pos_r, R_r), (pos_q, R_q) = self._rotmat_vs_quat(
+            bvh_example, rotate_vertical,
+            {"angle": np.radians(73.0), "up_axis": "+y"})
+        np.testing.assert_allclose(pos_r, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_r, R_q, atol=1e-6)
+
+    def test_mirror_rotmat_matches_quat(self, bvh_example):
+        pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
+        (pos_r, R_r), (pos_q, R_q) = self._rotmat_vs_quat(
+            bvh_example, mirror,
+            {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis})
+        np.testing.assert_allclose(pos_r, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_r, R_q, atol=1e-6)
+
+    def test_add_joint_noise_rotmat_matches_quat(self, bvh_example):
+        (pos_r, R_r), (pos_q, R_q) = self._rotmat_vs_quat(
+            bvh_example, add_joint_noise,
+            {"sigma": np.radians(5.0)}, rng_seed=7)
+        np.testing.assert_allclose(pos_r, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_r, R_q, atol=1e-6)
+
+    def test_speed_perturbation_rotmat_matches_quat(self, bvh_example):
+        (pos_r, R_r), (pos_q, R_q) = self._rotmat_vs_quat(
+            bvh_example, speed_perturbation_arrays, {"factor": 1.3})
+        np.testing.assert_allclose(pos_r, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_r, R_q, atol=1e-6)
+
+    def test_dropout_rotmat_matches_quat(self, bvh_example):
+        (pos_r, R_r), (pos_q, R_q) = self._rotmat_vs_quat(
+            bvh_example, dropout_arrays,
+            {"drop_rate": 0.3}, rng_seed=11)
+        np.testing.assert_allclose(pos_r, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_r, R_q, atol=1e-6)
+
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_pipeline_rotmat(self, bvh_example, cache_quats):
+        """A rotmat pipeline runs on both dispatch paths and they agree."""
+        pos, quats = bvh_example.to_quat()
+        rm = convert_arrays(quats, "quat", "rotmat")
+        pipeline = AugmentationPipeline([
+            (rotate_vertical, 1.0,
+             {"angle": np.radians(30.0), "up_axis": "+y",
+              "representation": "rotmat"}),
+            (add_joint_noise, 1.0,
+             {"sigma": np.radians(2.0), "representation": "rotmat"}),
+        ], cache_quats=cache_quats)
+        new_pos, new_rm = pipeline(root_pos=pos, joint_data=rm,
+                                   rng=np.random.default_rng(42))
+        assert new_rm.shape == rm.shape
+
+    def test_pipeline_rotmat_staged_matches_direct(self, bvh_example):
+        pos, quats = bvh_example.to_quat()
+        rm = convert_arrays(quats, "quat", "rotmat")
+        steps = [
+            (rotate_vertical, 1.0,
+             {"angle": np.radians(30.0), "up_axis": "+y",
+              "representation": "rotmat"}),
+            (add_joint_noise, 1.0,
+             {"sigma": np.radians(2.0), "representation": "rotmat"}),
+        ]
+        pos_s, rm_s = AugmentationPipeline(steps, cache_quats=True)(
+            root_pos=pos, joint_data=rm, rng=np.random.default_rng(42))
+        pos_d, rm_d = AugmentationPipeline(steps, cache_quats=False)(
+            root_pos=pos, joint_data=rm, rng=np.random.default_rng(42))
+        np.testing.assert_allclose(pos_s, pos_d, atol=1e-12)
+        np.testing.assert_allclose(rm_s, rm_d, atol=1e-12)
+
+
+# =============================================================================
 # Augmentation pipeline
 # =============================================================================
 

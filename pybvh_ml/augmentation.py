@@ -75,6 +75,12 @@ def _to_quats(
                 "euler_orders is required when representation='euler'")
         return rotations.convert(
             joint_data, "euler", "quat", order=euler_orders)
+    if representation == "rotmat":
+        # pybvh-ml carries rotmat flat as (F, J, 9); pybvh's
+        # rotations.convert expects (..., 3, 3).  Adapt at the boundary.
+        F, J = joint_data.shape[:2]
+        return rotations.convert(
+            joint_data.reshape(F, J, 3, 3), "rotmat", "quat")
     return rotations.convert(joint_data, representation, "quat")
 
 
@@ -89,6 +95,10 @@ def _from_quats(
     if representation == "euler":
         return rotations.convert(
             quats, "quat", "euler", order=euler_orders)
+    if representation == "rotmat":
+        R = rotations.convert(quats, "quat", "rotmat")
+        F, J = R.shape[:2]
+        return R.reshape(F, J, 9)
     return rotations.convert(quats, "quat", representation)
 
 

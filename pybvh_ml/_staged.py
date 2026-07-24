@@ -29,10 +29,12 @@ from pybvh import rotations
 from .augmentation import (
     _build_rotation_matrix,
     _build_rotation_quat,
+    _from_quats,
     _mirror_sign_quat,
     _mirror_sign_rot6d,
     _parse_axis,
     _swap_lr_pairs,
+    _to_quats,
     _validate_drop_rate,
     _validate_noise_sigmas,
     add_joint_noise,
@@ -69,16 +71,10 @@ class _StagingState:
 
     def materialize_quats(self) -> npt.NDArray[np.float64]:
         """Return the quaternion view, computing it once and caching."""
-        if self.quats is not None:
-            return self.quats
-        if self.current_repr == "quat":
-            self.quats = self.jd
-        elif self.current_repr == "euler":
-            self.quats = rotations.convert(
-                self.jd, "euler", "quat", order=self.euler_orders)
-        else:
-            self.quats = rotations.convert(
-                self.jd, self.current_repr, "quat")
+        if self.quats is None:
+            # _to_quats returns jd itself for "quat" (cache aliasing intact).
+            self.quats = _to_quats(self.jd, self.current_repr,
+                                   self.euler_orders)
         return self.quats
 
     def ensure_repr(self, target_repr: str) -> None:
@@ -86,13 +82,8 @@ class _StagingState:
         if self.current_repr == target_repr:
             return
         q = self.materialize_quats()
-        if target_repr == "quat":
-            self.jd = q
-        elif target_repr == "euler":
-            self.jd = rotations.convert(
-                q, "quat", "euler", order=self.euler_orders)
-        else:
-            self.jd = rotations.convert(q, "quat", target_repr)
+        # _from_quats returns q itself for "quat" (cache aliasing intact).
+        self.jd = _from_quats(q, target_repr, self.euler_orders)
         self.current_repr = target_repr
 
     def set_from_quats(self, new_quats: npt.NDArray[np.float64]) -> None:
