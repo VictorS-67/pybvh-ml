@@ -9,7 +9,7 @@ pybvh-ml is the layer between pybvh (which parses BVH files and does rotation ma
 - :material-rocket-launch: **[Quick Start](getting-started/quickstart.md)** — BVH directory to training batch in five minutes
 - :material-magnify: **[Find a function](api/index.md)** — "I want to…" → the exact call → its reference page
 - :material-book-open-variant: **[User Guide](guide/tensor-layouts.md)** — layouts, preprocessing, augmentation, PyTorch, skeleton graphs
-- :material-swap-horizontal: **[Migrating to 0.5](migration.md)** — the 0.4.0 → 0.5.0 breaking changes, with before/after snippets
+- :material-swap-horizontal: **[CHANGELOG](https://github.com/VictorS-67/pybvh-ml/blob/main/CHANGELOG.md)** — the migration record: breaking changes and upgrade notes for every release
 - :material-school: **[Tutorials](tutorials.md)** — three notebooks from first preprocess to a trained classifier
 - :material-download: **[Install](getting-started/installation.md)** — `pip install pybvh-ml`; optional torch and hdf5 extras
 

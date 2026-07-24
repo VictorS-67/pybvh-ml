@@ -112,5 +112,5 @@ x = denormalize_array(x_norm, stats)   # back to BVH units
 ## See also
 
 - [Preprocessing & Normalization API](../api/preprocessing.md) — full signatures
-- [Migrating to 0.5](../migration.md) — the `retarget` default change and normalization-trio move, with before/after
+- [CHANGELOG](https://github.com/VictorS-67/pybvh-ml/blob/main/CHANGELOG.md) — migration notes for the 0.5 `retarget` default change and the normalization-trio move from pybvh
 - [Tutorial 3: Heterogeneous preprocessing](../tutorials.md) — mixed skeletons, frame rates, and up-axes as a runnable recipe

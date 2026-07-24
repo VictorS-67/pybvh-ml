@@ -62,7 +62,6 @@ nav:
     - Runtime Augmentation: guide/augmentation.md
     - PyTorch Integration: guide/pytorch.md
     - Skeleton Graph Metadata: guide/skeleton-metadata.md
-  - Migrating to 0.5: migration.md
   - API Reference:
     - api/index.md
     - Packing (tensor layouts): api/packing.md
