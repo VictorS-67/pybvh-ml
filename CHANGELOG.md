@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2026-07-07
 
-Coordinated release with pybvh 0.8.0 (atomic migration, no shims): pybvh-ml adopts pybvh's short representation tokens and radians-first API in the same release, absorbs the normalization trio pybvh removed, and fixes a collate-mask bug plus two output-aliasing traps in the augmentation pipeline.
+Coordinated release with pybvh 0.8.0 (atomic migration, no shims), in two layers. First, the migration itself: pybvh-ml adopts pybvh's short representation tokens and radians-first API in the same release and absorbs the normalization trio pybvh removed. Second, a full-codebase audit fix-up: euler joint data is now genuinely radians end to end (the conversion sites silently spoke degrees — shipped-0.4.0 corruption), rotmat augmentation works, the two pipeline dispatch paths agree for custom steps, `harmonize=True` stops silently retargeting bone offsets (new `retarget` opt-in), `set_epoch` reaches DataLoader workers via shared memory, and a wide set of fail-loud validation, collate/packing/sequence fixes, and dataset-metadata additions (persisted uniformity audit, skeleton axis strings) land alongside.
 
 ### Breaking changes & migration at a glance
 

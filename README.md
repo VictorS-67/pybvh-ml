@@ -94,18 +94,19 @@ summary = preprocess_directory(
 data = load_preprocessed("train.npz")
 clips = data["clips"]                # list of per-clip dicts
 mean, std = data["mean"], data["std"]
-skel = data["skeleton_info"]         # edges, lr_pairs, lr_mapping, joint_names
+skel = data["skeleton_info"]         # edges, lr_pairs, joint_names, world_up, ...
 ```
 
-Output formats: `.npz` (always available) and `.hdf5` (requires `h5py`). The file stores per-clip arrays, skeleton metadata, normalization statistics, and a `constant_channels` bool mask (columns whose raw std was below `1e-8`, guarded to 1.0 for normalization).
+Output formats: `.npz` (always available) and `.hdf5` (requires `h5py`). The file stores per-clip arrays, skeleton metadata (including the `world_up` / `rest_forward` / `rest_up` axis strings, so runtime augmentation can be configured without reopening source BVHs), normalization statistics, a `constant_channels` bool mask (columns whose raw std was below `1e-8`, guarded to 1.0 for normalization), and the uniformity audit (`load_preprocessed(...)["uniformity"]`).
 
 Power-user kwargs for richer outputs:
 
 - `include_velocities=True` — store per-joint linear velocities `(F, J, 3)` alongside joint data.
-- `include_foot_contacts=True` — store binary foot-contact labels and the detected foot joint names.
-- `include_quaternions=True` — store pre-computed quaternion arrays for runtime augmentation that needs them.
+- `include_foot_contacts=True` — store binary foot-contact labels and the foot joint names; pass `foot_joints=[...]` explicitly for footless or nonstandard rigs where auto-detection finds nothing.
+- `include_quaternions=True` — store pre-computed quaternion arrays for runtime augmentation that needs them (for `representation="quat"` the loader aliases them to the main joint data instead of duplicating storage).
 - `label_fn(stem) -> int` — attach per-clip integer labels.
 - `filter_fn(stem) -> bool` — filter files before loading (skipped files are never parsed).
+- `world_up=` / `lr_mapping=` — forwarded to every `pybvh.read_bvh_file` call (also available on `OnTheFlyDataset`).
 
 ### Normalization
 
@@ -121,7 +122,7 @@ x_norm = normalize_array(x, stats)     # (x - mean) / std
 x = denormalize_array(x_norm, stats)   # back to BVH units
 ```
 
-`compute_normalization_stats` takes a list of `Bvh` objects and computes stats over all frames in the flat `[root_pos, joint_data]` channel layout (`include_root_pos=False` drops the first 3 columns); zero-variance channels get their std guarded to `1.0` and flagged in the `constant_channels` mask. `preprocess_directory` stores the same stats in its output file, so after `load_preprocessed` you can pass the loaded dict straight to `normalize_array` — the direct entry point is for workflows that skip the on-disk artifact.
+`compute_normalization_stats` takes a list of `Bvh` objects and computes stats over all frames in the flat `[root_pos, joint_data]` channel layout (`include_root_pos=False` drops the first 3 columns); zero-variance channels get their std guarded to `1.0` and flagged in the `constant_channels` mask. `preprocess_directory` stores the same stats in its output file, so after `load_preprocessed` you can pass the loaded dict straight to `normalize_array` — the direct entry point is for workflows that skip the on-disk artifact. Pass `center_root=True` to reproduce exactly the stats a `preprocess_directory` run stores under its default first-frame root centering.
 
 ### Harmonizing heterogeneous datasets
 
@@ -307,8 +308,8 @@ partitions = pybvh_ml.get_body_partitions(bvh) # {"torso": [...], "left_arm": [.
 
 # All-in-one (include_partitions=True adds "body_partitions")
 info = pybvh_ml.get_skeleton_info(bvh)
-# {"edges", "lr_pairs", "lr_mapping",
-#  "joint_names", "euler_orders", "num_joints"}
+# {"edges", "lr_pairs", "lr_mapping", "joint_names", "euler_orders",
+#  "num_joints", "world_up", "rest_forward", "rest_up"}
 ```
 
 ## Additional utilities

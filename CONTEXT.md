@@ -81,7 +81,9 @@ pybvh-ml/
 │       └── collate.py           # Collate functions for variable-length sequences
 ├── bvh_data/                    # Test BVH files (bvh_test1-3, standard_skeleton)
 ├── tests/
-│   ├── test_pybvh_ml.py         # 282 unit tests across 21 test classes
+│   ├── conftest.py              # shared fixtures (bvh_example, bvh_test3, rng)
+│   ├── test_pybvh_ml.py         # numpy-core unit tests (22 test classes)
+│   ├── test_torch_datasets.py   # torch Dataset/collate tests (skips without torch)
 │   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
 │   └── integration/             # real-data sweeps, seeding determinism, staging parity
 ├── tutorials/                   # 3 runnable notebooks (executed in CI via pytest --nbmake)
@@ -132,7 +134,7 @@ pybvh-ml/
 - Optional label function `label_fn(filename) → int`
 - Optional filter function `filter_fn(filename_stem) → bool` — applied before loading, skipped files are never parsed
 - Rep-aware compatibility check: skeleton graph (`matches_hierarchy(match_offsets=False)`) must always agree; per-joint Euler orders must additionally agree for order-sensitive reps (`euler`, `axisangle`).  Bone-length variation across actors is accepted — `joint_data` is a function of rotations, not bone lengths.
-- `harmonize=True` runs `pybvh.harmonize` against the first clip after the uniformity audit. Resolves each `target_*` from the explicit kwarg if set, else the audit majority; for order-sensitive reps also picks `target_euler_order` from the most common per-joint order. Hierarchy mismatches raise loudly with pybvh's drop reasons — no silent shrinkage. The resolved targets, per-stage counts, and full `HarmonizeReport` land in `uniformity["harmonized_to"]` (JSON-serializable via `dataclasses.asdict`).
+- `harmonize=True` runs `pybvh.harmonize` after the uniformity audit — pure reorientation by default (per-actor bone lengths preserved); `retarget=True` pins the first clip and retargets bone offsets to it. Resolves each `target_*` from the explicit kwarg if set, else the audit majority; for order-sensitive reps also picks `target_euler_order` from the most common per-joint order. Hierarchy mismatches raise loudly either way — no silent shrinkage. The resolved targets, the `retarget` choice, per-stage counts, and full `HarmonizeReport` land in `uniformity["harmonized_to"]` (JSON-serializable via `dataclasses.asdict`), persisted in the saved dataset as `uniformity_json`.
 
 **`metadata.py`** — Feature column descriptors
 - `FeatureDescriptor` — describes which columns correspond to which features in a packed array
@@ -179,7 +181,7 @@ pybvh-ml uses these pybvh entry points:
 - `bvh.lr_pairs`, `bvh.lr_mapping` — cached L/R joint pair detection (index pairs / name-keyed dict)
 - `pybvh.rotations.*` — rotation conversion primitives, `quat_multiply`, `REPRESENTATION_CHANNELS`
 - `bvh.joint_velocities()`, `bvh.foot_contacts()` — motion analysis for the optional `include_velocities` / `include_foot_contacts` preprocessing outputs
-- `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`
+- `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`. By default no `reference=` is passed (pure reorientation, per-actor bone lengths preserved; hierarchy mismatches surface in `_check_skeleton_compatibility` right after); `retarget=True` pins `clips[0]` as the reference, enabling pybvh's topology gate + bone-offset retargeting (offsets only — root translations keep each clip's scale)
 
 Normalization is pybvh-ml's own public API since 0.5.0: `compute_normalization_stats` / `normalize_array` / `denormalize_array` live in `preprocessing.py` (absorbed from pybvh 0.8.0, which removed the trio from `pybvh.batch`). The Bvh-list entry point extracts via `extract_repr` and applies pybvh-ml's intentionally loose skeleton check (`_check_skeleton_compatibility`, bone-length variation accepted); `preprocess_directory` shares the same array-level core (`_normalization_stats_from_arrays`) on its already-extracted arrays.
 
@@ -203,7 +205,8 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 3. **Packing zero-pads root only** — root has 3 channels (position), joints have C_joint channels. In CTV/TVC layouts, `C = max(3, C_joint)`. Since C_joint >= 3 for all real representations, joint data is never padded.
 4. **Mirror math**: quaternion mirror negates the two imaginary components NOT at the lateral axis. 6D mirror uses `R'[i,j] = s_i * s_j * R[i,j]` where `s[lateral] = -1`. Both derived from `R' = S @ R @ S`.
 5. **Quaternion multiplication comes from pybvh** — `pybvh.rotations.quat_multiply` (public since pybvh 0.8.0; Hamilton convention, wxyz scalar-first order). pybvh-ml carried a private bit-identical copy in `augmentation.py` until 0.5.0.
-6. **`torch/` subpackage fails hard on import if torch is missing** — `pybvh_ml.torch` raises ImportError. But `import pybvh_ml` (the top-level) works fine without torch.
+6. **`torch/` subpackage fails hard on import if torch is missing** — `pybvh_ml.torch` raises ImportError (via `importlib.util.find_spec`, so a *broken* torch installation surfaces its real traceback instead of a misleading "install torch"). But `import pybvh_ml` (the top-level) works fine without torch.
+7. **The Dataset epoch lives in shared memory** — `_EpochState` wraps a `multiprocessing.Value("i", -1)` (−1 = never-set sentinel) so `set_epoch()` in the main process reaches DataLoader workers, including `persistent_workers=True` (workers are created once and never re-receive the dataset — a plain attribute is structurally frozen there). Deliberately no `__getstate__`/`__setstate__`: swapping the Value during pickling would silently break sharing under spawn. Consequence: dataset instances aren't `deepcopy`/`torch.save`-able; sharing only travels via process inheritance, which is exactly how the DataLoader passes the dataset to workers.
 
 ---
 
@@ -231,9 +234,9 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 
 ## 8. Test Patterns
 
-Unit tests are in `tests/test_pybvh_ml.py` (282 tests, 21 test classes); `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (22 test classes) plus `tests/test_torch_datasets.py` (3 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch) and `tests/test_no_pybvh_deprecation.py` — 350 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
 
-**Fixtures**:
+**Fixtures** (shared ones live in `tests/conftest.py`):
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)
 - `bvh_test3` — loads `bvh_data/bvh_test3.bvh` (60 joints, mixed euler orders)
 - `rng` — `np.random.default_rng(42)`
@@ -246,7 +249,7 @@ Unit tests are in `tests/test_pybvh_ml.py` (282 tests, 21 test classes); `tests/
 - Real BVH integration: tests use actual BVH data, not synthetic arrays
 - Shape assertions: explicit `assert result.shape == (F, J, C)`
 
-**Note**: `bvh_test1` is the only fixture in its skeleton family (24 joints, ZYX); `bvh_test2`, `bvh_test3`, and `standard_skeleton` all have different skeletons. `compute_normalization_stats` rejects mixed skeletons — tests that batch multiple files must copy `bvh_test1.bvh` under several names in a `tmp_path` work directory.
+**Note**: `bvh_test1` and `standard_skeleton` share the skeleton *graph* (joint names + parent indices; offsets differ), so the loose compatibility check accepts that pair; `bvh_test2` and `bvh_test3` each have distinct skeletons. Tests that batch multiple files usually copy `bvh_test1.bvh` under several names in a `tmp_path` work directory for full control.
 
 ---
 
