@@ -35,6 +35,9 @@ htmlcov/
 # --- Project Specific ---
 FUTURE_PLANS.md
 ONBOARDING.md
+# Internal-only development history; the public record is CHANGELOG.md
+# (see the "Release records" section in CLAUDE.md).
+docs/internal_logs/
 
 # Integration tests run against internal datasets that are not shared.
 # Keep the test code itself out of the public repo too.
