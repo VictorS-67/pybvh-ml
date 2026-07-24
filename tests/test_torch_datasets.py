@@ -338,3 +338,93 @@ class TestSetEpochWorkers:
             ds.set_epoch(-1)
         with pytest.raises(ValueError, match="epoch must be >= 0"):
             ds.set_epoch(-5)
+
+
+class TestDatasetErgonomics:
+    """Negative indexing, path coercion, passthroughs, honest errors."""
+
+    @pytest.fixture
+    def bvh_paths(self):
+        bvh_dir = Path(__file__).parent.parent / "bvh_data"
+        return sorted(bvh_dir.glob("bvh_test1.bvh"))
+
+    @pytest.fixture
+    def clips_6d(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        return [
+            {"root_pos": root_pos[:30].copy(), "joint_data": rot6d[:30].copy()},
+            {"root_pos": root_pos[:20].copy(), "joint_data": rot6d[:20].copy()},
+        ]
+
+    def test_negative_index_matches_positive(self, clips_6d):
+        """ds[-1] and ds[len-1] share the (seed, epoch, idx) stream.
+        Regression: a raw negative index crashed SeedSequence, but only
+        when seeded augmentation was active."""
+        pipeline = AugmentationPipeline([
+            (add_joint_noise, 1.0,
+             {"sigma": np.radians(5.0), "representation": "6d"}),
+        ])
+        ds = MotionDataset(clips_6d, target_length=30,
+                           augmentation=pipeline, seed=3)
+        ds.set_epoch(0)
+        torch.testing.assert_close(
+            ds[-1]["data"], ds[len(ds) - 1]["data"], rtol=0, atol=0)
+
+    def test_out_of_range_raises_index_error(self, clips_6d):
+        ds = MotionDataset(clips_6d)
+        with pytest.raises(IndexError):
+            ds[len(ds)]
+        with pytest.raises(IndexError):
+            ds[-len(ds) - 1]
+
+    def test_onthefly_accepts_str_paths(self, bvh_paths):
+        """str paths work end to end, including label_fn (which needs
+        .stem and used to crash mid-training)."""
+        ds = OnTheFlyDataset(
+            [str(p) for p in bvh_paths], representation="6d",
+            label_fn=lambda stem: len(stem))
+        item = ds[0]
+        assert item["label"] == len(bvh_paths[0].stem)
+
+    def test_onthefly_reader_kwargs_passthrough(self, bvh_paths, monkeypatch):
+        """world_up= / lr_mapping= reach read_bvh_file per clip.
+
+        (world_up doesn't change the extracted rotation arrays — it
+        steers FK-derived interpretation — so the passthrough is
+        asserted on the reader call itself.)
+        """
+        import pybvh_ml.torch.datasets as ds_mod
+        recorded: dict = {}
+        real_reader = ds_mod.read_bvh_file
+
+        def spy(path, **kwargs):
+            recorded.update(kwargs)
+            return real_reader(path, **kwargs)
+
+        monkeypatch.setattr(ds_mod, "read_bvh_file", spy)
+        ds = OnTheFlyDataset(bvh_paths, representation="6d", world_up="+y")
+        ds[0]
+        assert recorded["world_up"] == "+y"
+        assert recorded["lr_mapping"] is None
+
+    def test_motion_dataset_center_root(self, clips_6d):
+        """center_root=True zeroes the first-frame root columns of the
+        flat tensor for raw (uncentered) clips."""
+        assert not np.allclose(clips_6d[0]["root_pos"][0], 0.0), \
+            "fixture clip should be uncentered for this test"
+        ds = MotionDataset(clips_6d, center_root=True)
+        torch.testing.assert_close(
+            ds[0]["data"][0, :3], torch.zeros(3), rtol=0, atol=0)
+        ds_raw = MotionDataset(clips_6d)
+        assert not torch.allclose(ds_raw[0]["data"][0, :3], torch.zeros(3))
+
+    def test_collate_mixed_labels_raises(self, clips_6d):
+        items = [
+            {"data": torch.zeros(5, 9), "length": 5, "label": 1},
+            {"data": torch.zeros(5, 9), "length": 5},
+        ]
+        with pytest.raises(ValueError, match="some batch items but not all"):
+            collate_motion_batch(items)
+        # Reverse order too: unlabeled first used to silently drop labels.
+        with pytest.raises(ValueError, match="some batch items but not all"):
+            collate_motion_batch(items[::-1])

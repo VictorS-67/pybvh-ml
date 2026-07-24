@@ -6,12 +6,17 @@ importing ``pybvh_ml.torch`` without torch will.
 """
 from __future__ import annotations
 
-try:
-    import torch as _torch  # noqa: F401
-except ImportError:
+import importlib.util
+
+if importlib.util.find_spec("torch") is None:
     raise ImportError(
         "pybvh_ml.torch requires PyTorch. Install with: "
-        "pip install torch")
+        "pip install torch") from None
+
+# torch is installed — import it plainly so a *broken* installation
+# (e.g. a missing CUDA library) surfaces its real traceback instead of
+# a misleading "install torch" message.
+import torch as _torch  # noqa: F401, E402
 
 from .datasets import MotionDataset, OnTheFlyDataset
 from .collate import collate_motion_batch

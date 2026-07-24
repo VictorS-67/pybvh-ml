@@ -23,7 +23,14 @@ def collate_motion_batch(
         ``mask`` : ``(B, T_max)`` bool tensor (True = valid frame).
         ``labels`` : ``(B,)`` long tensor (if labels present).
     """
-    has_labels = "label" in batch[0]
+    labeled = [i for i, item in enumerate(batch) if "label" in item]
+    if labeled and len(labeled) != len(batch):
+        missing = next(i for i in range(len(batch)) if i not in labeled)
+        raise ValueError(
+            f"'label' present in some batch items but not all (first "
+            f"missing at batch index {missing}) — check that labels / "
+            f"label_fn cover every clip in the dataset")
+    has_labels = bool(labeled)
     D = batch[0]["data"].shape[-1]
     lengths = [item["length"] for item in batch]
     T_max = max(item["data"].shape[0] for item in batch)

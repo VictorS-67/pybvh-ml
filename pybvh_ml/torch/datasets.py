@@ -29,6 +29,23 @@ def _compose_rng(
     return np.random.default_rng(ss)
 
 
+def _normalize_index(idx: int, length: int, cls_name: str) -> int:
+    """Resolve Python negative indexing and bounds-check.
+
+    Keeps ``ds[-1]`` and ``ds[len(ds) - 1]`` on the same
+    ``(seed, epoch, idx)`` rng stream — a raw negative index would
+    otherwise crash ``SeedSequence`` (non-negative integers only), but
+    only when seeded augmentation was active.
+    """
+    if idx < 0:
+        idx += length
+    if not 0 <= idx < length:
+        raise IndexError(
+            f"{cls_name} index {idx - length if idx < 0 else idx} out of "
+            f"range for {length} clips")
+    return idx
+
+
 _MISSING_SET_EPOCH_MSG = (
     "{cls} was seeded (seed={seed!r}) but set_epoch() was never called; "
     "every epoch will produce identical augmentation per sample. "
@@ -102,6 +119,14 @@ class MotionDataset(Dataset):
         If given, crop/pad all clips to this length.  The ``length`` reported by ``__getitem__`` is the number of valid frames actually present in the returned tensor — ``min(original_length, target_length)`` — so padded frames are excluded and cropped clips report ``target_length``.
     augmentation : AugmentationPipeline or None
         Applied on-the-fly during ``__getitem__``.
+    center_root : bool
+        If True, subtract each clip's first-frame root position in
+        ``__getitem__``.  Default ``False`` — clips from
+        :func:`~pybvh_ml.preprocessing.load_preprocessed` are already
+        centered when the dataset was saved with ``center_root=True``
+        (check the loaded ``center_root`` metadata); set ``True`` for
+        hand-built raw clip dicts, mirroring
+        :class:`OnTheFlyDataset`.
     seed : int or None
         Base seed for reproducible augmentation.  When set, combined
         with the current epoch (see :meth:`set_epoch`) and the sample
@@ -134,11 +159,14 @@ class MotionDataset(Dataset):
         target_length: int | None = None,
         augmentation: AugmentationPipeline | None = None,
         seed: int | None = None,
+        *,
+        center_root: bool = False,
     ) -> None:
         self.clips = clips
         self.labels = labels
         self.target_length = target_length
         self.augmentation = augmentation
+        self.center_root = center_root
         self.seed = seed
         self._epoch_state = _EpochState()
 
@@ -155,9 +183,13 @@ class MotionDataset(Dataset):
         return len(self.clips)
 
     def __getitem__(self, idx: int) -> dict:
+        idx = _normalize_index(idx, len(self.clips), "MotionDataset")
         clip = self.clips[idx]
         root_pos = clip["root_pos"].copy()
         joint_data = clip["joint_data"].copy()
+
+        if self.center_root and root_pos.shape[0] > 0:
+            root_pos = root_pos - root_pos[0:1]
 
         if self.augmentation is not None:
             epoch = self._epoch_state.effective(
@@ -191,16 +223,25 @@ class OnTheFlyDataset(Dataset):
 
     Parameters
     ----------
-    bvh_paths : list of Path
-        Paths to BVH files.
+    bvh_paths : list of str or Path
+        Paths to BVH files (coerced to :class:`~pathlib.Path`).
     representation : str
         Rotation representation for joint data.
     target_length : int or None
         If given, crop/pad to this length.  The reported ``length`` counts only the valid frames present in the returned tensor (see :class:`MotionDataset`).
     augmentation : AugmentationPipeline or None
     center_root : bool
+        If True (default), subtract each clip's first-frame root
+        position after extraction.
     label_fn : callable or None
         ``label_fn(filename_stem) -> int``.
+    world_up : str
+        Forwarded to :func:`pybvh.read_bvh_file` per clip.  ``"auto"``
+        (default) auto-detects; pass ``"+y"`` etc. to override — same
+        semantics as :func:`~pybvh_ml.preprocessing.preprocess_directory`.
+    lr_mapping : dict or None
+        Forwarded to :func:`pybvh.read_bvh_file`.  Explicit left/right
+        joint pair mapping for uniform dataset conventions.
     seed : int or None
         See :class:`MotionDataset` for seeding semantics.  Call
         :meth:`set_epoch` at the start of each epoch for reproducible
@@ -211,20 +252,25 @@ class OnTheFlyDataset(Dataset):
 
     def __init__(
         self,
-        bvh_paths: list[Path],
+        bvh_paths: list[str | Path],
         representation: str = "6d",
         target_length: int | None = None,
         augmentation: AugmentationPipeline | None = None,
         center_root: bool = True,
         label_fn: Callable[[str], int] | None = None,
         seed: int | None = None,
+        *,
+        world_up: str = "auto",
+        lr_mapping: dict[str, str] | None = None,
     ) -> None:
-        self.bvh_paths = bvh_paths
+        self.bvh_paths = [Path(p) for p in bvh_paths]
         self.representation = representation
         self.target_length = target_length
         self.augmentation = augmentation
         self.center_root = center_root
         self.label_fn = label_fn
+        self.world_up = world_up
+        self.lr_mapping = lr_mapping
         self.seed = seed
         self._epoch_state = _EpochState()
 
@@ -236,7 +282,10 @@ class OnTheFlyDataset(Dataset):
         return len(self.bvh_paths)
 
     def __getitem__(self, idx: int) -> dict:
-        bvh = read_bvh_file(str(self.bvh_paths[idx]))
+        idx = _normalize_index(idx, len(self.bvh_paths), "OnTheFlyDataset")
+        bvh = read_bvh_file(
+            self.bvh_paths[idx], world_up=self.world_up,
+            lr_mapping=self.lr_mapping)
         root_pos, joint_data = extract_repr(bvh, self.representation)
 
         if self.center_root and root_pos.shape[0] > 0:
