@@ -55,6 +55,7 @@ This env has:
 - torch 2.8.0+cpu (CPU-only)
 - h5py 3.14.0
 - pybvh 0.8.0 (editable install) — pybvh-ml 0.5 pins `pybvh>=0.8,<0.9`
+- mkdocs + mkdocs-material + mkdocstrings (docs site; `mkdocs serve` for local preview, `mkdocs build --strict` as the link-integrity gate)
 
 **Important**: pybvh has its own separate conda env (`pybvh`) with no torch/h5py. pybvh-ml code must never require torch or h5py for core functionality — they are optional, guarded with try/except.
 
@@ -87,6 +88,8 @@ pybvh-ml/
 │   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
 │   └── integration/             # real-data sweeps, seeding determinism, staging parity
 ├── tutorials/                   # 3 runnable notebooks (executed in CI via pytest --nbmake)
+├── docs/                        # MkDocs Material site source (deployed to GitHub Pages on push to main)
+├── mkdocs.yml                   # site config; exclude_docs keeps gitignored docs/internal_logs/ out of local builds
 ├── pyproject.toml
 └── README.md
 ```
