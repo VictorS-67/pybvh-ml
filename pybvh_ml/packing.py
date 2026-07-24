@@ -74,7 +74,9 @@ def pack_to_ctv(
     tvc[:, 0, :3] = rp
     tvc[:, 1:, :C_joint] = joint_data
 
-    return tvc.transpose(2, 0, 1)  # (T, V, C) → (C, T, V)
+    # Materialize the transpose: consumers hand this to
+    # torch.from_numpy(...).view(...) and C-contiguity assumptions.
+    return np.ascontiguousarray(tvc.transpose(2, 0, 1))
 
 
 def pack_to_tvc(
@@ -210,6 +212,13 @@ def unpack_from_flat(
     data = np.asarray(data, dtype=np.float64)
     root_pos = data[:, :root_channels].copy()
     flat_joints = data[:, root_channels:]
+    if flat_joints.shape[1] % joint_channels != 0:
+        raise ValueError(
+            f"Cannot unpack {flat_joints.shape[1]} joint columns "
+            f"(D={data.shape[1]} minus root_channels={root_channels}) "
+            f"into whole joints of joint_channels={joint_channels}. "
+            f"Pass the joint_channels the array was packed with "
+            f"(e.g. 4 for quat, 6 for 6d).")
     J = flat_joints.shape[1] // joint_channels
     joint_data = flat_joints.reshape(data.shape[0], J, joint_channels).copy()
     return root_pos, joint_data

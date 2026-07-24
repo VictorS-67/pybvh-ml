@@ -91,6 +91,9 @@ def standardize_length(
     -------
     ndarray, shape (target_length, ...)
     """
+    if target_length < 1:
+        raise ValueError(
+            f"target_length must be >= 1, got {target_length}")
     data = np.asarray(data, dtype=np.float64)
     T = data.shape[0]
 
@@ -158,7 +161,9 @@ def uniform_temporal_sample(
     mode : {"train", "test"}
         ``"train"`` for random offsets, ``"test"`` for deterministic.
     rng : numpy Generator, optional
-        For reproducibility in train mode.  Ignored in test mode.
+        Drives the sampling in both modes.  ``None`` defaults to fresh
+        entropy in train mode and to a fixed ``default_rng(0)`` in
+        test mode (deterministic across calls).
 
     Returns
     -------
@@ -171,13 +176,11 @@ def uniform_temporal_sample(
     if clip_length < 1:
         raise ValueError(f"clip_length must be >= 1, got {clip_length}")
 
-    if mode == "train":
-        if rng is None:
-            rng = np.random.default_rng()
-    elif mode == "test":
-        rng = np.random.default_rng(0)
-    else:
+    if mode not in ("train", "test"):
         raise ValueError(f"mode must be 'train' or 'test', got '{mode}'")
+    if rng is None:
+        rng = (np.random.default_rng() if mode == "train"
+               else np.random.default_rng(0))
 
     if num_frames < clip_length:
         # Short sequence: sequential indices with random start (train)
@@ -227,7 +230,10 @@ def sample_temporal(
     clip_length : int
         Number of frames to sample.
     num_samples : int
-        Number of independent samples to generate (default 1).
+        Number of independent samples to generate (default 1).  The
+        rng is created once and threaded through every draw, so test
+        mode yields ``num_samples`` *distinct* deterministic samples
+        (reproducible across calls).
     mode : {"train", "test"}
     rng : numpy Generator, optional
 
@@ -243,8 +249,9 @@ def sample_temporal(
     if num_samples < 1:
         raise ValueError(f"num_samples must be >= 1, got {num_samples}")
 
-    if rng is None and mode == "train":
-        rng = np.random.default_rng()
+    if rng is None:
+        rng = (np.random.default_rng() if mode == "train"
+               else np.random.default_rng(0))
 
     samples = []
     for _ in range(num_samples):

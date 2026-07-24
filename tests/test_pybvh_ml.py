@@ -113,6 +113,23 @@ class TestPacking:
 
     # --- Zero-padding tests ---
 
+    def test_ctv_output_contiguous(self, rng):
+        """(C, T, V) output is C-contiguous — consumers hand it to
+        torch.from_numpy(...).view(...)."""
+        root_pos = rng.normal(size=(10, 3))
+        joint_data = rng.normal(size=(10, 5, 6))
+        ctv = pack_to_ctv(root_pos, joint_data)
+        assert ctv.flags["C_CONTIGUOUS"]
+
+    def test_unpack_from_flat_indivisible_raises(self, rng):
+        """Quat data (D = 3 + J*4) unpacked with the default
+        joint_channels=3 must fail loudly, not mis-reshape."""
+        root_pos = rng.normal(size=(10, 3))
+        quats = rng.normal(size=(10, 5, 4))
+        flat = pack_to_flat(root_pos, quats)
+        with pytest.raises(ValueError, match="joint_channels"):
+            unpack_from_flat(flat)  # default joint_channels=3; 20 % 3 != 0
+
     def test_ctv_root_zero_padded_for_6d(self, rng):
         """When C_joint=6, root occupies channels 0:3, channels 3:6 are zero."""
         F, J = 20, 10
@@ -253,6 +270,14 @@ class TestSkeleton:
 
 class TestSequences:
     """Tests for sequence length utilities."""
+
+    @pytest.mark.parametrize("bad_target", [0, -3])
+    def test_standardize_length_invalid_target_raises(self, bad_target):
+        """Regression: negative targets used to silently return a
+        wrong-length array via Python negative-slice truncation."""
+        data = np.zeros((10, 5))
+        with pytest.raises(ValueError, match="target_length must be >= 1"):
+            standardize_length(data, bad_target)
 
     # --- sliding_window ---
 
@@ -2088,6 +2113,13 @@ class TestPreprocessing:
         assert clip["joint_quats"] is clip["joint_data"]
         assert clip["joint_quats"].shape[-1] == 4
 
+    def test_all_names_resolve(self):
+        import pybvh_ml
+        for name in pybvh_ml.__all__:
+            assert hasattr(pybvh_ml, name), name
+        assert "preprocess_directory" in pybvh_ml.__all__
+        assert "__version__" in pybvh_ml.__all__
+
     def test_skeleton_info_axis_keys_roundtrip(self, bvh_dir, tmp_path):
         """world_up / rest_forward / rest_up ride along in skeleton_info
         so augmentation can be configured without reopening BVHs."""
@@ -2530,9 +2562,11 @@ class TestUniformTemporalSample:
         i2 = uniform_temporal_sample(200, 20, mode="test")
         np.testing.assert_array_equal(i1, i2)
 
-    def test_test_mode_ignores_rng(self):
-        """Test mode ignores the provided rng."""
-        i1 = uniform_temporal_sample(200, 20, mode="test", rng=np.random.default_rng(999))
+    def test_test_mode_default_rng_is_stable(self):
+        """rng=None in test mode is deterministic across calls (the
+        caller-supplied-rng case is covered separately — it is honored
+        since 0.5.0, no longer ignored)."""
+        i1 = uniform_temporal_sample(200, 20, mode="test")
         i2 = uniform_temporal_sample(200, 20, mode="test")
         np.testing.assert_array_equal(i1, i2)
 
@@ -2589,6 +2623,33 @@ class TestUniformTemporalSample:
         r1 = sample_temporal(data, 20, mode="train", rng=np.random.default_rng(42))
         r2 = sample_temporal(data, 20, mode="train", rng=np.random.default_rng(42))
         np.testing.assert_array_equal(r1, r2)
+
+    def test_sample_temporal_test_mode_samples_are_distinct(self):
+        """Test mode with num_samples > 1 yields distinct (yet
+        deterministic) samples.  Regression: the internal rng used to
+        be re-seeded to 0 on every draw, so all samples were
+        bit-identical despite the 'independent samples' promise."""
+        data = np.random.default_rng(3).normal(size=(100, 10))
+        result = sample_temporal(data, 20, num_samples=3, mode="test")
+        assert not np.array_equal(result[0], result[1])
+        assert not np.array_equal(result[1], result[2])
+        # Deterministic across calls.
+        again = sample_temporal(data, 20, num_samples=3, mode="test")
+        np.testing.assert_array_equal(result, again)
+
+    def test_uniform_temporal_sample_test_mode_honors_rng(self):
+        """A caller-supplied rng drives test mode too (previously it
+        was silently ignored); rng=None keeps the fixed default."""
+        default_1 = uniform_temporal_sample(100, 20, mode="test")
+        default_2 = uniform_temporal_sample(100, 20, mode="test")
+        np.testing.assert_array_equal(default_1, default_2)
+        np.testing.assert_array_equal(
+            default_1,
+            uniform_temporal_sample(
+                100, 20, mode="test", rng=np.random.default_rng(0)))
+        custom = uniform_temporal_sample(
+            100, 20, mode="test", rng=np.random.default_rng(7))
+        assert not np.array_equal(custom, default_1)
 
 
 # =============================================================================

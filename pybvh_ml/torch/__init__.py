@@ -15,3 +15,5 @@ except ImportError:
 
 from .datasets import MotionDataset, OnTheFlyDataset
 from .collate import collate_motion_batch
+
+__all__ = ["MotionDataset", "OnTheFlyDataset", "collate_motion_batch"]
