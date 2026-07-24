@@ -1192,6 +1192,45 @@ class TestAugmentationPipeline:
         r = repr(pipeline)
         assert "rotate_vertical" in r
 
+    @pytest.mark.parametrize("custom_position", ["first", "middle", "last"])
+    def test_custom_step_without_representation_gets_declared_repr(
+            self, bvh_example, custom_position):
+        """A representation-less custom step sees the pipeline's declared representation on both dispatch paths.
+
+        Regression: the staged path used to hand such steps whatever
+        internal representation the previous built-in step left behind
+        (quaternions), so cache_quats=True/False silently diverged.
+        """
+        pos, rot6d = _get_6d_data(bvh_example)
+        seen_shapes = []
+
+        def custom_scale(*, root_pos, joint_data):
+            seen_shapes.append(joint_data.shape)
+            assert joint_data.shape[-1] == 6, (
+                f"custom step expected 6d data, got trailing dim "
+                f"{joint_data.shape[-1]}")
+            return root_pos * 1.01, joint_data.copy()
+
+        custom = (custom_scale, 1.0, {})
+        builtin_a = (rotate_vertical, 1.0,
+                     {"angle": np.radians(30.0), "up_axis": "+y",
+                      "representation": "6d"})
+        builtin_b = (add_joint_noise, 1.0,
+                     {"sigma": np.radians(2.0), "representation": "6d"})
+        order = {
+            "first": [custom, builtin_a, builtin_b],
+            "middle": [builtin_a, custom, builtin_b],
+            "last": [builtin_a, builtin_b, custom],
+        }[custom_position]
+
+        p_staged, jd_staged = AugmentationPipeline(order, cache_quats=True)(
+            root_pos=pos, joint_data=rot6d, rng=np.random.default_rng(42))
+        p_direct, jd_direct = AugmentationPipeline(order, cache_quats=False)(
+            root_pos=pos, joint_data=rot6d, rng=np.random.default_rng(42))
+        np.testing.assert_array_equal(p_staged, p_direct)
+        np.testing.assert_array_equal(jd_staged, jd_direct)
+        assert all(s[-1] == 6 for s in seen_shapes)
+
     def test_default_rng(self, bvh_example):
         """Pipeline should work without explicit rng."""
         pos, quats = _get_quat_data(bvh_example)

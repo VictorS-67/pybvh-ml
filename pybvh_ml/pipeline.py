@@ -47,9 +47,13 @@ class AugmentationPipeline:
         this flag eliminates all but the first and last conversion —
         typically a 2–3× speedup on non-6d pipelines, 1.5× on 6d.
         User-defined augmentations not registered in the internal
-        staging table are supported transparently (the cache is
-        flushed around them).  Set to ``False`` for historical
-        bit-exact behavior.
+        staging table are supported transparently: the cache is
+        flushed around them and they receive ``joint_data`` in their
+        declared ``representation`` kwarg — or, when they declare
+        none, in the pipeline's current declared representation (the
+        most recent step carrying a ``representation`` kwarg), exactly
+        as on the ``cache_quats=False`` path.  Set to ``False`` for
+        historical bit-exact behavior.
 
     Notes
     -----
@@ -293,7 +297,9 @@ class AugmentationPipeline:
         operate on a shared :class:`_StagingState` that carries a quat
         cache forward.  Unknown functions (e.g. user-defined) fall back
         transparently — the cache is flushed, the function sees a fresh
-        ``joint_data`` in its declared representation, and staging
+        ``joint_data`` in its declared representation (or, when it
+        declares none, in the pipeline's current declared representation
+        — the same array the direct path would pass), and staging
         resumes cold after the call.
         """
         if not self.augmentations:
@@ -336,10 +342,14 @@ class AugmentationPipeline:
                             resolved["rng"] = rng
                     root_pos = staged_fn(root_pos, state, **resolved)
                 else:
-                    # Fallback: flush the cache, convert jd to the rep this
-                    # unknown step expects, call it normally, then reset state.
-                    if step_repr is not None:
-                        state.ensure_repr(step_repr)
+                    # Fallback: flush the cache and hand the unknown step
+                    # joint_data in the pipeline's current declared
+                    # representation (``final_repr`` — the step's own
+                    # declaration when present, else the most recent one).
+                    # This is exactly what the direct path would carry, so
+                    # cache_quats=True/False agree for custom steps that
+                    # don't declare a representation.
+                    state.ensure_repr(final_repr)
                     if "rng" not in resolved:
                         sig = inspect.signature(fn)
                         if "rng" in sig.parameters:
@@ -347,10 +357,8 @@ class AugmentationPipeline:
                     root_pos, new_jd = fn(
                         root_pos=root_pos, joint_data=state.jd, **resolved)
                     # We don't know what the unknown function did internally;
-                    # treat the result as opaque in `step_repr` (or
-                    # ``state.current_repr`` if the step didn't declare one).
-                    state.set_jd_invalidate_quats(
-                        new_jd, step_repr or state.current_repr)
+                    # treat the result as opaque data still in final_repr.
+                    state.set_jd_invalidate_quats(new_jd, final_repr)
 
         # At the end, ensure joint_data is back in the representation
         # the user expects.
