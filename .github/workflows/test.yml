@@ -5,6 +5,7 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main]
+  workflow_call:
 
 jobs:
   test:
@@ -20,6 +21,11 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
+      # Release ordering: pybvh-ml 0.5.0 pins pybvh>=0.8,<0.9, which
+      # resolves from PyPI only once pybvh 0.8.0 ships. CI is expected
+      # red until then (pybvh publishes first, then pybvh-ml).
+      # Deliberately no git-install fallback — the red window is short
+      # and a temporary install path would mask real resolver issues.
       run: |
         python -m pip install --upgrade pip
         pip install .[dev]

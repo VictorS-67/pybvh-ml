@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+# >=77 for the PEP 639 license fields (license = "MIT" + license-files).
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
