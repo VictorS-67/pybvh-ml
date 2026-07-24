@@ -1868,9 +1868,28 @@ class TestPreprocessing:
         assert "target_euler_order" not in targets
 
     def test_harmonize_hierarchy_mismatch_raises(self, bvh_dir, tmp_path):
-        """Hierarchy mismatches under harmonize=True must raise loudly with
-        the dropped filename and pybvh's drop reason — not silently shrink
-        the dataset (the original maintainer-report failure)."""
+        """Hierarchy mismatches under harmonize=True must raise loudly —
+        not silently shrink the dataset (the original maintainer-report
+        failure).  Without retarget the check happens post-harmonize in
+        the skeleton-compatibility gate."""
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        import shutil
+        shutil.copy(bvh_dir / "bvh_test1.bvh", work_dir / "a.bvh")
+        shutil.copy(bvh_dir / "bvh_test3.bvh", work_dir / "b.bvh")
+        out = tmp_path / "harmonized.npz"
+        with pytest.warns(UserWarning):
+            with pytest.raises(
+                    ValueError,
+                    match="skeleton graph is incompatible"):
+                preprocess_directory(
+                    work_dir, out, representation="6d", harmonize=True)
+
+    def test_harmonize_retarget_hierarchy_mismatch_raises(
+            self, bvh_dir, tmp_path):
+        """With retarget=True the reference gate inside pybvh.harmonize
+        reports the drop, and preprocess_directory surfaces it with the
+        dropped filename and reason."""
         work_dir = tmp_path / "work"
         work_dir.mkdir()
         import shutil
@@ -1882,7 +1901,100 @@ class TestPreprocessing:
                     ValueError,
                     match=r"pybvh\.harmonize dropped \d+ clip"):
                 preprocess_directory(
-                    work_dir, out, representation="6d", harmonize=True)
+                    work_dir, out, representation="6d",
+                    harmonize=True, retarget=True)
+
+    def test_harmonize_default_preserves_actor_offsets(
+            self, bvh_dir, tmp_path):
+        """harmonize=True alone must not touch bone offsets — per-actor
+        proportions are intrinsic data.  Regression: the reference clip
+        used to be pinned unconditionally, silently retargeting every
+        actor to the alphabetically first file."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "actor_a.bvh")
+        write_bvh_file(bvh.scale(0.5), work_dir / "actor_b.bvh")
+
+        out = tmp_path / "dataset.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="6d", harmonize=True)
+        harmonized_to = result["uniformity"]["harmonized_to"]
+        assert harmonized_to["retarget"] is False
+        assert harmonized_to["reference"] is None
+        assert "retarget" not in harmonized_to["stage_counts"]
+        # Root translations keep their per-actor scale: actor_b's
+        # de-centered trajectory spans half of actor_a's.
+        loaded = load_preprocessed(out)
+        span = [np.ptp(c["root_pos"], axis=0) for c in loaded["clips"]]
+        np.testing.assert_allclose(span[1], span[0] * 0.5, atol=1e-6)
+
+    def test_harmonize_retarget_unifies_offsets(self, bvh_dir, tmp_path):
+        """retarget=True pins the first clip and pybvh applies the
+        retarget stage (bone offsets copied from the reference; root
+        translation is deliberately untouched)."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "actor_a.bvh")
+        write_bvh_file(bvh.scale(0.5), work_dir / "actor_b.bvh")
+
+        out = tmp_path / "dataset.npz"
+        result = preprocess_directory(
+            work_dir, out, representation="6d",
+            harmonize=True, retarget=True)
+        harmonized_to = result["uniformity"]["harmonized_to"]
+        assert harmonized_to["retarget"] is True
+        assert harmonized_to["reference"] == "actor_a"
+        assert harmonized_to["stage_counts"].get("retarget", 0) >= 1
+
+    @pytest.mark.parametrize("suffix", [".npz", ".hdf5"])
+    def test_uniformity_persisted_and_loaded(self, bvh_dir, tmp_path, suffix):
+        """The uniformity audit (incl. harmonized_to) round-trips through
+        the saved dataset."""
+        if suffix == ".hdf5":
+            pytest.importorskip("h5py")
+        from pybvh import read_bvh_file, write_bvh_file
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work_dir / "a.bvh")
+        write_bvh_file(bvh.change_euler_order("ZXY"), work_dir / "b.bvh")
+
+        out = tmp_path / ("dataset" + suffix)
+        result = preprocess_directory(
+            work_dir, out, representation="euler",
+            harmonize=True, target_euler_order="ZYX")
+        loaded = load_preprocessed(out)
+        assert loaded["uniformity"] is not None
+        import json as _json
+        assert (_json.loads(_json.dumps(loaded["uniformity"]))
+                == _json.loads(_json.dumps(result["uniformity"])))
+        assert loaded["uniformity"]["harmonized_to"]["retarget"] is False
+
+    @pytest.mark.parametrize("harmonize_on,expected", [
+        (False, "Pass target_world_up='<axis>' to harmonize."),
+        (True, "harmonize=True will unify these to the majority value"),
+    ])
+    def test_heterogeneous_warning_wording(self, harmonize_on, expected):
+        """The advice changes with harmonize: required fix vs override."""
+        import warnings as _warnings
+        from pybvh_ml.preprocessing import _warn_if_heterogeneous
+        uniformity = {
+            "world_up": {"+y": ["a", "b"], "+z": ["c"]},
+            "rest_forward": {"+x": ["a", "b", "c"]},
+            "rest_up": {"+y": ["a", "b", "c"]},
+            "rest_anim_mismatch": [],
+        }
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            _warn_if_heterogeneous(
+                uniformity, None, None, None, harmonize=harmonize_on)
+        messages = [str(w.message) for w in caught]
+        assert len(messages) == 1
+        assert expected in messages[0]
 
     def test_same_graph_different_offsets_accepted(self, bvh_dir, tmp_path):
         """Multi-actor case: clips share the skeleton graph (same names +

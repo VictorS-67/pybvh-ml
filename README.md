@@ -139,7 +139,7 @@ preprocess_directory(
 )
 ```
 
-`harmonize=True` runs `pybvh.harmonize` against the first clip, using majority values from the uniformity audit for any `target_*` you didn't set explicitly. For order-sensitive representations it also auto-picks a `target_euler_order` (most common per-joint order across the dataset). Hierarchy mismatches raise loudly — no silent drops. The returned `uniformity["harmonized_to"]` carries the resolved targets, per-stage modification counts, and a JSON-serializable `HarmonizeReport` so the transformation trail is auditable from the saved dataset metadata.
+`harmonize=True` runs `pybvh.harmonize`, using majority values from the uniformity audit for any `target_*` you didn't set explicitly. For order-sensitive representations it also auto-picks a `target_euler_order` (most common per-joint order across the dataset). Harmonization is pure reorientation/resampling — each actor's bone lengths are preserved; pass `retarget=True` to additionally retarget every clip's bone offsets to the first clip when the whole dataset should share one skeleton geometry (e.g. for fixed-topology GCNs). Hierarchy mismatches raise loudly either way — no silent drops. The `uniformity` audit (including `harmonized_to` with the resolved targets, the `retarget` choice, per-stage modification counts, and a JSON-serializable `HarmonizeReport`) is returned *and* persisted in the saved dataset, so the transformation trail is auditable via `load_preprocessed(...)["uniformity"]`.
 
 For workflows that need to inspect or persist intermediates, call `pybvh.harmonize` directly:
 

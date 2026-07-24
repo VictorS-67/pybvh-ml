@@ -174,11 +174,17 @@ def _warn_if_heterogeneous(
     target_world_up: str | None,
     target_rest_forward: str | None,
     target_rest_up: str | None,
+    *,
+    harmonize: bool = False,
 ) -> None:
     """Emit one aggregated warning per heterogeneous axis.
 
     Skips a category when its corresponding ``target_*`` kwarg is set
-    (the user has already signaled intent to uniformize).
+    (the user has already signaled intent to uniformize).  With
+    ``harmonize=True`` the warnings still fire — the audit summary is
+    informative — but the advice changes: harmonize is about to unify
+    each axis to its majority value automatically, so the ``target_*``
+    kwargs are overrides, not the required fix.
     """
     def _format(values: dict) -> str:
         """Render '{+z: 900, +y: 100}; first examples per minority: ...'."""
@@ -192,18 +198,24 @@ def _warn_if_heterogeneous(
             examples.append(f"{v!r} e.g. {names[:3]}")
         return f"distribution {{{dist}}}; {'; '.join(examples)}"
 
+    def _advice(kwarg: str) -> str:
+        if harmonize:
+            return (f"harmonize=True will unify these to the majority "
+                    f"value; pass {kwarg}='<axis>' to override.")
+        return f"Pass {kwarg}='<axis>' to harmonize."
+
     if len(uniformity["world_up"]) > 1 and target_world_up is None:
         warnings.warn(
             "World-up axis is not uniform across the dataset — "
-            f"{_format(uniformity['world_up'])}. Pass "
-            "target_world_up='<axis>' to harmonize.",
+            f"{_format(uniformity['world_up'])}. "
+            f"{_advice('target_world_up')}",
             UserWarning, stacklevel=3)
 
     if len(uniformity["rest_forward"]) > 1 and target_rest_forward is None:
         warnings.warn(
             "Rest-pose forward direction is not uniform across the "
-            f"dataset — {_format(uniformity['rest_forward'])}. Pass "
-            "target_rest_forward='<axis>' to harmonize.",
+            f"dataset — {_format(uniformity['rest_forward'])}. "
+            f"{_advice('target_rest_forward')}",
             UserWarning, stacklevel=3)
 
     if target_rest_up is None:
@@ -214,13 +226,36 @@ def _warn_if_heterogeneous(
         if len(rest_up) > 1:
             warnings.warn(
                 "Rest-pose up axis is not uniform across the dataset — "
-                f"{_format(rest_up)}. Pass target_rest_up='<axis>' to "
-                "harmonize.",
+                f"{_format(rest_up)}. {_advice('target_rest_up')}",
                 UserWarning, stacklevel=3)
 
         mismatch = uniformity["rest_anim_mismatch"]
         if mismatch:
             example = mismatch[:3]
+            if harmonize:
+                recovery = (
+                    "Two recovery paths:\n"
+                    "  - If the file's rest pose is authoritative (most "
+                    "common; animation frame 0 may be mid-action and "
+                    "confuse pybvh's auto-inference): pass "
+                    "world_up='<axis>' to preprocess_directory to "
+                    "override animation-based detection at parse time.\n"
+                    "  - If the animation frame is authoritative: "
+                    "harmonize=True will reorient these clips' rest "
+                    "poses toward the majority rest-up; pass "
+                    "target_rest_up='<axis>' to pick the axis "
+                    "explicitly.")
+            else:
+                recovery = (
+                    "Two recovery paths:\n"
+                    "  - If the file's rest pose is authoritative (most "
+                    "common; animation frame 0 may be mid-action and "
+                    "confuse pybvh's auto-inference): pass "
+                    "world_up='<axis>' to preprocess_directory to "
+                    "override animation-based detection at parse time.\n"
+                    "  - If the animation frame is authoritative: pass "
+                    "target_rest_up='<axis>' to reorient each clip's "
+                    "rest pose to match its animation up.")
             warnings.warn(
                 f"Rest-pose up disagrees with animation-derived world_up "
                 f"in {len(mismatch)} file(s) (e.g. {example}). Tensors "
@@ -228,15 +263,7 @@ def _warn_if_heterogeneous(
                 "/ rotmat / euler) will live in a different reference "
                 "frame than topology-identical files whose rest pose "
                 "agrees with their animation-inferred up axis.\n\n"
-                "Two recovery paths:\n"
-                "  - If the file's rest pose is authoritative (most "
-                "common; animation frame 0 may be mid-action and confuse "
-                "pybvh's auto-inference): pass world_up='<axis>' to "
-                "preprocess_directory to override animation-based "
-                "detection at parse time.\n"
-                "  - If the animation frame is authoritative: pass "
-                "target_rest_up='<axis>' to reorient each clip's rest "
-                "pose to match its animation up.",
+                + recovery,
                 UserWarning, stacklevel=3)
 
 
@@ -365,18 +392,27 @@ def _run_harmonize(
     target_rest_forward: str | None,
     target_rest_up: str | None,
     target_euler_order: str | None,
+    retarget: bool,
 ) -> tuple[list[Bvh], list[str]]:
     """Drive ``pybvh.harmonize`` with resolved targets and surface drops.
 
-    Hierarchy mismatches against the reference clip are dropped by
-    ``pybvh.harmonize`` (default ``on_incompatible="drop"``).  Silent
-    drops are exactly the failure mode the maintainer report hit — we
-    inspect the returned :class:`HarmonizeReport` and raise with the
-    dropped filenames + reasons so the user can act.
+    By default (``retarget=False``) harmonize runs without a reference
+    clip: pure reorientation/resampling, preserving each actor's bone
+    lengths.  Hierarchy mismatches then surface in
+    :func:`_check_skeleton_compatibility` right after, with recovery
+    hints.  With ``retarget=True`` the first clip is pinned as
+    ``reference=``, which makes pybvh.harmonize gate on the hierarchy
+    graph (names + parent indices) *and* retarget every clip's bone
+    offsets to that clip.  Reference-gated drops (default
+    ``on_incompatible="drop"``) would otherwise be silent — we inspect
+    the returned :class:`HarmonizeReport` and raise with the dropped
+    filenames + reasons so the user can act.
 
-    Records the resolved targets, per-stage modification counts, and
-    the JSON-native report under ``uniformity["harmonized_to"]`` so the
-    transformation trail is auditable from the saved dataset metadata.
+    Records the resolved targets, the retarget choice, per-stage
+    modification counts, and the JSON-native report under
+    ``uniformity["harmonized_to"]``, which the savers persist as
+    ``uniformity_json`` — the transformation trail is auditable from
+    the saved dataset metadata.
     """
     import dataclasses
 
@@ -385,13 +421,8 @@ def _run_harmonize(
         target_world_up, target_rest_forward, target_rest_up,
         target_euler_order,
     )
-    # Pin the reference clip so pybvh.harmonize gates on the hierarchy
-    # graph (names + parent indices) and retargets bone offsets to the
-    # first clip.  Without ``reference=`` harmonize is purely reorient,
-    # and hierarchy mismatches would only surface later in our own
-    # _check_skeleton_compatibility — with worse drop diagnostics.
     harmonized, report = pybvh_harmonize(
-        clips, reference=clips[0],
+        clips, reference=clips[0] if retarget else None,
         **targets, return_report=True, verbose=False,
     )
     if report.dropped_indices:
@@ -405,14 +436,16 @@ def _run_harmonize(
         )
         raise ValueError(
             f"pybvh.harmonize dropped {len(report.dropped_indices)} clip(s) "
-            f"as incompatible with the reference: {details}. "
-            f"Hierarchy mismatches cannot be auto-fixed — filter the "
-            f"dataset to a single skeleton, or run pybvh.harmonize with "
-            f"an explicit reference for retargeting.")
+            f"as incompatible with the reference '{stems[0]}' (pinned by "
+            f"retarget=True): {details}. Hierarchy mismatches cannot be "
+            f"auto-fixed — filter the dataset to a single skeleton, or run "
+            f"pybvh.harmonize with an explicit reference for retargeting.")
 
     kept_stems = [stems[i] for i in report.kept_indices]
     uniformity["harmonized_to"] = {
         "targets": targets,
+        "retarget": retarget,
+        "reference": stems[0] if retarget else None,
         "stage_counts": _stage_counts(report.applied_stages),
         "report": dataclasses.asdict(report),
     }
@@ -453,8 +486,7 @@ def _check_skeleton_compatibility(
     bone lengths; root translation is centered by default).  Pybvh's
     own ``harmonize(reference=...)`` uses the same loose convention.
     Callers who need bone-length uniformity (e.g. when extracting
-    FK-derived features) should pre-run ``pybvh.harmonize(reference=...)``
-    via ``harmonize=True``.
+    FK-derived features) should pass ``harmonize=True, retarget=True``.
 
     For order-sensitive representations (``"euler"`` / ``"axisangle"``),
     additionally requires channel equality (``matches_channels``).
@@ -472,8 +504,9 @@ def _check_skeleton_compatibility(
                 f"'{ref_label}' (joint names or parent indices differ). "
                 f"This is a data problem — clips with different skeletons "
                 f"cannot be batched together. Filter the dataset to a "
-                f"single skeleton, or use pybvh.harmonize(reference=<ref>) "
-                f"if the difference is bone-offset retargetable.")
+                f"single skeleton, or pass harmonize=True, retarget=True "
+                f"(pybvh.harmonize with a pinned reference) if the "
+                f"difference is bone-offset retargetable.")
         if needs_channels and not reference.matches_channels(bvh):
             raise ValueError(
                 f"Clip '{clip_label}' has Euler orders incompatible with "
@@ -620,6 +653,7 @@ def preprocess_directory(
     world_up: str = "auto",
     lr_mapping: dict[str, str] | None = None,
     harmonize: bool = False,
+    retarget: bool = False,
     target_world_up: str | None = None,
     target_rest_forward: str | None = None,
     target_rest_up: str | None = None,
@@ -684,20 +718,35 @@ def preprocess_directory(
         resolved as: explicit ``target_*`` kwarg wins; otherwise the
         majority value from the uniformity audit fills in.  For
         ``representation in {"euler", "axisangle"}``, an Euler-order
-        target is also resolved (majority of ``euler_orders[0]`` across
-        clips); rotation-invariant representations skip this stage
-        since channel layout is order-agnostic.
+        target is also resolved (the most common per-joint order across
+        all joints of all clips); rotation-invariant representations
+        skip this stage since channel layout is order-agnostic.
 
-        Clips with hierarchy mismatches against the reference are
-        dropped by ``pybvh.harmonize``; ``preprocess_directory``
-        inspects the returned report and raises :class:`ValueError`
-        rather than silently shipping a smaller dataset.  The
-        resolved targets and per-stage modification counts land in
-        the returned ``uniformity`` dict under
-        ``uniformity["harmonized_to"]``.
+        Harmonization is pure reorientation/resampling: each actor's
+        bone lengths are preserved (bone-length variation across
+        actors is intrinsic data, see the skeleton-compatibility
+        notes).  Pass ``retarget=True`` to additionally unify bone
+        offsets.  Hierarchy mismatches raise :class:`ValueError`
+        either way — from the post-harmonize compatibility check by
+        default, or from the harmonize report under ``retarget=True``
+        — rather than silently shipping a smaller dataset.  The
+        resolved targets, the retarget choice, and per-stage
+        modification counts land in the returned ``uniformity`` dict
+        under ``uniformity["harmonized_to"]`` and are persisted in the
+        saved dataset (``uniformity_json``).
 
         Default ``False`` keeps the explicit ``target_*`` kwargs as
         independent uniformization stages (current behavior).
+    retarget : bool
+        Only honored with ``harmonize=True``.  If True, pin the first
+        clip (alphabetically first stem) as the harmonize reference:
+        every other clip's bone offsets are retargeted to it, so the
+        whole dataset shares one skeleton geometry — useful when the
+        model should not need to be scale-invariant (e.g.
+        fixed-topology GCNs).  Bone offsets only — root translations
+        keep each clip's original scale (pybvh's ``retarget``
+        semantics).  Default ``False`` preserves each actor's own bone
+        proportions.
     target_world_up : str or None
         Signed-axis string (``"+y"``, ``"-z"``, ...).  When
         ``harmonize=False`` (default): reorient every clip via
@@ -816,13 +865,14 @@ def preprocess_directory(
     # ------------------------------------------------------------------
     uniformity = _compute_uniformity(clips, stems)
     _warn_if_heterogeneous(
-        uniformity, target_world_up, target_rest_forward, target_rest_up)
+        uniformity, target_world_up, target_rest_forward, target_rest_up,
+        harmonize=harmonize)
 
     if harmonize:
         clips, stems = _run_harmonize(
             clips, stems, uniformity, representation,
             target_world_up, target_rest_forward, target_rest_up,
-            target_euler_order,
+            target_euler_order, retarget,
         )
     else:
         if target_world_up is not None:
@@ -891,12 +941,12 @@ def preprocess_directory(
         _save_hdf5(output_path, all_root_pos, all_joint_data,
                    all_joint_quats, all_velocities, all_foot_contacts,
                    labels, stats, skel_info, representation, center_root,
-                   stems)
+                   stems, uniformity)
     else:
         _save_npz(output_path, all_root_pos, all_joint_data,
                   all_joint_quats, all_velocities, all_foot_contacts,
                   labels, stats, skel_info, representation, center_root,
-                  stems)
+                  stems, uniformity)
 
     return {
         "num_clips": len(clips),
@@ -920,6 +970,7 @@ def _save_npz(
     representation: str,
     center_root: bool,
     stems: list[str],
+    uniformity: dict | None = None,
 ) -> None:
     """Save to .npz format."""
     save_dict: dict[str, object] = {
@@ -931,6 +982,8 @@ def _save_npz(
         "std": stats["std"],
         "skeleton_info_json": np.array(json.dumps(skel_info)),
     }
+    if uniformity is not None:
+        save_dict["uniformity_json"] = np.array(json.dumps(uniformity))
     if "constant_channels" in stats:
         save_dict["constant_channels"] = stats["constant_channels"]
     for i, (rp, jd) in enumerate(zip(root_pos_list, joint_data_list)):
@@ -963,6 +1016,7 @@ def _save_hdf5(
     representation: str,
     center_root: bool,
     stems: list[str],
+    uniformity: dict | None = None,
 ) -> None:
     """Save to HDF5 format."""
     try:
@@ -976,6 +1030,8 @@ def _save_hdf5(
         f.attrs["representation"] = representation
         f.attrs["center_root"] = bool(center_root)
         f.attrs["skeleton_info_json"] = json.dumps(skel_info)
+        if uniformity is not None:
+            f.attrs["uniformity_json"] = json.dumps(uniformity)
 
         f.create_dataset("mean", data=stats["mean"])
         f.create_dataset("std", data=stats["std"])
@@ -1014,8 +1070,16 @@ def load_preprocessed(path: str | Path) -> dict:
         ``joint_data``, optionally ``joint_quats`` / ``velocities`` /
         ``foot_contacts``), ``labels``, ``mean``, ``std``,
         ``skeleton_info``, ``representation``, ``filenames``,
-        ``center_root``.  Also includes ``constant_channels`` when the
-        file was written by pybvh-ml >= 0.3 (absent for older files).
+        ``center_root``, ``uniformity``.  Also includes
+        ``constant_channels`` when the file was written by
+        pybvh-ml >= 0.3 (absent for older files).
+
+        ``uniformity`` is the axis-uniformity audit recorded at
+        preprocessing time (world-up / rest-forward / rest-up
+        distributions, and ``harmonized_to`` — resolved targets,
+        ``retarget`` choice, and the full harmonize report — when the
+        dataset was built with ``harmonize=True``).  Files written
+        before pybvh-ml 0.5.0 load it as ``None``.
 
         ``center_root`` is the flag the dataset was preprocessed with (files written before pybvh-ml 0.5.0 don't record it, so it loads as ``None``).  When it is ``True``, the stored ``root_pos`` arrays are already centered — repack them with ``pack_to_*(..., center_root=False)``.
     """
@@ -1057,6 +1121,9 @@ def _load_npz(path: Path) -> dict:
         # Files written before pybvh-ml 0.5.0 don't record the flag.
         "center_root": (bool(data["center_root"])
                         if "center_root" in data.files else None),
+        # Files written before pybvh-ml 0.5.0 don't record the audit.
+        "uniformity": (json.loads(str(data["uniformity_json"]))
+                       if "uniformity_json" in data.files else None),
     }
     if "constant_channels" in data.files:
         result["constant_channels"] = data["constant_channels"]
@@ -1104,6 +1171,9 @@ def _load_hdf5(path: Path) -> dict:
             # Files written before pybvh-ml 0.5.0 don't record the flag.
             "center_root": (bool(f.attrs["center_root"])
                             if "center_root" in f.attrs else None),
+            # Files written before pybvh-ml 0.5.0 don't record the audit.
+            "uniformity": (json.loads(str(f.attrs["uniformity_json"]))
+                           if "uniformity_json" in f.attrs else None),
         }
         if "constant_channels" in f:
             result["constant_channels"] = f["constant_channels"][()]
