@@ -273,20 +273,29 @@ def mirror(
 
     lateral_idx, _ = _parse_axis(lateral_axis)
     new_root_pos[:, lateral_idx] *= -1.0
-    _swap_lr_pairs(new_data, lr_joint_pairs)
 
-    # 6D and quaternion: apply the analytic sign mask directly.
+    # 6D and quaternion: swap raw joint data, then apply the analytic
+    # sign mask (both layouts are per-joint-uniform, so swap order is
+    # irrelevant).
     if representation == "6d":
+        _swap_lr_pairs(new_data, lr_joint_pairs)
         new_data *= _mirror_sign_rot6d(lateral_idx)
         return new_root_pos, new_data
 
     if representation == "quat":
+        _swap_lr_pairs(new_data, lr_joint_pairs)
         new_data *= _mirror_sign_quat(lateral_idx)
         return new_root_pos, new_data
 
-    # All other representations: convert the (already swapped) data to
-    # quaternions, apply the sign mask, then convert back.
+    # All other representations: convert to quaternions first, swap in
+    # quat space, mask, convert back.  Converting before the swap keeps
+    # each joint's raw data interpreted under its own euler_orders
+    # entry — swapping raw euler triples would decode a left joint's
+    # angles with the right joint's order whenever an L/R pair mixes
+    # Euler orders.  Converting back with the destination joint's order
+    # is correct: consumers read column j under euler_orders[j].
     quats = _to_quats(new_data, representation, euler_orders)
+    _swap_lr_pairs(quats, lr_joint_pairs)
     quats *= _mirror_sign_quat(lateral_idx)
     return new_root_pos, _from_quats(quats, representation, euler_orders)
 

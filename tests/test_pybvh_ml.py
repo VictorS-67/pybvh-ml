@@ -993,6 +993,46 @@ class TestEulerRadians:
         np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
         np.testing.assert_allclose(R_e, R_q, atol=1e-6)
 
+    def test_mirror_mixed_euler_orders_matches_quat(self, bvh_example):
+        """L/R pairs whose members use different Euler orders mirror correctly.
+
+        Regression: mirror used to swap raw euler triples before the
+        order-aware conversion, decoding a left joint's angles with the
+        right joint's order.
+        """
+        pos, quats = bvh_example.to_quat()
+        J = quats.shape[1]
+        orders = ["ZYX"] * J
+        orders[1] = "XYZ"  # pair (1, 2) deliberately mixes orders
+        euler = convert_arrays(quats, "quat", "euler", euler_orders=orders)
+        pairs = [(1, 2)]
+        pos_e, jd_e = mirror(
+            root_pos=pos, joint_data=euler, lr_joint_pairs=pairs,
+            lateral_axis="+x", representation="euler", euler_orders=orders)
+        pos_q, jd_q = mirror(
+            root_pos=pos, joint_data=quats, lr_joint_pairs=pairs,
+            lateral_axis="+x", representation="quat")
+        R_e = convert_arrays(jd_e, "euler", "rotmat", euler_orders=orders)
+        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
+
+    def test_mirror_mixed_euler_orders_staged_matches_direct(self, bvh_example):
+        pos, quats = bvh_example.to_quat()
+        J = quats.shape[1]
+        orders = ["ZYX"] * J
+        orders[1] = "XYZ"
+        euler = convert_arrays(quats, "quat", "euler", euler_orders=orders)
+        steps = [(mirror, 1.0,
+                  {"lr_joint_pairs": [(1, 2)], "lateral_axis": "+x",
+                   "representation": "euler", "euler_orders": orders})]
+        pos_s, jd_s = AugmentationPipeline(steps, cache_quats=True)(
+            root_pos=pos, joint_data=euler, rng=np.random.default_rng(0))
+        pos_d, jd_d = AugmentationPipeline(steps, cache_quats=False)(
+            root_pos=pos, joint_data=euler, rng=np.random.default_rng(0))
+        np.testing.assert_allclose(pos_s, pos_d, atol=1e-12)
+        np.testing.assert_allclose(jd_s, jd_d, atol=1e-12)
+
     def test_staged_pipeline_euler_matches_quat(self, bvh_example):
         """The quat-caching pipeline path uses the same radians convention."""
         orders = bvh_example.euler_orders
