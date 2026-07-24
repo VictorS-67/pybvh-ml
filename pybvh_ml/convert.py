@@ -24,7 +24,8 @@ def convert_arrays(
     Parameters
     ----------
     joint_data : ndarray, shape (F, J, C_from)
-        Input joint rotation data.
+        Input joint rotation data.  Euler angles are in radians
+        (matching ``pybvh.Bvh.joint_angles``).
     from_repr : str
         Source representation: ``"euler"``, ``"quat"``,
         ``"6d"``, ``"axisangle"``, ``"rotmat"``.
@@ -62,8 +63,7 @@ def convert_arrays(
         joint_data = joint_data.reshape(F, J, 3, 3)
 
     result = rotations.convert(
-        joint_data, from_repr, to_repr,
-        order=euler_orders, degrees=True)
+        joint_data, from_repr, to_repr, order=euler_orders)
 
     if to_repr == "rotmat":
         F, J = result.shape[:2]

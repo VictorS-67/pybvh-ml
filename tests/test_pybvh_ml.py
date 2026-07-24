@@ -749,7 +749,7 @@ class TestRot6dAugmentation:
     def test_rotate_6d_consistency_with_quat(self, bvh_example, up_idx):
         """6D rotation should match quaternion rotation after conversion."""
         from pybvh import rotations
-        angle = 73.0
+        angle = np.radians(73.0)
         up_axis = "+" + "xyz"[up_idx]
         pos, quats = _get_quat_data(bvh_example)
         _, rot6d = _get_6d_data(bvh_example)
@@ -931,6 +931,117 @@ class TestConvertArrays:
         q = convert_arrays(bvh_example.joint_angles, "euler", repr_name,
                            euler_orders=orders)
         assert q.shape[-1] == expected_c
+
+
+# =============================================================================
+# Euler radians ground truth
+# =============================================================================
+
+def _align_quat_signs(q, reference):
+    """Flip per-element quaternion signs onto the reference hemisphere."""
+    dots = np.sum(q * reference, axis=-1, keepdims=True)
+    return q * np.where(dots < 0, -1.0, 1.0)
+
+
+class TestEulerRadians:
+    """Euler joint data is radians end to end, checked against pybvh.
+
+    Regression tests for the pre-0.5.0 bug where the euler<->quat
+    conversion sites declared ``degrees=True`` while pybvh (0.7.0+)
+    stores ``joint_angles`` in radians: euler augmentation shrank
+    rotations ~57x on the way in and re-inflated them on the way out,
+    corrupting the root joint and amplifying noise.  These tests compare
+    against pybvh ground truth instead of self-inverse round trips,
+    which cancel a consistent unit error.
+    """
+
+    @pytest.mark.parametrize("fixture", ["bvh_example", "bvh_test3"])
+    def test_convert_arrays_matches_to_quat(self, request, fixture):
+        bvh = request.getfixturevalue(fixture)
+        _, quats_gt = bvh.to_quat()
+        result = convert_arrays(bvh.joint_angles, "euler", "quat",
+                                euler_orders=bvh.euler_orders)
+        np.testing.assert_allclose(
+            _align_quat_signs(result, quats_gt), quats_gt, atol=1e-6)
+
+    def _euler_vs_quat(self, bvh, fn, kwargs, rng_seed=None):
+        """Run fn on euler and quat inputs; return both results as rotmats."""
+        orders = bvh.euler_orders
+        pos_q, quats = bvh.to_quat()
+        kw_euler = dict(kwargs, representation="euler", euler_orders=orders)
+        kw_quat = dict(kwargs, representation="quat")
+        if rng_seed is not None:
+            kw_euler["rng"] = np.random.default_rng(rng_seed)
+            kw_quat["rng"] = np.random.default_rng(rng_seed)
+        pos_e, jd_e = fn(root_pos=bvh.root_pos, joint_data=bvh.joint_angles,
+                         **kw_euler)
+        pos_qr, jd_q = fn(root_pos=pos_q, joint_data=quats, **kw_quat)
+        R_e = convert_arrays(jd_e, "euler", "rotmat", euler_orders=orders)
+        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        return (pos_e, R_e), (pos_qr, R_q)
+
+    def test_rotate_vertical_euler_matches_quat(self, bvh_example):
+        (pos_e, R_e), (pos_q, R_q) = self._euler_vs_quat(
+            bvh_example, rotate_vertical,
+            {"angle": np.radians(73.0), "up_axis": "+y"})
+        np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
+
+    def test_mirror_euler_matches_quat(self, bvh_example):
+        pairs, lateral_axis, _ = _get_mirror_metadata(bvh_example)
+        (pos_e, R_e), (pos_q, R_q) = self._euler_vs_quat(
+            bvh_example, mirror,
+            {"lr_joint_pairs": pairs, "lateral_axis": lateral_axis})
+        np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
+
+    def test_add_joint_noise_euler_matches_quat(self, bvh_example):
+        (pos_e, R_e), (pos_q, R_q) = self._euler_vs_quat(
+            bvh_example, add_joint_noise,
+            {"sigma": np.radians(5.0)}, rng_seed=7)
+        np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
+
+    def test_speed_perturbation_euler_matches_quat(self, bvh_example):
+        (pos_e, R_e), (pos_q, R_q) = self._euler_vs_quat(
+            bvh_example, speed_perturbation_arrays, {"factor": 1.3})
+        np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
+
+    def test_dropout_euler_matches_quat(self, bvh_example):
+        (pos_e, R_e), (pos_q, R_q) = self._euler_vs_quat(
+            bvh_example, dropout_arrays,
+            {"drop_rate": 0.3}, rng_seed=11)
+        np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
+
+    def test_staged_pipeline_euler_matches_quat(self, bvh_example):
+        """The quat-caching pipeline path uses the same radians convention."""
+        orders = bvh_example.euler_orders
+        pos_q, quats = bvh_example.to_quat()
+
+        def build(representation, **extra):
+            steps = [
+                (rotate_vertical, 1.0,
+                 dict({"angle": np.radians(30.0), "up_axis": "+y",
+                       "representation": representation}, **extra)),
+                (add_joint_noise, 1.0,
+                 dict({"sigma": np.radians(2.0),
+                       "representation": representation}, **extra)),
+            ]
+            return AugmentationPipeline(steps, cache_quats=True)
+
+        pos_e, jd_e = build("euler", euler_orders=orders)(
+            root_pos=bvh_example.root_pos,
+            joint_data=bvh_example.joint_angles,
+            rng=np.random.default_rng(42))
+        pos_qr, jd_q = build("quat")(
+            root_pos=pos_q, joint_data=quats,
+            rng=np.random.default_rng(42))
+        R_e = convert_arrays(jd_e, "euler", "rotmat", euler_orders=orders)
+        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        np.testing.assert_allclose(pos_e, pos_qr, atol=1e-10)
+        np.testing.assert_allclose(R_e, R_q, atol=1e-6)
 
 
 # =============================================================================

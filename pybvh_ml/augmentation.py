@@ -74,8 +74,7 @@ def _to_quats(
             raise ValueError(
                 "euler_orders is required when representation='euler'")
         return rotations.convert(
-            joint_data, "euler", "quat",
-            order=euler_orders, degrees=True)
+            joint_data, "euler", "quat", order=euler_orders)
     return rotations.convert(joint_data, representation, "quat")
 
 
@@ -89,8 +88,7 @@ def _from_quats(
         return quats
     if representation == "euler":
         return rotations.convert(
-            quats, "quat", "euler",
-            order=euler_orders, degrees=True)
+            quats, "quat", "euler", order=euler_orders)
     return rotations.convert(quats, "quat", representation)
 
 

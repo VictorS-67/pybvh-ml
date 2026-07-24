@@ -75,8 +75,7 @@ class _StagingState:
             self.quats = self.jd
         elif self.current_repr == "euler":
             self.quats = rotations.convert(
-                self.jd, "euler", "quat",
-                order=self.euler_orders, degrees=True)
+                self.jd, "euler", "quat", order=self.euler_orders)
         else:
             self.quats = rotations.convert(
                 self.jd, self.current_repr, "quat")
@@ -91,8 +90,7 @@ class _StagingState:
             self.jd = q
         elif target_repr == "euler":
             self.jd = rotations.convert(
-                q, "quat", "euler",
-                order=self.euler_orders, degrees=True)
+                q, "quat", "euler", order=self.euler_orders)
         else:
             self.jd = rotations.convert(q, "quat", target_repr)
         self.current_repr = target_repr
