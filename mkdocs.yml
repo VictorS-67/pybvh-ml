@@ -37,6 +37,9 @@ theme:
     - search.highlight
     - content.code.copy
 
+extra_css:
+  - stylesheets/extra.css
+
 plugins:
   - search
   - mkdocstrings:
@@ -56,6 +59,7 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
+  - Gallery: gallery/index.md
   - User Guide:
     - Tensor Layouts & Packing: guide/tensor-layouts.md
     - Preprocessing Pipelines: guide/preprocessing.md
