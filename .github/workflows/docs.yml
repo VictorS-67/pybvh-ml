@@ -24,6 +24,10 @@ jobs:
       # after pybvh publishes.
       - run: pip install -e ".[docs,torch]"
 
+      # The gallery docs page is generated from the committed notebook
+      # outputs (no execution) — see scripts/export_gallery.py.
+      - run: python scripts/export_gallery.py
+
       # --strict fails the deploy on any broken internal link or cross-reference.
       - run: mkdocs build --strict
 

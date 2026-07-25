@@ -89,6 +89,8 @@ pybvh-ml/
 │   ├── test_docs_api_coverage.py     # docs/api pages ↔ modules two-way sync; __all__ resolution
 │   └── integration/             # real-data sweeps, seeding determinism, staging parity
 ├── tutorials/                   # 3 runnable notebooks (executed in CI via pytest --nbmake)
+├── gallery/                     # feature-gallery notebook (jupytext pair, outputs committed) + its plotting helpers
+├── scripts/                     # export_gallery.py — generates docs/gallery/ from the committed notebook outputs
 ├── docs/                        # MkDocs Material site source (deployed to GitHub Pages on push to main)
 ├── mkdocs.yml                   # site config; exclude_docs keeps gitignored docs/internal_logs/ out of local builds
 ├── pyproject.toml
@@ -238,7 +240,7 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 
 ## 8. Test Patterns
 
-Unit tests are in `tests/test_pybvh_ml.py` (22 test classes) plus `tests/test_torch_datasets.py` (3 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, and `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve) — 354 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (22 test classes) plus `tests/test_torch_datasets.py` (3 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 357 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures** (shared ones live in `tests/conftest.py`):
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)

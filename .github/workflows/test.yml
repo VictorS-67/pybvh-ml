@@ -31,8 +31,8 @@ jobs:
         pip install .[dev]
     - name: Run tests
       run: pytest tests/ -v
-    - name: Execute tutorial notebooks
-      run: pytest --nbmake tutorials/ -v
+    - name: Execute tutorial and gallery notebooks
+      run: pytest --nbmake tutorials/ gallery/feature_gallery.ipynb -v
 
   # Catches broken links / cross-references before they reach the deploy
   # (docs.yml only runs on push to main). Same pybvh-from-PyPI resolution
@@ -49,5 +49,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -e ".[docs,torch]"
+    - name: Export gallery page
+      run: python scripts/export_gallery.py
     - name: Build docs (strict)
       run: mkdocs build --strict
