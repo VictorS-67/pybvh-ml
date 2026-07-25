@@ -86,6 +86,7 @@ pybvh-ml/
 │   ├── test_pybvh_ml.py         # numpy-core unit tests (22 test classes)
 │   ├── test_torch_datasets.py   # torch Dataset/collate tests (skips without torch)
 │   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
+│   ├── test_docs_api_coverage.py     # docs/api pages ↔ modules two-way sync; __all__ resolution
 │   └── integration/             # real-data sweeps, seeding determinism, staging parity
 ├── tutorials/                   # 3 runnable notebooks (executed in CI via pytest --nbmake)
 ├── docs/                        # MkDocs Material site source (deployed to GitHub Pages on push to main)
@@ -237,7 +238,7 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 
 ## 8. Test Patterns
 
-Unit tests are in `tests/test_pybvh_ml.py` (22 test classes) plus `tests/test_torch_datasets.py` (3 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch) and `tests/test_no_pybvh_deprecation.py` — 350 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (22 test classes) plus `tests/test_torch_datasets.py` (3 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, and `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve) — 354 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures** (shared ones live in `tests/conftest.py`):
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)
