@@ -19,6 +19,10 @@ Conventions, shared by every packer:
 
 The root vertex carries 3 position channels; when `C > 3` (quat, 6D, or rotmat joint data), the root vertex's remaining `C - 3` channels are zero padding — the position values themselves are unchanged.
 
+![One clip in all three layouts: CTV and TVC single-frame slices with the root vertex's zero-padded channels marked, and the full flat clip with its columns mapped by describe_features](../gallery/img/layouts.png)
+
+*One real clip, all three layouts — the root zero-padding and the flat column map, drawn. ([Gallery](../gallery/index.md) for every figure.)*
+
 ## Packing and unpacking
 
 ```python
@@ -48,6 +52,10 @@ Two things to know:
 
 1. **This is pybvh-ml's convention, not pybvh's.** pybvh-ml's `center_root` subtracts the full 3D first-frame root position. pybvh's `centered="first"` is ground-plane-only (the up coordinate is untouched there).
 2. **Don't center twice — but know when twice is harmless.** `preprocess_directory` also centers by default and records the choice in the dataset metadata (`load_preprocessed(...)["center_root"]`). Re-centering a whole already-centered clip is idempotent (its first frame is already at the origin). The real hazard is **windowed sub-clips**: center the whole clip, then cut windows — if you instead pack each window with `center_root=True`, every window is re-based to its own first frame and the global trajectory is destroyed.
+
+![Top view of a root trajectory: centering the clip once keeps windows on the global path; packing each window with center_root=True re-bases every window to its own origin](../gallery/img/center-root-hazard.png)
+
+*The hazard, drawn: the same windows on the preserved global path (left) vs each re-based to its own origin (right).*
 
 When packing arrays that came out of `load_preprocessed`, pass `center_root=False` and let the stored metadata tell you whether the data was centered at preprocessing time.
 
@@ -86,6 +94,10 @@ clips = sample_temporal(data, clip_length=64, num_samples=5, mode="train", rng=r
 ```
 
 `sample_temporal` divides the sequence into `clip_length` equal segments and picks one frame per segment — random offsets in `"train"` mode (temporal augmentation), deterministic offsets in `"test"` mode (reproducible evaluation, and multiple `num_samples` are still distinct draws). The index-level primitive is `uniform_temporal_sample` if you want the indices without applying them.
+
+![Segment-shaded timeline with the frame indices picked by three train-mode draws and the deterministic test-mode draw](../gallery/img/temporal-sample.png)
+
+*One frame per segment: three train draws jitter within their segments; test mode is fixed.*
 
 ## See also
 

@@ -57,6 +57,10 @@ Each item is a dict with `"data"` — the flat `(T, D)` pack of the (augmented, 
 
 `collate_motion_batch` stacks variable-length items into `{"data", "mask", "lengths", "labels"}` with zero-padding to the batch maximum and a bool validity mask. Either every item in a batch carries a label or none does — mixed presence raises a `ValueError` naming the offending index rather than silently dropping labels.
 
+![Four variable-length clips collated: the padded batch tensor with its zero tail, and the boolean validity mask marking real frames per row](../gallery/img/collate-mask.png)
+
+*A four-clip batch: zero-padded data on top, the validity mask below. ([Gallery](../gallery/index.md) for every figure.)*
+
 ## Reproducible per-epoch augmentation
 
 When `seed` is set, the tuple `(seed, epoch, idx)` feeds a `numpy.random.SeedSequence`, so:
@@ -68,6 +72,10 @@ When `seed` is set, the tuple `(seed, epoch, idx)` feeds a `numpy.random.SeedSeq
 Call `dataset.set_epoch(epoch)` at the top of each epoch — the same contract as `torch.utils.data.distributed.DistributedSampler`. Forgetting it doesn't break anything: the dataset warns once and uses epoch 0 (every epoch replays the same augmentation draw).
 
 With `seed=None`, every call uses fresh OS entropy — simplest, no reproducibility.
+
+![Per-frame deviation curves for three epochs from two independently constructed datasets sharing a seed: each epoch's two curves coincide exactly, and the three epochs differ](../gallery/img/epoch-determinism.png)
+
+*The contract, drawn: run B (dashed) lies exactly on run A (solid) for every epoch; each epoch is a fresh draw.*
 
 !!! note "Why `set_epoch` works with worker processes (and what it costs)"
     DataLoader workers hold a *copy* of the dataset, created once — with `persistent_workers=True`, that copy lives for the whole training run, so a plain-attribute epoch would silently freeze at its startup value in every worker. The epoch therefore lives in shared memory (a `multiprocessing.Value`), which worker processes inherit at creation — fork and spawn both. One consequence, stated on both classes: dataset instances can't be `deepcopy`-ed or `torch.save`-ed directly, because shared state only travels to other processes via DataLoader worker inheritance. Save your model, not your dataset.

@@ -10,7 +10,7 @@ ML bridge layer for [pybvh](https://github.com/VictorS-67/pybvh) — turn motion
 
 > **Status:** pre-1.0. Minor versions can include breaking API changes; see [CHANGELOG.md](CHANGELOG.md) for migration notes.
 
-**[Documentation](https://victors-67.github.io/pybvh-ml/)** · [Quick Start](https://victors-67.github.io/pybvh-ml/getting-started/quickstart/) · [Find a function](https://victors-67.github.io/pybvh-ml/api/) · [User Guide](https://victors-67.github.io/pybvh-ml/guide/tensor-layouts/) · [Tutorials](https://victors-67.github.io/pybvh-ml/tutorials/)
+**[Documentation](https://victors-67.github.io/pybvh-ml/)** · [Quick Start](https://victors-67.github.io/pybvh-ml/getting-started/quickstart/) · [Gallery](https://victors-67.github.io/pybvh-ml/gallery/) — every concept, one picture each · [Find a function](https://victors-67.github.io/pybvh-ml/api/) · [User Guide](https://victors-67.github.io/pybvh-ml/guide/tensor-layouts/) · [Tutorials](https://victors-67.github.io/pybvh-ml/tutorials/)
 
 ## Features
 

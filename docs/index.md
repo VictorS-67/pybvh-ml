@@ -7,6 +7,7 @@ pybvh-ml is the layer between pybvh (which parses BVH files and does rotation ma
 <div class="grid cards" markdown>
 
 - :material-rocket-launch: **[Quick Start](getting-started/quickstart.md)** — BVH directory to training batch in five minutes
+- :material-image-multiple: **[Gallery](gallery/index.md)** — layouts, masks, graphs, reproducibility: every pybvh-ml-specific concept, one picture and one call each
 - :material-magnify: **[Find a function](api/index.md)** — "I want to…" → the exact call → its reference page
 - :material-book-open-variant: **[User Guide](guide/tensor-layouts.md)** — layouts, preprocessing, augmentation, PyTorch, skeleton graphs
 - :material-swap-horizontal: **[CHANGELOG](https://github.com/VictorS-67/pybvh-ml/blob/main/CHANGELOG.md)** — the migration record: breaking changes and upgrade notes for every release
