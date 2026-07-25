@@ -3,6 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/pybvh-ml)](https://pypi.org/project/pybvh-ml/)
 [![Python](https://img.shields.io/pypi/pyversions/pybvh-ml)](https://pypi.org/project/pybvh-ml/)
 [![Tests](https://github.com/VictorS-67/pybvh-ml/actions/workflows/test.yml/badge.svg)](https://github.com/VictorS-67/pybvh-ml/actions/workflows/test.yml)
+[![Docs](https://github.com/VictorS-67/pybvh-ml/actions/workflows/docs.yml/badge.svg)](https://victors-67.github.io/pybvh-ml/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ML bridge layer for [pybvh](https://github.com/VictorS-67/pybvh) — turn motion capture data into training-ready inputs for skeleton-based ML models.
