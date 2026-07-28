@@ -87,14 +87,35 @@ def standardize_length(
         Value used for padding (default 0.0).  Only used by
         ``"pad"`` and ``"crop"`` methods.
 
+        Padding is a constant appended at the *end*; the alternatives are
+        front-padding and edge-repeat (holding the last frame), neither of
+        which is provided.  The three differ for any model that reads the
+        padded frames — pair padded arrays with a length or mask, as
+        :func:`pybvh_ml.torch.collate_motion_batch` returns, so that they
+        never do.
+
+        The default ``0.0`` is a valid feature value but **not a valid
+        rotation** in any representation pybvh-ml packs: the zero quaternion
+        has no norm, the zero 6D pair has no orthonormalization, and the
+        zero rotation matrix is singular.  Zero *is* the identity for
+        Euler and axis-angle, so those pad to a rest pose rather than to
+        something undefined.  There is no scalar ``pad_value`` that
+        expresses the identity for quaternion / 6D / rotation-matrix
+        arrays — mask the padded frames instead of trying to pick one.
+
     Returns
     -------
     ndarray, shape (target_length, ...)
+        ``"pad"`` and ``"crop"`` preserve the input dtype — they only
+        select and append frames, so a ``float32`` clip stays
+        ``float32`` rather than silently doubling in size.
+        ``"resample_linear"`` returns ``float64``: it computes new
+        values, and the interpolation runs in double precision.
     """
     if target_length < 1:
         raise ValueError(
             f"target_length must be >= 1, got {target_length}")
-    data = np.asarray(data, dtype=np.float64)
+    data = np.asarray(data)
     T = data.shape[0]
 
     if method == "pad":
@@ -159,17 +180,38 @@ def uniform_temporal_sample(
     clip_length : int
         Number of frame indices to return.
     mode : {"train", "test"}
-        ``"train"`` for random offsets, ``"test"`` for deterministic.
+        Offset policy within each segment.  Both modes *draw* their
+        offsets from the generator; they differ in which generator they
+        default to when ``rng`` is None — fresh entropy for ``"train"``,
+        a fixed ``default_rng(0)`` for ``"test"``, which is what makes
+        test-mode indices repeatable rather than making them zero.  The
+        one exception is the short-clip regime, where test mode starts
+        at frame 0.
     rng : numpy Generator, optional
-        Drives the sampling in both modes.  ``None`` defaults to fresh
-        entropy in train mode and to a fixed ``default_rng(0)`` in
-        test mode (deterministic across calls).
+        Drives the sampling in **both** modes.  ``None`` uses fresh
+        entropy in train mode and a fixed ``default_rng(0)`` in test
+        mode.
 
     Returns
     -------
     ndarray of shape (clip_length,), dtype int
         Frame indices.  May contain values ``>= num_frames`` when
         ``num_frames < clip_length``; apply ``% num_frames`` to use.
+
+    Notes
+    -----
+    **``mode="test"`` alone is not a reproducibility guarantee.**  Test
+    mode fixes the offset *policy*, not the generator: a supplied
+    ``rng`` overrides the fixed default in test mode as much as in
+    train mode.  Passing one generator shared with other draws — the
+    natural thing to do when the same object is threaded through both
+    modes — means it has advanced by the time the next call arrives, so
+    repeated reads of the same clip return different frames.  Pass
+    ``rng=None``, or a generator freshly seeded per call, whenever
+    repeated reads must agree.
+
+    Before 0.5.0 test mode discarded a supplied ``rng`` outright, which
+    made a shared generator harmless here and hid the distinction.
     """
     if num_frames < 1:
         raise ValueError(f"num_frames must be >= 1, got {num_frames}")
@@ -236,6 +278,11 @@ def sample_temporal(
         (reproducible across calls).
     mode : {"train", "test"}
     rng : numpy Generator, optional
+        Drives the sampling in **both** modes; ``None`` uses fresh
+        entropy in train mode and a fixed ``default_rng(0)`` in test
+        mode.  Supplying a generator that is shared with other draws
+        makes even ``mode="test"`` vary between calls — see the Notes
+        on :func:`uniform_temporal_sample`.
 
     Returns
     -------
@@ -269,7 +316,7 @@ def _pad(
     target_length: int,
     pad_value: float,
 ) -> npt.NDArray[np.float64]:
-    """Pad *data* along axis 0 to *target_length*."""
+    """Pad *data* along axis 0 to *target_length*, keeping its dtype."""
     pad_shape = (target_length - data.shape[0],) + data.shape[1:]
-    padding = np.full(pad_shape, pad_value, dtype=np.float64)
+    padding = np.full(pad_shape, pad_value, dtype=data.dtype)
     return np.concatenate([data, padding], axis=0)

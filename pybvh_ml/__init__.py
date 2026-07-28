@@ -35,7 +35,7 @@ from .augmentation import (
     dropout_arrays,
 )
 from .convert import convert_arrays
-from .pipeline import AugmentationPipeline
+from .pipeline import AugmentationPipeline, AugmentationStep
 from .preprocessing import (
     preprocess_directory,
     load_preprocessed,
@@ -76,6 +76,7 @@ __all__ = [
     "dropout_arrays",
     "convert_arrays",
     "AugmentationPipeline",
+    "AugmentationStep",
     # preprocessing
     "preprocess_directory",
     "load_preprocessed",

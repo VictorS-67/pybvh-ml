@@ -4,6 +4,9 @@ Tests for pybvh-ml library.
 Run with: pytest tests/test_pybvh_ml.py -v
 """
 
+import functools
+import warnings
+
 import pytest
 import numpy as np
 from pathlib import Path
@@ -467,7 +470,7 @@ from pybvh_ml.augmentation import (
 )
 from pybvh_ml.sequences import uniform_temporal_sample, sample_temporal
 from pybvh_ml.convert import convert_arrays
-from pybvh_ml.pipeline import AugmentationPipeline
+from pybvh_ml.pipeline import AugmentationPipeline, AugmentationStep
 
 
 def _get_quat_data(bvh):
@@ -546,9 +549,12 @@ class TestQuaternionAugmentation:
 
     def test_rotate_quat_bad_axis_raises(self, bvh_example):
         pos, quats = _get_quat_data(bvh_example)
-        with pytest.raises(ValueError, match="axis must be"):
+        # Message comes from pybvh.parse_axis since 0.5.0 ("Axis must be
+        # one of [...]"); an unsigned letter states no direction and is
+        # rejected as firmly as a nonexistent one.
+        with pytest.raises(ValueError, match="(?i)axis must be"):
             rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="y", representation="quat")
-        with pytest.raises(ValueError, match="axis must be"):
+        with pytest.raises(ValueError, match="(?i)axis must be"):
             rotate_vertical(root_pos=pos, joint_data=quats, angle=np.radians(90.0), up_axis="+w", representation="quat")
 
     @pytest.mark.parametrize("up_idx", [0, 1, 2])
@@ -1995,9 +2001,10 @@ class TestPreprocessing:
             harmonize=True, target_euler_order="ZYX")
         loaded = load_preprocessed(out)
         assert loaded["uniformity"] is not None
-        import json as _json
-        assert (_json.loads(_json.dumps(loaded["uniformity"]))
-                == _json.loads(_json.dumps(result["uniformity"])))
+        # Compared directly, not through a json round trip on both sides:
+        # laundering each dict through json hid a key that only survives
+        # the trip in one direction (a None key persisting as "null").
+        assert loaded["uniformity"] == result["uniformity"]
         assert loaded["uniformity"]["harmonized_to"]["retarget"] is False
 
     @pytest.mark.parametrize("harmonize_on,expected", [
@@ -2009,6 +2016,7 @@ class TestPreprocessing:
         import warnings as _warnings
         from pybvh_ml.preprocessing import _warn_if_heterogeneous
         uniformity = {
+            "fps": {"30": ["a", "b", "c"]},
             "world_up": {"+y": ["a", "b"], "+z": ["c"]},
             "rest_forward": {"+x": ["a", "b", "c"]},
             "rest_up": {"+y": ["a", "b", "c"]},
@@ -2021,6 +2029,35 @@ class TestPreprocessing:
         messages = [str(w.message) for w in caught]
         assert len(messages) == 1
         assert expected in messages[0]
+
+    @pytest.mark.parametrize("target_fps,expect_warning", [
+        (None, True),
+        (30.0, False),
+    ])
+    def test_mixed_frame_rate_warns_unless_targeted(
+            self, target_fps, expect_warning):
+        """A mixed-rate dataset is a silent training bug — every
+        frame-indexed feature is sampled at its own clip's rate — so the
+        audit flags it, and passing target_fps signals intent and
+        silences it (same contract as the target_* axis kwargs)."""
+        import warnings as _warnings
+        from pybvh_ml.preprocessing import _warn_if_heterogeneous
+        uniformity = {
+            "fps": {"30": ["a", "b"], "120": ["c"]},
+            "world_up": {"+y": ["a", "b", "c"]},
+            "rest_forward": {"+x": ["a", "b", "c"]},
+            "rest_up": {"+y": ["a", "b", "c"]},
+            "rest_anim_mismatch": [],
+        }
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            _warn_if_heterogeneous(
+                uniformity, None, None, None, target_fps, harmonize=False)
+        messages = [str(w.message) for w in caught]
+        assert len(messages) == (1 if expect_warning else 0)
+        if expect_warning:
+            assert "Frame rate is not uniform" in messages[0]
+            assert "target_fps=<hz>" in messages[0]
 
     def test_bad_output_extension_raises_before_parsing(self, tmp_path):
         """Unknown extensions fail up front — np.savez used to silently
@@ -2040,22 +2077,24 @@ class TestPreprocessing:
                 tmp_path / "does_not_exist", tmp_path / "out.npz",
                 representation="rotmat")
 
-    def test_majority_value_ignores_none_keys(self):
-        """Degenerate rigs put a None key in the rest_up distribution;
-        it must neither crash the tie-break nor win the majority."""
-        from pybvh_ml.preprocessing import _majority_value
-        assert _majority_value({"+y": ["a"], None: ["b", "c"]}) == "+y"
-        assert _majority_value({None: ["a", "b"]}) is None
+    def test_majority_value_ignores_unknown_key(self):
+        """Degenerate rigs are filed under the 'unknown' sentinel; it must
+        neither crash the tie-break nor win the majority."""
+        from pybvh_ml.preprocessing import _majority_value, _REST_UP_UNKNOWN
+        U = _REST_UP_UNKNOWN
+        assert _majority_value({"+y": ["a"], U: ["b", "c"]}) == "+y"
+        assert _majority_value({U: ["a", "b"]}) is None
         assert _majority_value({}) is None
-        # Regression: None vs str comparison in the lexical tie-break.
-        assert _majority_value({"+y": ["a"], None: ["b"]}) == "+y"
+        assert _majority_value({"+y": ["a"], U: ["b"]}) == "+y"
 
-    def test_resolve_targets_skips_all_none_rest_up(self):
-        from pybvh_ml.preprocessing import _resolve_harmonize_targets
+    def test_resolve_targets_skips_all_unknown_rest_up(self):
+        from pybvh_ml.preprocessing import (
+            _resolve_harmonize_targets, _REST_UP_UNKNOWN)
         uniformity = {
+            "fps": {"30": ["a", "b"]},
             "world_up": {"+y": ["a", "b"]},
             "rest_forward": {"+x": ["a", "b"]},
-            "rest_up": {None: ["a", "b"]},
+            "rest_up": {_REST_UP_UNKNOWN: ["a", "b"]},
             "rest_anim_mismatch": ["a", "b"],
         }
         targets = _resolve_harmonize_targets(
@@ -2222,6 +2261,7 @@ class TestPreprocessing:
         from pybvh_ml.preprocessing import _warn_if_heterogeneous
 
         uniformity = {
+            "fps": {"30": ["clip_a", "clip_b"]},
             "world_up": {"+y": ["clip_a", "clip_b"]},
             "rest_forward": {"+z": ["clip_a", "clip_b"]},
             "rest_up": {"+y": ["clip_a", "clip_b"]},
@@ -2916,6 +2956,224 @@ class TestPipelineRngForwarding:
 
 
 # =============================================================================
+# Pipeline return_params
+# =============================================================================
+
+class TestPipelineReturnParams:
+    """Tests for AugmentationPipeline(..., return_params=True)."""
+
+    @staticmethod
+    def _sampling_pipeline(cache_quats=True, mirror_prob=1.0):
+        """rotate (sampled angle) + mirror (probabilistic) + noise (static)."""
+        return AugmentationPipeline([
+            (rotate_vertical, 1.0, {
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
+                "up_axis": "+y",
+                "representation": "quat",
+            }),
+            (mirror, mirror_prob, {
+                "lr_joint_pairs": [(1, 2)],
+                "lateral_axis": "+x",
+                "representation": "quat",
+            }),
+            (add_joint_noise, 1.0, {
+                "sigma": np.radians(2.0), "representation": "quat"}),
+        ], cache_quats=cache_quats)
+
+    def test_default_returns_two_values(self, bvh_example):
+        """The flag is opt-in: the 2-tuple contract is unchanged."""
+        pos, quats = _get_quat_data(bvh_example)
+        result = self._sampling_pipeline()(
+            root_pos=pos, joint_data=quats, rng=np.random.default_rng(0))
+        assert len(result) == 2
+
+    def test_records_one_entry_per_step_in_order(self, bvh_example):
+        """Records are index-aligned with pipeline.augmentations."""
+        pos, quats = _get_quat_data(bvh_example)
+        pipeline = self._sampling_pipeline()
+        _, _, params = pipeline(root_pos=pos, joint_data=quats,
+                                rng=np.random.default_rng(0),
+                                return_params=True)
+        assert len(params) == len(pipeline)
+        assert [p["name"] for p in params] == [
+            fn.__name__ for fn, _, _ in pipeline.augmentations]
+
+    def test_sampled_values_are_what_the_function_received(self, bvh_example):
+        """The reported angle is the angle the augmentation was called with."""
+        pos, quats = _get_quat_data(bvh_example)
+        seen = {}
+
+        def spy(*, root_pos, joint_data, angle, representation):
+            seen["angle"] = angle
+            return root_pos, joint_data
+
+        pipeline = AugmentationPipeline([
+            (spy, 1.0, {"angle": lambda rng: rng.uniform(-np.pi, np.pi),
+                        "representation": "quat"}),
+        ])
+        _, _, params = pipeline(root_pos=pos, joint_data=quats,
+                                rng=np.random.default_rng(7),
+                                return_params=True)
+        assert params[0]["params"]["angle"] == seen["angle"]
+
+    def test_static_kwargs_and_rng_excluded(self, bvh_example):
+        """Only sampled kwargs are reported; config and machinery are not."""
+        pos, quats = _get_quat_data(bvh_example)
+        _, _, params = self._sampling_pipeline()(
+            root_pos=pos, joint_data=quats, rng=np.random.default_rng(0),
+            return_params=True)
+        assert set(params[0]["params"]) == {"angle"}
+        assert params[2]["params"] == {}          # noise: sigma is static
+        for record in params:
+            assert "rng" not in record["params"]
+            assert "representation" not in record["params"]
+
+    def test_applied_reflects_probability(self, bvh_example):
+        """prob=0 never fires, prob=1 always does."""
+        pos, quats = _get_quat_data(bvh_example)
+        for prob, expected in ((0.0, False), (1.0, True)):
+            _, _, params = self._sampling_pipeline(mirror_prob=prob)(
+                root_pos=pos, joint_data=quats,
+                rng=np.random.default_rng(3), return_params=True)
+            assert params[1]["applied"] is expected
+
+    def test_skipped_step_reports_no_params(self, bvh_example):
+        """A step that never fires resolves nothing."""
+        pos, quats = _get_quat_data(bvh_example)
+        drawn = []
+        pipeline = AugmentationPipeline([
+            (rotate_vertical, 0.0, {
+                "angle": lambda rng: drawn.append(1) or 0.5,
+                "up_axis": "+y", "representation": "quat"}),
+        ])
+        _, _, params = pipeline(root_pos=pos, joint_data=quats,
+                                rng=np.random.default_rng(0),
+                                return_params=True)
+        assert params[0] == {"name": "rotate_vertical", "applied": False,
+                             "params": {}}
+        assert drawn == []          # the callable was never invoked
+
+    def test_does_not_perturb_the_random_stream(self, bvh_example):
+        """Asking for params must not change what the pipeline produces."""
+        pos, quats = _get_quat_data(bvh_example)
+        pipeline = self._sampling_pipeline(mirror_prob=0.5)
+        p1, q1 = pipeline(root_pos=pos.copy(), joint_data=quats.copy(),
+                          rng=np.random.default_rng(11))
+        p2, q2, _ = pipeline(root_pos=pos.copy(), joint_data=quats.copy(),
+                             rng=np.random.default_rng(11),
+                             return_params=True)
+        np.testing.assert_array_equal(p1, p2)
+        np.testing.assert_array_equal(q1, q2)
+
+    def test_staged_and_direct_paths_agree(self, bvh_example):
+        """cache_quats=True/False report identical records for one seed."""
+        pos, quats = _get_quat_data(bvh_example)
+        records = []
+        for cache in (True, False):
+            _, _, params = self._sampling_pipeline(
+                cache_quats=cache, mirror_prob=0.5)(
+                root_pos=pos.copy(), joint_data=quats.copy(),
+                rng=np.random.default_rng(5), return_params=True)
+            records.append(params)
+        assert records[0] == records[1]
+
+    def test_custom_step_in_staged_path_recorded(self, bvh_example):
+        """An unregistered function still reports its sampled kwargs."""
+        pos, quats = _get_quat_data(bvh_example)
+
+        def custom(*, root_pos, joint_data, scale, representation):
+            return root_pos * scale, joint_data
+
+        pipeline = AugmentationPipeline([
+            (custom, 1.0, {"scale": lambda rng: rng.uniform(1.0, 2.0),
+                           "representation": "quat"}),
+        ])
+        _, _, params = pipeline(root_pos=pos, joint_data=quats,
+                                rng=np.random.default_rng(2),
+                                return_params=True)
+        assert params[0]["name"] == "custom"
+        assert 1.0 <= params[0]["params"]["scale"] <= 2.0
+
+    def test_empty_pipeline_returns_empty_records(self, bvh_example):
+        pos, quats = _get_quat_data(bvh_example)
+        new_p, new_q, params = AugmentationPipeline([])(
+            root_pos=pos, joint_data=quats, return_params=True)
+        assert params == []
+        np.testing.assert_array_equal(new_q, quats)
+
+    def test_standard_pipeline_records_are_json_serializable(self, bvh_example):
+        """The logging use case: dump per-sample draws straight to JSON."""
+        import json
+
+        pos, quats = _get_quat_data(bvh_example)
+        skel = get_skeleton_info(bvh_example)
+        pipeline = AugmentationPipeline.standard(
+            skel, representation="quat", up_axis=bvh_example.world_up)
+        _, _, params = pipeline(root_pos=pos, joint_data=quats,
+                                rng=np.random.default_rng(0),
+                                return_params=True)
+        assert json.loads(json.dumps(params)) == params
+
+
+class TestPipelineStepsWithoutName:
+    """Steps that are not plain functions still run and still report.
+
+    ``functools.partial`` and callable instances are the two natural
+    ways to write a custom step with baked-in configuration, and
+    neither carries ``__name__`` — reading it unguarded broke every
+    call, not just ``return_params=True`` ones.
+    """
+
+    @staticmethod
+    def _scale_root(root_pos, joint_data, representation="quat", scale=1.0):
+        return root_pos * scale, joint_data
+
+    @pytest.fixture
+    def steps(self):
+        class ScalerStep:
+            def __call__(self, root_pos, joint_data, representation="quat"):
+                return root_pos * 3.0, joint_data
+
+        partial_step = functools.partial(
+            TestPipelineStepsWithoutName._scale_root, scale=2.0)
+        return {"partial": (partial_step, 2.0), "callable": (ScalerStep(), 3.0)}
+
+    @pytest.mark.parametrize("kind", ["partial", "callable"])
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_step_runs(self, bvh_example, steps, kind, cache_quats):
+        pos, quats = _get_quat_data(bvh_example)
+        step, scale = steps[kind]
+        pipeline = AugmentationPipeline(
+            [(step, 1.0, {"representation": "quat"})], cache_quats=cache_quats)
+
+        new_pos, _ = pipeline(root_pos=pos, joint_data=quats,
+                              rng=np.random.default_rng(0))
+
+        np.testing.assert_allclose(new_pos, pos * scale)
+
+    @pytest.mark.parametrize("kind, expected", [
+        ("partial", "_scale_root"),      # unwrapped to the wrapped function
+        ("callable", "ScalerStep"),      # falls back to the class name
+    ])
+    def test_record_name(self, bvh_example, steps, kind, expected):
+        pos, quats = _get_quat_data(bvh_example)
+        step, _ = steps[kind]
+        pipeline = AugmentationPipeline([(step, 1.0, {"representation": "quat"})])
+
+        _, _, params = pipeline(root_pos=pos, joint_data=quats,
+                                rng=np.random.default_rng(0),
+                                return_params=True)
+
+        assert params[0]["name"] == expected
+
+    @pytest.mark.parametrize("kind", ["partial", "callable"])
+    def test_repr(self, steps, kind):
+        pipeline = AugmentationPipeline(
+            [(steps[kind][0], 1.0, {"representation": "quat"})])
+        assert "AugmentationPipeline" in repr(pipeline)
+
+
+# =============================================================================
 # Preprocessing filter_fn
 # =============================================================================
 
@@ -2993,14 +3251,40 @@ class TestPreprocessingFilter:
 
 
 class TestVersionFloor:
-    """pybvh-ml 0.5 requires pybvh >= 0.8 (pyproject pin: pybvh>=0.8,<0.9)."""
+    """pybvh-ml 0.5 requires pybvh >= 0.8.1 (pin: pybvh>=0.8.1,<0.9)."""
 
-    def test_pybvh_version_floor(self):
+    def test_pybvh_provides_the_api_the_floor_exists_for(self):
+        """Asserted by capability, not by version string.
+
+        The floor exists to guarantee these symbols; a string
+        comparison would additionally go red during the coordinated
+        release window, when the sister repo carries the API but has
+        not yet bumped its ``__version__`` — a release-ordering fact,
+        not a correctness one.
+        """
         import pybvh
-        major, minor = (int(x) for x in pybvh.__version__.split(".")[:2])
-        assert (major, minor) >= (0, 8), (
-            f"pybvh-ml >= 0.5 requires pybvh >= 0.8.0, "
-            f"got {pybvh.__version__}")
+        assert hasattr(pybvh, "parse_axis")        # 0.8.1
+        assert hasattr(pybvh.rotations, "quat_multiply")   # 0.8.0
+        assert hasattr(pybvh.Bvh, "to_quat")               # 0.8.0
+        assert not hasattr(pybvh.Bvh, "to_quaternions")    # removed in 0.8.0
+
+    def test_pyproject_floor_covers_parse_axis(self):
+        import re
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        match = re.search(r'"pybvh>=([\d.]+),', pyproject.read_text())
+        assert match is not None
+        floor = tuple(int(x) for x in match.group(1).split("."))
+        assert floor >= (0, 8, 1), (
+            "pybvh.parse_axis ships in pybvh 0.8.1; a lower floor would "
+            "let pybvh-ml install against a pybvh that lacks it")
+
+    def test_public_parse_axis_is_used(self):
+        """The private _parse_axis copy is gone: pybvh made it public,
+        so per the charter pybvh-ml consumes it rather than keeping a
+        reimplementation."""
+        from pybvh_ml import augmentation, _staged
+        assert not hasattr(augmentation, "_parse_axis")
+        assert augmentation.parse_axis is _staged.parse_axis
 
     def test_version_matches_pyproject(self):
         # Guards the pyproject/__init__ version drift that shipped in 0.3/0.4.
@@ -3011,3 +3295,772 @@ class TestVersionFloor:
             r'^version = "(.+)"$', pyproject.read_text(), re.MULTILINE)
         assert match is not None
         assert match.group(1) == pybvh_ml.__version__
+
+
+class TestAugmentationStep:
+    """Pipeline steps are named tuples — introspection reads, and index
+    access keeps working."""
+
+    def _step(self):
+        return (dropout_arrays, 0.25, {"drop_rate": 0.1,
+                                       "representation": "quat"})
+
+    def test_named_fields(self):
+        pipeline = AugmentationPipeline([self._step()])
+        step = pipeline.augmentations[0]
+        assert step.fn is dropout_arrays
+        assert step.prob == 0.25
+        assert step.kwargs["drop_rate"] == 0.1
+
+    def test_index_access_still_works(self):
+        """Downstream tests assert on augmentations[i][2] — a NamedTuple
+        is a tuple, so nothing that read positionally breaks."""
+        pipeline = AugmentationPipeline([self._step()])
+        step = pipeline.augmentations[0]
+        assert step[0] is dropout_arrays
+        assert step[1] == 0.25
+        assert step[2]["drop_rate"] == 0.1
+        fn, prob, kwargs = step
+        assert (fn, prob) == (dropout_arrays, 0.25)
+
+    def test_exported(self):
+        import pybvh_ml
+        assert pybvh_ml.AugmentationStep is AugmentationStep
+        assert "AugmentationStep" in pybvh_ml.__all__
+
+    @pytest.mark.parametrize("bad,match", [
+        ((dropout_arrays, 0.5), "must be a \\(fn, probability, kwargs\\) triple"),
+        ((None, 0.5, {}), "must be callable"),
+        ((dropout_arrays, 1.5, {}), "probability in \\[0, 1\\]"),
+        ((dropout_arrays, -0.1, {}), "probability in \\[0, 1\\]"),
+        ((dropout_arrays, "x", {}), "probability in \\[0, 1\\]"),
+        ((dropout_arrays, 0.5, "nope"), "must be a dict of kwargs"),
+    ])
+    def test_malformed_steps_raise_at_construction(self, bad, match):
+        """A bad step used to surface as an opaque unpacking error inside
+        __getitem__, or as a step that silently always fired."""
+        with pytest.raises(ValueError, match=match):
+            AugmentationPipeline([bad])
+
+
+class TestPipelineRepresentationDefault:
+    """A pipeline is homogeneous in practice — declare the
+    representation once instead of on every step."""
+
+    def _arrays(self, bvh_example):
+        root_pos, quats = bvh_example.to_quat()
+        return root_pos[:10].copy(), quats[:10].copy()
+
+    def test_pipeline_level_representation_feeds_every_step(
+            self, bvh_example, rng):
+        rp, jd = self._arrays(bvh_example)
+        pipeline = AugmentationPipeline([
+            (rotate_vertical, 1.0, {"angle": 0.3,
+                                    "up_axis": bvh_example.world_up}),
+            (add_joint_noise, 1.0, {"sigma": 0.01}),
+        ], representation="quat")
+        new_rp, new_jd = pipeline(root_pos=rp, joint_data=jd, rng=rng)
+        assert new_jd.shape == jd.shape
+
+    def test_matches_per_step_declaration(self, bvh_example):
+        """Same draws, same result — the default is a spelling of what
+        the per-step kwarg already said."""
+        rp, jd = self._arrays(bvh_example)
+        steps_bare = [(rotate_vertical, 1.0,
+                       {"angle": 0.3, "up_axis": bvh_example.world_up})]
+        steps_full = [(rotate_vertical, 1.0,
+                       {"angle": 0.3, "up_axis": bvh_example.world_up,
+                        "representation": "quat"})]
+        a = AugmentationPipeline(steps_bare, representation="quat")(
+            root_pos=rp, joint_data=jd, rng=np.random.default_rng(0))
+        b = AugmentationPipeline(steps_full)(
+            root_pos=rp, joint_data=jd, rng=np.random.default_rng(0))
+        np.testing.assert_allclose(a[0], b[0], rtol=0, atol=0)
+        np.testing.assert_allclose(a[1], b[1], rtol=0, atol=0)
+
+    def test_per_step_override_wins(self, bvh_example, rng):
+        """The step's own token beats the pipeline default."""
+        rp, rot6d = bvh_example.to_6d()
+        pipeline = AugmentationPipeline([
+            (rotate_vertical, 1.0, {"angle": 0.3,
+                                    "up_axis": bvh_example.world_up,
+                                    "representation": "6d"}),
+        ], representation="quat")
+        _, new_jd = pipeline(root_pos=rp[:10].copy(),
+                             joint_data=rot6d[:10].copy(), rng=rng)
+        assert new_jd.shape[-1] == 6
+
+    def test_satisfies_the_cache_quats_requirement(self, bvh_example, rng):
+        """cache_quats=True needs *something* to declare the
+        representation; the pipeline-level default is that something."""
+        rp, jd = self._arrays(bvh_example)
+        pipeline = AugmentationPipeline(
+            [(add_joint_noise, 1.0, {"sigma": 0.01})], representation="quat")
+        new_rp, new_jd = pipeline(root_pos=rp, joint_data=jd, rng=rng)
+        assert new_jd.shape == jd.shape
+
+    def test_still_raises_when_nothing_declares_one(self, bvh_example, rng):
+        rp, jd = self._arrays(bvh_example)
+        pipeline = AugmentationPipeline(
+            [(add_joint_noise, 1.0, {"sigma": 0.01})])
+        with pytest.raises(ValueError, match="No representation declared"):
+            pipeline(root_pos=rp, joint_data=jd, rng=rng)
+
+    def test_custom_step_without_the_parameter_is_untouched(
+            self, bvh_example, rng):
+        """Injection is signature-aware: a custom step that doesn't take
+        `representation` is still called with exactly its own kwargs."""
+        seen = {}
+
+        def custom(*, root_pos, joint_data, scale):
+            seen["kwargs"] = {"scale": scale}
+            return root_pos * scale, joint_data
+
+        rp, jd = self._arrays(bvh_example)
+        pipeline = AugmentationPipeline(
+            [(custom, 1.0, {"scale": 2.0})], representation="quat")
+        pipeline(root_pos=rp, joint_data=jd, rng=rng)
+        assert seen["kwargs"] == {"scale": 2.0}
+
+    def test_euler_orders_default(self, bvh_example, rng):
+        orders = list(bvh_example.euler_orders)
+        rp = bvh_example.root_pos[:10].copy()
+        jd = bvh_example.joint_angles[:10].copy()
+        pipeline = AugmentationPipeline(
+            [(add_joint_noise, 1.0, {"sigma": 0.01})],
+            representation="euler", euler_orders=orders)
+        _, new_jd = pipeline(root_pos=rp, joint_data=jd, rng=rng)
+        assert new_jd.shape == jd.shape
+
+    def test_standard_factory_uses_the_pipeline_level_defaults(
+            self, bvh_example):
+        """The factory builds exactly the homogeneous pipeline these
+        defaults exist for — it should not repeat the token five times."""
+        info = get_skeleton_info(bvh_example)
+        pipeline = AugmentationPipeline.standard(info, representation="6d")
+        assert pipeline.representation == "6d"
+        assert all("representation" not in step.kwargs
+                   for step in pipeline.augmentations)
+
+    def test_repr_shows_the_defaults(self, bvh_example):
+        pipeline = AugmentationPipeline(
+            [(add_joint_noise, 1.0, {"sigma": 0.01})], representation="quat")
+        assert "representation='quat'" in repr(pipeline)
+
+
+class TestPreprocessFrameRate:
+    """`target_fps=` — resampling before extraction is what makes every
+    derived feature describe the motion at the target rate."""
+
+    @pytest.fixture
+    def mixed_dir(self, tmp_path, bvh_dir):
+        from pybvh import read_bvh_file, write_bvh_file
+        work = tmp_path / "work"
+        work.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work / "a.bvh")
+        write_bvh_file(bvh.resample(1.0 / bvh.frame_time / 4), work / "b.bvh")
+        return work
+
+    def test_uniformity_audit_records_frame_rate(self, mixed_dir, tmp_path):
+        out = tmp_path / "ds.npz"
+        with pytest.warns(UserWarning, match="Frame rate is not uniform"):
+            result = preprocess_directory(mixed_dir, out)
+        assert len(result["uniformity"]["fps"]) == 2
+
+    def test_target_fps_resamples_before_extraction(self, tmp_path, bvh_dir):
+        from pybvh import read_bvh_file
+        source = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        original_fps = 1.0 / source.frame_time
+        out = tmp_path / "ds.npz"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh",
+                             target_fps=original_fps / 4)
+        loaded = load_preprocessed(out)
+        frames = loaded["clips"][0]["root_pos"].shape[0]
+        assert frames == pytest.approx(source.frame_count / 4, abs=2)
+
+    def test_velocities_are_recomputed_not_decimated(self, tmp_path, bvh_dir):
+        """The reason resampling must precede extraction: velocities are
+        finite differences whose stencil baseline is the *original*
+        frame_time, so decimating a saved velocity array cannot
+        reproduce a genuine resample."""
+        from pybvh import read_bvh_file
+        source = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        original_fps = 1.0 / source.frame_time
+        full = tmp_path / "full.npz"
+        resampled = tmp_path / "resampled.npz"
+        preprocess_directory(bvh_dir, full, file_pattern="bvh_test1.bvh",
+                             include_velocities=True)
+        preprocess_directory(bvh_dir, resampled, file_pattern="bvh_test1.bvh",
+                             include_velocities=True,
+                             target_fps=original_fps / 4)
+        decimated = load_preprocessed(full)["clips"][0]["velocities"][::4]
+        genuine = load_preprocessed(resampled)["clips"][0]["velocities"]
+        n = min(len(decimated), len(genuine))
+        assert not np.allclose(decimated[:n], genuine[:n], rtol=1e-3)
+
+    def test_target_fps_silences_the_warning(self, mixed_dir, tmp_path):
+        import warnings as _warnings
+        out = tmp_path / "ds.npz"
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            preprocess_directory(mixed_dir, out, target_fps=30.0)
+        assert not any("Frame rate is not uniform" in str(w.message)
+                       for w in caught)
+
+    def test_target_fps_unifies_clip_rates(self, mixed_dir, tmp_path):
+        """Two clips of the same motion stored at rates 4x apart come out
+        covering the same span of frames.  Not bit-identical: a
+        downsample-then-upsample round trip drops the tail frame that no
+        longer falls on a sample time."""
+        untouched = tmp_path / "raw.npz"
+        with pytest.warns(UserWarning, match="Frame rate is not uniform"):
+            preprocess_directory(mixed_dir, untouched)
+        before = sorted(c["root_pos"].shape[0]
+                        for c in load_preprocessed(untouched)["clips"])
+        assert before[1] > 3 * before[0]
+
+        out = tmp_path / "ds.npz"
+        preprocess_directory(mixed_dir, out, target_fps=30.0)
+        after = sorted(c["root_pos"].shape[0]
+                       for c in load_preprocessed(out)["clips"])
+        assert after[1] - after[0] <= 4
+
+    def test_harmonize_fills_frame_rate_from_the_majority(
+            self, tmp_path, bvh_dir):
+        """harmonize=True promises to unify every axis the dataset
+        disagrees on — frame rate included."""
+        from pybvh import read_bvh_file, write_bvh_file
+        work = tmp_path / "work"
+        work.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        fast = 1.0 / bvh.frame_time
+        write_bvh_file(bvh, work / "a.bvh")
+        write_bvh_file(bvh, work / "b.bvh")
+        write_bvh_file(bvh.resample(fast / 4), work / "c.bvh")
+
+        out = tmp_path / "ds.npz"
+        with pytest.warns(UserWarning, match="Frame rate is not uniform"):
+            result = preprocess_directory(work, out, harmonize=True)
+        harmonized_to = result["uniformity"]["harmonized_to"]
+        assert harmonized_to["targets"]["target_fps"] == pytest.approx(fast)
+        # Only the minority clip needed resampling.
+        assert harmonized_to["stage_counts"]["resample"] == 1
+
+    def test_explicit_target_fps_overrides_the_majority(
+            self, mixed_dir, tmp_path):
+        out = tmp_path / "ds.npz"
+        result = preprocess_directory(mixed_dir, out, harmonize=True,
+                                      target_fps=25.0)
+        targets = result["uniformity"]["harmonized_to"]["targets"]
+        assert targets["target_fps"] == pytest.approx(25.0)
+
+
+class TestLoadedSkeletonInfoShape:
+    """`load_preprocessed` guarantees the full get_skeleton_info key set
+    whatever version wrote the file."""
+
+    def test_axis_keys_present_on_a_fresh_dataset(self, tmp_path, bvh_dir):
+        out = tmp_path / "ds.npz"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh")
+        info = load_preprocessed(out)["skeleton_info"]
+        for key in ("world_up", "rest_forward", "rest_up"):
+            assert info[key] is not None
+
+    def test_keys_an_older_dataset_never_recorded_read_back_as_none(
+            self, tmp_path, bvh_dir):
+        """Pre-0.5.0 files carry no axis strings.  They must load as None
+        rather than being absent, so consumers can index them directly
+        instead of doing a .get() dance."""
+        import json as _json
+        out = tmp_path / "ds.npz"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh")
+
+        # Rewrite the file with the 0.4-era skeleton_info: axis keys absent.
+        with np.load(out, allow_pickle=False) as data:
+            contents = dict(data)
+        legacy = _json.loads(str(contents["skeleton_info_json"]))
+        for key in ("world_up", "rest_forward", "rest_up"):
+            legacy.pop(key)
+        contents["skeleton_info_json"] = np.array(_json.dumps(legacy))
+        np.savez(out, **contents)
+
+        info = load_preprocessed(out)["skeleton_info"]
+        for key in ("world_up", "rest_forward", "rest_up"):
+            assert key in info
+            assert info[key] is None
+        # Keys that were recorded still survive.
+        assert info["joint_names"] == legacy["joint_names"]
+
+    def test_optional_keys_stay_absent(self, tmp_path, bvh_dir):
+        """foot_joints signals a preprocessing choice — inventing a None
+        would make "not requested" look like "requested and empty"."""
+        out = tmp_path / "ds.npz"
+        preprocess_directory(bvh_dir, out, file_pattern="bvh_test1.bvh")
+        assert "foot_joints" not in load_preprocessed(out)["skeleton_info"]
+
+
+class TestTestModeRngContract:
+    """Pins what the docstring now promises about mode="test" — the fix
+    for the one 0.5.0 change that broke evaluation silently."""
+
+    def test_rng_none_is_reproducible_across_calls(self):
+        a = uniform_temporal_sample(100, 16, mode="test")
+        b = uniform_temporal_sample(100, 16, mode="test")
+        np.testing.assert_array_equal(a, b)
+
+    def test_a_shared_generator_makes_test_mode_vary(self):
+        """Not a bug — the documented consequence of supplying an rng.
+        A generator shared with other draws has advanced by the next
+        call, so repeated reads of one clip differ."""
+        shared = np.random.default_rng(0)
+        a = uniform_temporal_sample(100, 16, mode="test", rng=shared)
+        b = uniform_temporal_sample(100, 16, mode="test", rng=shared)
+        assert not np.array_equal(a, b)
+
+    def test_a_freshly_seeded_generator_is_reproducible(self):
+        a = uniform_temporal_sample(100, 16, mode="test",
+                                    rng=np.random.default_rng(7))
+        b = uniform_temporal_sample(100, 16, mode="test",
+                                    rng=np.random.default_rng(7))
+        np.testing.assert_array_equal(a, b)
+
+
+# =============================================================================
+# Harmonize target consistency and degenerate rigs
+# =============================================================================
+
+class TestHarmonizeTargetConsistency:
+    """Independently-resolved axis majorities must still be mutually valid.
+
+    Regression: world-up and rest-forward majorities come from different
+    clips and need not co-occur in any single one, so the pair could be
+    parallel — which pybvh rejects per clip, naming no file and no kwarg.
+    """
+
+    @staticmethod
+    def _uniformity(world_up, rest_forward):
+        return {
+            "fps": {"30": ["a"]},
+            "world_up": world_up,
+            "rest_forward": rest_forward,
+            "rest_up": {"+y": ["a"]},
+            "rest_anim_mismatch": [],
+        }
+
+    def test_majority_forward_parallel_to_up_is_excluded(self):
+        from pybvh_ml.preprocessing import _resolve_harmonize_targets
+        uniformity = self._uniformity(
+            world_up={"+z": ["a", "b", "c", "d"], "+x": ["e", "f", "g"]},
+            rest_forward={"+z": ["a", "b", "c"], "+y": ["d", "e"],
+                          "+x": ["f", "g"]})
+        targets = _resolve_harmonize_targets(
+            [], uniformity, "6d", None, None, None, None)
+        assert targets["target_world_up"] == "+z"
+        # '+z' wins on count but is parallel to the resolved up axis;
+        # the runner-up perpendicular candidate takes it instead.
+        assert targets["target_rest_forward"] == "+y"
+
+    def test_sign_flipped_forward_counts_as_parallel(self):
+        """Parallel is an axis test, not a string test: '-z' vs '+z'."""
+        from pybvh_ml.preprocessing import _resolve_harmonize_targets
+        uniformity = self._uniformity(
+            world_up={"+z": ["a", "b"], "+x": ["c"]},
+            rest_forward={"-z": ["a", "b", "c"], "+y": ["d"]})
+        targets = _resolve_harmonize_targets(
+            [], uniformity, "6d", None, None, None, None)
+        assert targets["target_rest_forward"] == "+y"
+
+    def test_all_candidates_parallel_warns_and_skips(self):
+        from pybvh_ml.preprocessing import _resolve_harmonize_targets
+        uniformity = self._uniformity(
+            world_up={"+z": ["a", "b"], "+x": ["c"]},
+            rest_forward={"+z": ["a"], "-z": ["b"]})
+        with pytest.warns(UserWarning, match="left unharmonized"):
+            targets = _resolve_harmonize_targets(
+                [], uniformity, "6d", None, None, None, None)
+        assert "target_rest_forward" not in targets
+
+    def test_explicit_parallel_pair_raises_naming_both_kwargs(self):
+        from pybvh_ml.preprocessing import _resolve_harmonize_targets
+        uniformity = self._uniformity(
+            world_up={"+z": ["a"]}, rest_forward={"+y": ["a"]})
+        with pytest.raises(ValueError) as exc:
+            _resolve_harmonize_targets(
+                [], uniformity, "6d", "+z", "-z", None, None)
+        assert "target_rest_forward" in str(exc.value)
+        assert "target_world_up" in str(exc.value)
+
+    def test_explicit_parallel_pair_raises_without_harmonize(
+            self, bvh_dir, tmp_path):
+        """The same unreachable target is validated on the direct path."""
+        from pybvh import write_bvh_file
+        work = tmp_path / "work"
+        work.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        write_bvh_file(bvh, work / "a.bvh")
+        with pytest.raises(ValueError) as exc:
+            preprocess_directory(
+                work, tmp_path / "out.npz", representation="6d",
+                target_rest_forward=bvh.world_up)
+        assert "target_rest_forward" in str(exc.value)
+        assert "a" in str(exc.value)
+
+    def test_mixed_world_up_dataset_harmonizes(self, bvh_dir, tmp_path):
+        """End-to-end: a corpus whose axis majorities collide completes."""
+        from pybvh import write_bvh_file
+        work = tmp_path / "work"
+        work.mkdir()
+        bvh = read_bvh_file(bvh_dir / "bvh_test1.bvh")
+        # Four clips keep the fixture's up axis; three are rotated to a
+        # different one, so world_up and rest_forward majorities are
+        # measured over different subsets.
+        for i in range(4):
+            write_bvh_file(bvh, work / f"keep_{i}.bvh")
+        rotated = bvh.reorient_world_up("+y")
+        for i in range(3):
+            write_bvh_file(rotated, work / f"rot_{i}.bvh")
+
+        out = tmp_path / "dataset.npz"
+        result = preprocess_directory(
+            work, out, representation="6d", harmonize=True)
+        targets = result["uniformity"]["harmonized_to"]["targets"]
+        if "target_rest_forward" in targets:
+            from pybvh_ml.preprocessing import _is_parallel
+            assert not _is_parallel(
+                targets["target_rest_forward"], targets["target_world_up"])
+        assert out.exists()
+
+
+class TestDegenerateRigAudit:
+    """A rig with no measurable rest pose is 'unknown', not 'mismatched'."""
+
+    def test_not_counted_as_rest_anim_mismatch(self, degenerate_rig_dir):
+        from pybvh_ml.preprocessing import (
+            _compute_uniformity, _REST_UP_UNKNOWN)
+        stems = ["degen_a", "degen_b"]
+        clips = [read_bvh_file(degenerate_rig_dir / f"{s}.bvh")
+                 for s in stems]
+        assert all(c.rest_up is None for c in clips)
+        uniformity = _compute_uniformity(clips, stems)
+        # 'unknown' is not a disagreement — the axis was never measured.
+        assert uniformity["rest_anim_mismatch"] == []
+        assert uniformity["rest_up"] == {_REST_UP_UNKNOWN: stems}
+
+    def test_no_corruption_warning_for_degenerate_rigs(
+            self, degenerate_rig_dir, tmp_path):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            preprocess_directory(
+                degenerate_rig_dir, tmp_path / "out.npz",
+                representation="quat")
+        assert not [w for w in caught
+                    if "Rest-pose up disagrees" in str(w.message)]
+
+    @pytest.mark.parametrize("suffix", [".npz", ".hdf5"])
+    def test_unknown_key_roundtrips_exactly(
+            self, degenerate_rig_dir, tmp_path, suffix):
+        """JSON object keys are strings: a None key would come back
+        as the string 'null' and the saved audit would not equal the
+        returned one."""
+        if suffix == ".hdf5":
+            pytest.importorskip("h5py")
+        out = tmp_path / ("dataset" + suffix)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = preprocess_directory(
+                degenerate_rig_dir, out, representation="quat")
+        loaded = load_preprocessed(out)
+        assert loaded["uniformity"] == result["uniformity"]
+        assert "null" not in loaded["uniformity"]["rest_up"]
+
+    @pytest.mark.parametrize("harmonize", [False, True])
+    def test_rest_up_target_on_degenerate_rig_raises_named(
+            self, degenerate_rig_dir, tmp_path, harmonize):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError) as exc:
+                preprocess_directory(
+                    degenerate_rig_dir, tmp_path / "out.npz",
+                    representation="quat", target_rest_up="+y",
+                    harmonize=harmonize)
+        assert "degen_a" in str(exc.value)
+        assert "degenerate rest pose" in str(exc.value)
+
+    def test_guard_fires_for_majority_filled_target(self, degenerate_rig_dir):
+        """The guard covers an auto-resolved target, not just an explicit
+        one — that is the case where the user never wrote the kwarg."""
+        from pybvh_ml.preprocessing import _reject_degenerate_rest_up_targets
+        stems = ["degen_a", "degen_b"]
+        clips = [read_bvh_file(degenerate_rig_dir / f"{s}.bvh")
+                 for s in stems]
+        with pytest.raises(ValueError, match="degenerate rest pose"):
+            _reject_degenerate_rest_up_targets(clips, stems, "+y")
+
+
+class TestAppliedTargetsRecord:
+    """Direct-mode transforms are recorded the way harmonize's are."""
+
+    @pytest.fixture
+    def one_clip_dir(self, bvh_dir, tmp_path):
+        from pybvh import write_bvh_file
+        work = tmp_path / "work"
+        work.mkdir()
+        write_bvh_file(read_bvh_file(bvh_dir / "bvh_test1.bvh"),
+                       work / "a.bvh")
+        return work
+
+    def test_target_fps_recorded_and_roundtrips(self, one_clip_dir, tmp_path):
+        out = tmp_path / "dataset.npz"
+        result = preprocess_directory(
+            one_clip_dir, out, representation="6d", target_fps=15)
+        assert result["uniformity"]["applied_targets"] == {"target_fps": 15.0}
+        loaded = load_preprocessed(out)
+        assert loaded["uniformity"] == result["uniformity"]
+
+    def test_absent_when_nothing_applied(self, one_clip_dir, tmp_path):
+        result = preprocess_directory(
+            one_clip_dir, tmp_path / "d.npz", representation="6d")
+        assert "applied_targets" not in result["uniformity"]
+
+    def test_absent_under_harmonize(self, one_clip_dir, tmp_path):
+        """harmonized_to owns the record there; two would contradict."""
+        result = preprocess_directory(
+            one_clip_dir, tmp_path / "d.npz", representation="6d",
+            harmonize=True, target_fps=15)
+        assert "applied_targets" not in result["uniformity"]
+        assert (result["uniformity"]["harmonized_to"]["targets"]["target_fps"]
+                == 15.0)
+
+    def test_no_op_axis_target_still_recorded(self, one_clip_dir, tmp_path):
+        """The record is the requested policy, not the clips it moved."""
+        bvh = read_bvh_file(one_clip_dir / "a.bvh")
+        result = preprocess_directory(
+            one_clip_dir, tmp_path / "d.npz", representation="6d",
+            target_world_up=bvh.world_up)
+        assert (result["uniformity"]["applied_targets"]["target_world_up"]
+                == bvh.world_up)
+
+
+# =============================================================================
+# Pipeline construction and entry validation
+# =============================================================================
+
+class TestPipelineStepValidation:
+    """Both spellings of a step get the same checks."""
+
+    @pytest.mark.parametrize("fn,prob,kwargs,match", [
+        ("not-callable", 1.0, {}, "must be callable"),
+        (mirror, 7.5, {}, r"probability in \[0, 1\]"),
+        (mirror, -0.1, {}, r"probability in \[0, 1\]"),
+        (mirror, 1.0, None, "must be a dict"),
+    ])
+    def test_prebuilt_step_is_validated(self, fn, prob, kwargs, match):
+        """Regression: an AugmentationStep built by hand skipped every
+        check, so a bad probability silently always fired and bad kwargs
+        died deep inside the call."""
+        step = AugmentationStep(fn=fn, prob=prob, kwargs=kwargs)
+        with pytest.raises(ValueError, match=match) as exc:
+            AugmentationPipeline([step], representation="quat")
+        assert "augmentations[0]" in str(exc.value)
+
+    def test_valid_prebuilt_step_still_accepted(self):
+        step = AugmentationStep(fn=mirror, prob=0.5, kwargs={})
+        pipeline = AugmentationPipeline([step], representation="quat")
+        assert pipeline.augmentations[0] == step
+
+    def test_index_named_for_later_step(self):
+        good = AugmentationStep(fn=mirror, prob=1.0, kwargs={})
+        bad = AugmentationStep(fn=mirror, prob=3.0, kwargs={})
+        with pytest.raises(ValueError, match=r"augmentations\[1\]"):
+            AugmentationPipeline([good, bad], representation="quat")
+
+
+class TestPipelineFrameCountValidationAtEntry:
+    """Mismatched frame counts raise on both dispatch paths, always."""
+
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_mismatch_raises_even_when_no_step_fires(self, cache_quats):
+        """Regression: the direct path only validated inside a firing
+        step, so a p=0 pipeline returned mismatched arrays untouched
+        and a p<1 pipeline raised at random."""
+        root_pos = np.zeros((8, 3))
+        joint_data = np.zeros((9, 3, 4))
+        joint_data[..., 0] = 1.0
+        pipeline = AugmentationPipeline(
+            [(mirror, 0.0, {"lr_joint_pairs": [(0, 1)]})],
+            cache_quats=cache_quats, representation="quat")
+        with pytest.raises(ValueError, match="frame"):
+            pipeline(root_pos=root_pos, joint_data=joint_data,
+                     rng=np.random.default_rng(0))
+
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_matching_frame_counts_still_pass(self, cache_quats):
+        root_pos = np.zeros((8, 3))
+        joint_data = np.zeros((8, 3, 4))
+        joint_data[..., 0] = 1.0
+        pipeline = AugmentationPipeline(
+            [(mirror, 0.0, {"lr_joint_pairs": [(0, 1)]})],
+            cache_quats=cache_quats, representation="quat")
+        out_pos, out_jd = pipeline(
+            root_pos=root_pos, joint_data=joint_data,
+            rng=np.random.default_rng(0))
+        assert out_pos.shape == root_pos.shape
+        assert out_jd.shape == joint_data.shape
+
+
+class TestPipelineRepresentationConflict:
+    """cache_quats must not be able to change results.
+
+    Regression: two built-ins declaring different representations gave
+    different arrays under cache_quats True vs False — the staged path
+    converted through the quat cache, the direct path reinterpreted the
+    previous step's bytes under the new token.
+    """
+
+    def test_conflicting_builtin_steps_raise(self):
+        with pytest.raises(ValueError) as exc:
+            AugmentationPipeline([
+                (add_joint_noise, 1.0, {"sigma": 0.1,
+                                        "representation": "euler",
+                                        "euler_orders": ["XYZ"] * 3}),
+                (add_joint_noise, 1.0, {"sigma": 0.1,
+                                        "representation": "axisangle"}),
+            ])
+        assert "augmentations[0]" in str(exc.value)
+        assert "augmentations[1]" in str(exc.value)
+
+    def test_step_conflicting_with_pipeline_default_raises(self):
+        with pytest.raises(ValueError, match="must agree"):
+            AugmentationPipeline([
+                (add_joint_noise, 1.0, {"sigma": 0.1}),
+                (add_joint_noise, 1.0, {"sigma": 0.1,
+                                        "representation": "axisangle"}),
+            ], representation="quat")
+
+    def test_custom_step_between_lifts_the_check(self):
+        """A custom step may legitimately convert mid-pipeline."""
+        def convert_step(*, root_pos, joint_data, **kwargs):
+            return root_pos, joint_data
+
+        pipeline = AugmentationPipeline([
+            (add_joint_noise, 1.0, {"sigma": 0.1,
+                                    "representation": "quat"}),
+            (convert_step, 1.0, {}),
+            (add_joint_noise, 1.0, {"sigma": 0.1,
+                                    "representation": "axisangle"}),
+        ])
+        assert len(pipeline.augmentations) == 3
+
+    def test_homogeneous_pipeline_unaffected(self):
+        pipeline = AugmentationPipeline([
+            (add_joint_noise, 1.0, {"sigma": 0.1}),
+            (mirror, 0.5, {"lr_joint_pairs": [(0, 1)]}),
+        ], representation="6d")
+        assert len(pipeline.augmentations) == 2
+
+    def test_standard_factory_still_constructs(self, bvh_example):
+        skel = get_skeleton_info(bvh_example)
+        pipeline = AugmentationPipeline.standard(
+            skel, representation="6d", up_axis=bvh_example.world_up)
+        assert pipeline.augmentations
+
+
+# =============================================================================
+# Fail-loud unpacking, dtype preservation, flat-rotmat layout
+# =============================================================================
+
+class TestUnpackRootChannelsValidation:
+    """Slicing past the channel axis is silent in NumPy; these raise."""
+
+    @pytest.mark.parametrize("unpack,shape", [
+        (unpack_from_ctv, (4, 5, 3)),   # (C, T, V)
+        (unpack_from_tvc, (5, 3, 4)),   # (T, V, C)
+    ])
+    def test_root_channels_beyond_array_raises(self, unpack, shape):
+        data = np.zeros(shape)
+        with pytest.raises(ValueError, match="root_channels=7"):
+            unpack(data, root_channels=7)
+
+    @pytest.mark.parametrize("unpack,shape", [
+        (unpack_from_ctv, (4, 5, 3)),
+        (unpack_from_tvc, (5, 3, 4)),
+    ])
+    def test_zero_root_channels_raises(self, unpack, shape):
+        with pytest.raises(ValueError, match="root_channels must be >= 1"):
+            unpack(np.zeros(shape), root_channels=0)
+
+    def test_valid_root_channels_unaffected(self):
+        root_pos = np.random.default_rng(0).normal(size=(5, 3))
+        joint_data = np.random.default_rng(1).normal(size=(5, 4, 4))
+        ctv = pack_to_ctv(root_pos, joint_data, center_root=False)
+        rp, jd = unpack_from_ctv(ctv, root_channels=3)
+        np.testing.assert_allclose(rp, root_pos)
+        np.testing.assert_allclose(jd, joint_data)
+
+
+class TestStandardizeLengthDtype:
+    """pad/crop only select and append frames — they must not upcast."""
+
+    @pytest.mark.parametrize("method", ["pad", "crop"])
+    @pytest.mark.parametrize("target", [5, 20])
+    def test_float32_preserved(self, method, target):
+        data = np.zeros((10, 3), dtype=np.float32)
+        out = standardize_length(data, target, method=method)
+        assert out.dtype == np.float32
+        assert out.shape == (target, 3)
+
+    def test_pad_value_cast_into_input_dtype(self):
+        data = np.ones((4, 2), dtype=np.float32)
+        out = standardize_length(data, 6, method="pad", pad_value=2.5)
+        assert out.dtype == np.float32
+        np.testing.assert_allclose(out[4:], 2.5)
+
+    def test_resample_linear_returns_float64(self):
+        """It computes new values; the interpolation runs in double."""
+        data = np.zeros((10, 3), dtype=np.float32)
+        out = standardize_length(data, 7, method="resample_linear")
+        assert out.dtype == np.float64
+
+    def test_float64_input_unchanged(self):
+        data = np.zeros((10, 3), dtype=np.float64)
+        for method in ("pad", "crop", "resample_linear"):
+            assert standardize_length(data, 7, method=method).dtype == np.float64
+
+
+class TestRotmatLayoutGuard:
+    """rotmat joint data is flat (F, J, 9); the 4-D form must fail loud."""
+
+    @staticmethod
+    def _rotmat_arrays(F=6, J=3):
+        rng = np.random.default_rng(0)
+        quats = rng.normal(size=(F, J, 4))
+        quats /= np.linalg.norm(quats, axis=-1, keepdims=True)
+        flat = convert_arrays(quats, "quat", "rotmat")
+        return rng.normal(size=(F, 3)), flat
+
+    def test_nested_rotmat_raises(self):
+        root_pos, flat = self._rotmat_arrays()
+        F, J = flat.shape[:2]
+        nested = flat.reshape(F, J, 3, 3)
+        with pytest.raises(ValueError, match=r"\(F, J, 9\)"):
+            rotate_vertical(root_pos=root_pos, joint_data=nested,
+                            angle=0.5, up_axis="+y", representation="rotmat")
+
+    def test_nested_rotmat_raises_in_staged_pipeline(self):
+        root_pos, flat = self._rotmat_arrays()
+        F, J = flat.shape[:2]
+        nested = flat.reshape(F, J, 3, 3)
+        pipeline = AugmentationPipeline(
+            [(add_joint_noise, 1.0, {"sigma": 0.1})],
+            representation="rotmat")
+        with pytest.raises(ValueError, match=r"\(F, J, 9\)"):
+            pipeline(root_pos=root_pos, joint_data=nested,
+                     rng=np.random.default_rng(0))
+
+    def test_flat_rotmat_still_works(self):
+        root_pos, flat = self._rotmat_arrays()
+        out_pos, out_jd = rotate_vertical(
+            root_pos=root_pos, joint_data=flat, angle=0.5,
+            up_axis="+y", representation="rotmat")
+        assert out_jd.shape == flat.shape

@@ -44,6 +44,13 @@ docs/internal_logs/
 # never edit by hand.
 docs/gallery/
 
+# Animation files rendered by notebook execution; the bytes that matter are
+# the ones embedded in the committed .ipynb outputs (same convention as pybvh).
+gallery/*.gif
+
 # Integration tests run against internal datasets that are not shared.
 # Keep the test code itself out of the public repo too.
 tests/integration/
+
+# Machine-local symlinks to licensed corpora the integration tests read.
+internal_data/

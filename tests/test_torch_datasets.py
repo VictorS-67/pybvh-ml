@@ -12,7 +12,9 @@ from pathlib import Path
 
 torch = pytest.importorskip("torch")
 
-from pybvh_ml.torch import MotionDataset, OnTheFlyDataset, collate_motion_batch
+from pybvh_ml.torch import (
+    EpochState, MotionDataset, OnTheFlyDataset, collate_motion_batch, rng_for,
+)
 from pybvh_ml.augmentation import rotate_vertical, add_joint_noise
 from pybvh_ml.convert import convert_arrays
 from pybvh_ml.pipeline import AugmentationPipeline
@@ -32,11 +34,6 @@ class TestTorchDatasets:
             {"root_pos": root_pos[:40].copy(), "joint_data": rot6d[:40].copy()},
         ]
         return clips
-
-    @pytest.fixture
-    def bvh_paths(self):
-        bvh_dir = Path(__file__).parent.parent / "bvh_data"
-        return sorted(bvh_dir.glob("bvh_test1.bvh"))
 
     # --- MotionDataset ---
 
@@ -332,6 +329,43 @@ class TestSetEpochWorkers:
             per_epoch.append(torch.stack(samples))
         assert not torch.equal(per_epoch[0], per_epoch[1])
 
+    def test_set_epoch_reaches_spawn_workers(self, seeded_pair):
+        """Same contract under a spawn-context loader.
+
+        Regression: the shared Value used to come from the *default*
+        context (fork on Linux), whose lock is an anonymous unlinked
+        semaphore.  It unpickles into a spawn-started worker as a
+        dangling handle and segfaults on first acquire, so this exact
+        loader died with 'DataLoader worker exited unexpectedly'.
+        """
+        from torch.utils.data import DataLoader
+        ds, ref = seeded_pair
+        loader = DataLoader(
+            ds, batch_size=1, shuffle=False, num_workers=2,
+            persistent_workers=True, multiprocessing_context="spawn",
+            collate_fn=collate_motion_batch)
+        per_epoch = []
+        for epoch in (0, 1):
+            ds.set_epoch(epoch)
+            ref.set_epoch(epoch)
+            samples = [batch["data"][0] for batch in loader]
+            for i, sample in enumerate(samples):
+                torch.testing.assert_close(
+                    sample, ref[i]["data"], rtol=0, atol=0)
+            per_epoch.append(torch.stack(samples))
+        assert not torch.equal(per_epoch[0], per_epoch[1])
+
+    def test_epoch_lock_is_named_so_it_survives_spawn(self, seeded_pair):
+        """The mechanism behind the test above, asserted directly.
+
+        A fork-context semaphore has ``name is None`` (anonymous,
+        unlinked at creation); only a named one can be reopened by a
+        spawn-started child.
+        """
+        ds, _ = seeded_pair
+        semlock = ds._epoch_state._epoch.get_lock()._semlock
+        assert semlock.name is not None
+
     def test_set_epoch_negative_raises(self, seeded_pair):
         ds, _ = seeded_pair
         with pytest.raises(ValueError, match="epoch must be >= 0"):
@@ -428,3 +462,501 @@ class TestDatasetErgonomics:
         # Reverse order too: unlabeled first used to silently drop labels.
         with pytest.raises(ValueError, match="some batch items but not all"):
             collate_motion_batch(items[::-1])
+
+
+# =============================================================================
+# explain_augmentation
+# =============================================================================
+
+class TestExplainAugmentation:
+    """Replaying a sample's augmentation draw after the fact."""
+
+    @pytest.fixture
+    def bvh_paths(self):
+        bvh_dir = Path(__file__).parent.parent / "bvh_data"
+        return sorted(bvh_dir.glob("bvh_test1.bvh"))
+
+    @pytest.fixture
+    def clips_6d(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        return [
+            {"root_pos": root_pos[:30].copy(), "joint_data": rot6d[:30].copy()},
+            {"root_pos": root_pos[:20].copy(), "joint_data": rot6d[:20].copy()},
+        ]
+
+    @staticmethod
+    def _pipeline(rotate_prob=0.5):
+        """Sampled angle behind a probability + shape-dependent noise.
+
+        The noise step consumes randomness proportional to the clip's
+        shape, so a replay that skipped it would misreport later steps.
+        """
+        return AugmentationPipeline([
+            (rotate_vertical, rotate_prob, {
+                "angle": lambda rng: rng.uniform(-np.pi, np.pi),
+                "up_axis": "+y", "representation": "6d"}),
+            (add_joint_noise, 1.0,
+             {"sigma": np.radians(5.0), "representation": "6d"}),
+        ])
+
+    def test_replay_reproduces_the_sample_exactly(self, clips_6d):
+        """The records describe the draw that really ran.
+
+        Re-running the pipeline on the reported rng must rebuild the
+        loader's own tensor bit for bit — if it does, the records
+        alongside it are the true ones.
+        """
+        from pybvh_ml.torch import rng_for
+        from pybvh_ml import pack_to_flat
+
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=42)
+        ds.set_epoch(3)
+        loaded = ds[1]["data"]
+
+        params = ds.explain_augmentation(1)
+        rp, jd = ds._clip_arrays(1)
+        rp2, jd2, replay = ds.augmentation(
+            root_pos=rp, joint_data=jd, rng=rng_for(42, 3, 1),
+            return_params=True)
+        torch.testing.assert_close(
+            loaded, torch.tensor(pack_to_flat(rp2, jd2, center_root=False),
+                                 dtype=torch.float32), rtol=0, atol=0)
+        assert params == replay
+
+    def test_unseeded_dataset_refuses_to_answer(self, clips_6d):
+        """A fresh draw would look like an answer — it must raise instead."""
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline())
+        with pytest.raises(ValueError, match="without a seed"):
+            ds.explain_augmentation(0)
+
+    def test_without_augmentation_returns_empty(self, clips_6d):
+        ds = MotionDataset(clips_6d, seed=1)
+        assert ds.explain_augmentation(0) == []
+
+    def test_epoch_defaults_to_current(self, clips_6d):
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=7)
+        ds.set_epoch(2)
+        assert ds.explain_augmentation(0) == ds.explain_augmentation(0, epoch=2)
+
+    def test_different_epochs_report_different_draws(self, clips_6d):
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=7)
+        angles = []
+        for epoch in range(6):
+            record = ds.explain_augmentation(0, epoch=epoch)[0]
+            angles.append(record["params"].get("angle"))
+        assert len({str(a) for a in angles}) > 1
+
+    def test_negative_index_matches_positive(self, clips_6d):
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=5)
+        assert ds.explain_augmentation(-1) == ds.explain_augmentation(
+            len(ds) - 1)
+
+    def test_out_of_range_raises_index_error(self, clips_6d):
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=5)
+        with pytest.raises(IndexError):
+            ds.explain_augmentation(99)
+
+    def test_negative_epoch_raises(self, clips_6d):
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=5)
+        with pytest.raises(ValueError, match="epoch must be >= 0"):
+            ds.explain_augmentation(0, epoch=-1)
+
+    def test_does_not_consume_the_set_epoch_warning(self, clips_6d):
+        """A diagnostic read must not mask the real training warning."""
+        ds = MotionDataset(clips_6d, augmentation=self._pipeline(), seed=9)
+        ds.explain_augmentation(0)          # before any __getitem__
+        with pytest.warns(UserWarning, match="set_epoch"):
+            ds[0]
+
+    def test_onthefly_replay_reproduces_the_sample(self, bvh_paths):
+        from pybvh_ml.torch import rng_for
+        from pybvh_ml import pack_to_flat
+
+        ds = OnTheFlyDataset(bvh_paths, representation="6d",
+                             augmentation=self._pipeline(), seed=11)
+        ds.set_epoch(1)
+        loaded = ds[0]["data"]
+        params = ds.explain_augmentation(0)
+        rp, jd = ds._clip_arrays(0)
+        rp2, jd2, replay = ds.augmentation(
+            root_pos=rp, joint_data=jd, rng=rng_for(11, 1, 0),
+            return_params=True)
+        torch.testing.assert_close(
+            loaded, torch.tensor(pack_to_flat(rp2, jd2, center_root=False),
+                                 dtype=torch.float32), rtol=0, atol=0)
+        assert params == replay
+        assert [r["name"] for r in params] == [
+            "rotate_vertical", "add_joint_noise"]
+
+
+class TestSeedingPrimitives:
+    """`rng_for` / `EpochState` are public — a Dataset that isn't a
+    MotionDataset subclass needs exactly this pair, and copying it into
+    downstream projects is what the export exists to prevent."""
+
+    def test_exported_from_torch_namespace(self):
+        import pybvh_ml.torch as t
+        assert {"EpochState", "rng_for"} <= set(t.__all__)
+
+    def test_rng_for_is_order_and_worker_independent(self):
+        # Same triple, same stream, regardless of when it is built.
+        a = rng_for(7, 2, 5).standard_normal(4)
+        b = rng_for(7, 2, 5).standard_normal(4)
+        np.testing.assert_array_equal(a, b)
+
+    @pytest.mark.parametrize("triple", [(7, 2, 6), (7, 3, 5), (8, 2, 5)])
+    def test_rng_for_varies_with_every_term(self, triple):
+        base = rng_for(7, 2, 5).standard_normal(4)
+        other = rng_for(*triple).standard_normal(4)
+        assert not np.array_equal(base, other)
+
+    def test_rng_for_unseeded_is_fresh_entropy(self):
+        a = rng_for(None, 0, 0).standard_normal(4)
+        b = rng_for(None, 0, 0).standard_normal(4)
+        assert not np.array_equal(a, b)
+
+    def test_epoch_state_current_defaults_to_zero_without_warning(self):
+        import warnings as _warnings
+        state = EpochState()
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            assert state.current == 0
+        assert caught == []
+
+    def test_epoch_state_set_and_read(self):
+        state = EpochState()
+        state.set(4)
+        assert state.current == 4
+
+    def test_epoch_state_rejects_negative(self):
+        with pytest.raises(ValueError, match="epoch must be >= 0"):
+            EpochState().set(-1)
+
+    def test_downstream_dataset_pattern(self, bvh_example):
+        """The documented usage: hold an EpochState, seed with rng_for.
+        Same sample must differ across epochs and repeat within one."""
+
+        state = EpochState()
+        state.set(0)
+        first = rng_for(3, state.current, 1).standard_normal(4)
+        again = rng_for(3, state.current, 1).standard_normal(4)
+        state.set(1)
+        next_epoch = rng_for(3, state.current, 1).standard_normal(4)
+        np.testing.assert_array_equal(first, again)
+        assert not np.array_equal(first, next_epoch)
+
+
+class TestDatasetLayouts:
+    """`layout=` reaches the (C, T, V) / (T, V, C) packers the library
+    already ships but the Dataset used to skip."""
+
+    @pytest.fixture
+    def clips(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        return [{"root_pos": root_pos[:30].copy(),
+                 "joint_data": rot6d[:30].copy()}]
+
+    def test_flat_is_the_default(self, clips):
+        ds = MotionDataset(clips)
+        assert ds[0]["data"].dim() == 2
+
+    def test_ctv_layout(self, clips, bvh_example):
+        J = bvh_example.joint_count
+        ds = MotionDataset(clips, layout="ctv")
+        # (C, T, V): C = max(3, 6) = 6, T = 30, V = 1 + J
+        assert tuple(ds[0]["data"].shape) == (6, 30, 1 + J)
+
+    def test_tvc_layout(self, clips, bvh_example):
+        J = bvh_example.joint_count
+        ds = MotionDataset(clips, layout="tvc")
+        assert tuple(ds[0]["data"].shape) == (30, 1 + J, 6)
+
+    def test_layout_matches_the_standalone_packer(self, clips):
+        from pybvh_ml import pack_to_ctv
+        ds = MotionDataset(clips, layout="ctv")
+        expected = pack_to_ctv(clips[0]["root_pos"], clips[0]["joint_data"],
+                               center_root=False)
+        torch.testing.assert_close(
+            ds[0]["data"], torch.tensor(expected, dtype=torch.float32),
+            rtol=0, atol=0)
+
+    def test_unknown_layout_raises(self, clips):
+        with pytest.raises(ValueError, match="layout must be one of"):
+            MotionDataset(clips, layout="tcv")
+
+    def test_onthefly_layout(self, bvh_paths):
+        ds = OnTheFlyDataset(bvh_paths, representation="6d", layout="ctv")
+        assert ds[0]["data"].dim() == 3
+
+    def test_graph_layout_is_rejected_by_the_padding_collate(self, clips):
+        """(C, T, V) puts channels on axis 0, which is where the collate
+        pads — silently masking along channels is exactly the corruption
+        the guard exists to prevent."""
+        ds = MotionDataset(clips, layout="ctv", target_length=30)
+        with pytest.raises(ValueError, match="expects 2-D"):
+            collate_motion_batch([ds[0]])
+
+    def test_graph_layout_stacks_with_default_collate(self, clips):
+        from torch.utils.data import default_collate
+        ds = MotionDataset(clips + clips, layout="ctv", target_length=16,
+                           temporal="resample_deterministic")
+        batch = default_collate([ds[0], ds[1]])
+        assert batch["data"].shape[0] == 2
+
+
+class TestDatasetTemporalModes:
+    """`temporal=` — crop/pad keeps a fixed window, resample keeps the
+    whole arc at a fixed frame budget."""
+
+    @pytest.fixture
+    def clips(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        return [
+            {"root_pos": root_pos[:40].copy(), "joint_data": rot6d[:40].copy()},
+            {"root_pos": root_pos[:12].copy(), "joint_data": rot6d[:12].copy()},
+        ]
+
+    def test_pad_remains_the_default(self, clips):
+        ds = MotionDataset(clips, target_length=20)
+        assert ds.temporal == "pad"
+        # Long clip truncated from the end, short one zero-padded.
+        assert ds[0]["length"] == 20
+        assert ds[1]["length"] == 12
+        assert torch.all(ds[1]["data"][12:] == 0)
+
+    def test_crop_takes_the_centre(self, clips):
+        ds = MotionDataset(clips, target_length=20, temporal="crop")
+        item = ds[0]
+        assert item["data"].shape[0] == 20
+        expected_start = (40 - 20) // 2
+        np.testing.assert_allclose(
+            item["data"][0, :3].numpy(),
+            clips[0]["root_pos"][expected_start], rtol=1e-6)
+
+    @pytest.mark.parametrize("temporal", ["resample",
+                                          "resample_deterministic"])
+    def test_resample_fills_the_whole_budget(self, clips, temporal):
+        """No padding: every frame is real data, so length is always the
+        full target — including for a clip shorter than the budget."""
+        ds = MotionDataset(clips, target_length=20, temporal=temporal, seed=0)
+        for i in range(len(clips)):
+            item = ds[i]
+            assert item["data"].shape[0] == 20
+            assert item["length"] == 20
+            assert not torch.all(item["data"][-1] == 0)
+
+    def test_resample_spans_the_clip(self, clips):
+        """The arc, not a window: the last sampled frame comes from late
+        in a clip that crop/pad would have truncated."""
+        ds = MotionDataset(clips, target_length=8,
+                           temporal="resample_deterministic")
+        last = ds[0]["data"][-1, :3].numpy()
+        late = clips[0]["root_pos"][30:]
+        assert any(np.allclose(last, f, rtol=1e-6) for f in late)
+
+    def test_resample_deterministic_repeats(self, clips):
+        ds = MotionDataset(clips, target_length=16,
+                           temporal="resample_deterministic")
+        torch.testing.assert_close(ds[0]["data"], ds[0]["data"],
+                                   rtol=0, atol=0)
+        fresh = MotionDataset(clips, target_length=16,
+                              temporal="resample_deterministic")
+        torch.testing.assert_close(ds[0]["data"], fresh[0]["data"],
+                                   rtol=0, atol=0)
+
+    def test_resample_varies_across_epochs_when_seeded(self, clips):
+        ds = MotionDataset(clips, target_length=16, temporal="resample",
+                           seed=5)
+        ds.set_epoch(0)
+        first = ds[0]["data"].clone()
+        ds.set_epoch(1)
+        assert not torch.equal(first, ds[0]["data"])
+        ds.set_epoch(0)
+        torch.testing.assert_close(first, ds[0]["data"], rtol=0, atol=0)
+
+    def test_resample_needs_a_target_length(self, clips):
+        with pytest.raises(ValueError, match="no length to standardize to"):
+            MotionDataset(clips, temporal="resample")
+
+    def test_unknown_temporal_raises(self, clips):
+        with pytest.raises(ValueError, match="temporal must be one of"):
+            MotionDataset(clips, target_length=10, temporal="resample_linear")
+
+    def test_resample_rejects_an_empty_clip(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        empty = [{"root_pos": root_pos[:0].copy(),
+                  "joint_data": rot6d[:0].copy()}]
+        ds = MotionDataset(empty, target_length=8,
+                           temporal="resample_deterministic")
+        with pytest.raises(ValueError, match="0 frames"):
+            ds[0]
+
+    def test_onthefly_resample(self, bvh_paths):
+        ds = OnTheFlyDataset(bvh_paths, representation="6d",
+                             target_length=24, temporal="resample",
+                             seed=1)
+        assert ds[0]["length"] == 24
+
+
+class TestDatasetRepresentationConversion:
+    """`target_repr=` — the Dataset calls convert_arrays so a dataset
+    stored in one representation can train in another."""
+
+    @pytest.fixture
+    def euler_clips(self, bvh_example):
+        return [{"root_pos": bvh_example.root_pos[:20].copy(),
+                 "joint_data": bvh_example.joint_angles[:20].copy()}]
+
+    def test_converts_to_target(self, euler_clips, bvh_example):
+        orders = list(bvh_example.euler_orders)
+        ds = MotionDataset(euler_clips, source_repr="euler",
+                           target_repr="6d", euler_orders=orders)
+        expected = convert_arrays(euler_clips[0]["joint_data"], "euler", "6d",
+                                  euler_orders=orders)
+        J = bvh_example.joint_count
+        assert ds[0]["data"].shape == (20, 3 + J * 6)
+        np.testing.assert_allclose(
+            ds[0]["data"][:, 3:].numpy().reshape(20, J, 6),
+            expected, rtol=1e-5, atol=1e-6)
+
+    def test_target_repr_without_source_repr_raises(self, euler_clips):
+        with pytest.raises(ValueError, match="target_repr requires source_repr"):
+            MotionDataset(euler_clips, target_repr="6d")
+
+    def test_no_conversion_by_default(self, euler_clips, bvh_example):
+        J = bvh_example.joint_count
+        ds = MotionDataset(euler_clips)
+        assert ds[0]["data"].shape == (20, 3 + J * 3)
+
+    def test_conversion_precedes_augmentation(self, euler_clips, bvh_example):
+        """The pipeline sees the target representation, so its declared
+        `representation` is target_repr — and explain_augmentation, which
+        replays through _clip_arrays, stays truthful."""
+        orders = list(bvh_example.euler_orders)
+        pipeline = AugmentationPipeline(
+            [(rotate_vertical, 1.0, {"angle": lambda rng: rng.uniform(-1, 1),
+                                     "up_axis": bvh_example.world_up})],
+            representation="6d")
+        ds = MotionDataset(euler_clips, source_repr="euler", target_repr="6d",
+                           euler_orders=orders, augmentation=pipeline, seed=2)
+        _, jd = ds._clip_arrays(0)
+        assert jd.shape[-1] == 6
+        assert ds.explain_augmentation(0)[0]["applied"] is True
+
+
+class TestFromPreprocessed:
+    """The constructor that wires dataset metadata instead of making the
+    caller restate it."""
+
+    @pytest.fixture
+    def dataset_file(self, tmp_path):
+        from pybvh_ml import preprocess_directory
+        bvh_dir = Path(__file__).parent.parent / "bvh_data"
+        out = tmp_path / "ds.npz"
+        preprocess_directory(bvh_dir, out, representation="euler",
+                             file_pattern="bvh_test1.bvh",
+                             label_fn=lambda stem: 0)
+        return out
+
+    def test_wires_clips_labels_and_metadata(self, dataset_file):
+        from pybvh_ml import load_preprocessed
+        loaded = load_preprocessed(dataset_file)
+        ds = MotionDataset.from_preprocessed(loaded)
+        assert len(ds) == len(loaded["clips"])
+        assert ds.source_repr == "euler"
+        assert ds.euler_orders == loaded["skeleton_info"]["euler_orders"]
+        assert ds[0]["label"] == 0
+        # Stored arrays already reflect the preprocessing center_root.
+        assert ds.center_root is False
+
+    def test_target_repr_works_without_restating_the_source(self,
+                                                            dataset_file):
+        from pybvh_ml import load_preprocessed
+        loaded = load_preprocessed(dataset_file)
+        ds = MotionDataset.from_preprocessed(
+            loaded, target_repr="6d", layout="ctv", temporal="resample",
+            target_length=32, seed=0)
+        J = loaded["skeleton_info"]["num_joints"]
+        assert tuple(ds[0]["data"].shape) == (6, 32, 1 + J)
+
+    def test_explicit_kwargs_override_metadata(self, dataset_file):
+        from pybvh_ml import load_preprocessed
+        loaded = load_preprocessed(dataset_file)
+        ds = MotionDataset.from_preprocessed(loaded, labels=None)
+        assert "label" not in ds[0]
+
+
+class TestTemporalAndAugmentationInteraction:
+    """The two stochastic stages share one per-sample generator — the
+    ordering and the deterministic-mode carve-out both matter."""
+
+    @pytest.fixture
+    def clips(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        return [{"root_pos": root_pos[:40].copy(),
+                 "joint_data": rot6d[:40].copy()}]
+
+    def _pipeline(self, bvh_example):
+        return AugmentationPipeline(
+            [(rotate_vertical, 1.0, {"angle": lambda rng: rng.uniform(-1, 1),
+                                     "up_axis": bvh_example.world_up})],
+            representation="6d")
+
+    def test_deterministic_resample_ignores_the_augmentation_stream(
+            self, clips, bvh_example):
+        """`resample_deterministic` must pick the same frames every
+        epoch even with augmentation active.
+
+        uniform_temporal_sample honors a supplied rng in test mode too,
+        so handing it the augmentation-advanced per-sample generator
+        would make the frame choice drift with the epoch while still
+        calling itself deterministic.  A sigma=0 noise step isolates
+        that: it consumes exactly the draws real noise would, but leaves
+        the arrays alone — so any epoch-to-epoch difference in the
+        output is the frame selection moving, and nothing else.
+        """
+        pipeline = AugmentationPipeline(
+            [(add_joint_noise, 1.0, {"sigma": 0.0})], representation="6d")
+        ds = MotionDataset(clips, target_length=16, seed=3,
+                           temporal="resample_deterministic",
+                           augmentation=pipeline)
+        ds.set_epoch(0)
+        first = ds[0]["data"].clone()
+        for epoch in (1, 7):
+            ds.set_epoch(epoch)
+            torch.testing.assert_close(first, ds[0]["data"],
+                                       rtol=1e-5, atol=1e-6)
+
+        # And it agrees with the same selection made with no augmentation
+        # at all — the augmentation stream never reached it.
+        plain = MotionDataset(clips, target_length=16,
+                              temporal="resample_deterministic")
+        torch.testing.assert_close(first, plain[0]["data"],
+                                   rtol=1e-5, atol=1e-6)
+
+    def test_explain_augmentation_stays_exact_under_resample(
+            self, clips, bvh_example):
+        """Augmentation draws first, resampling continues on the same
+        stream — so replaying only the augmentation still lands on the
+        identical draw."""
+        ds = MotionDataset(clips, target_length=16, seed=8,
+                           temporal="resample",
+                           augmentation=self._pipeline(bvh_example))
+        ds.set_epoch(2)
+        params = ds.explain_augmentation(0)
+        rp, jd = ds._clip_arrays(0)
+        _, _, replay = ds.augmentation(
+            root_pos=rp, joint_data=jd, rng=rng_for(8, 2, 0),
+            return_params=True)
+        assert params == replay
+
+    def test_seeded_getitem_is_reproducible_with_both_stages(
+            self, clips, bvh_example):
+        def build():
+            ds = MotionDataset(clips, target_length=16, seed=9,
+                               temporal="resample",
+                               augmentation=self._pipeline(bvh_example))
+            ds.set_epoch(4)
+            return ds
+        torch.testing.assert_close(build()[0]["data"], build()[0]["data"],
+                                   rtol=0, atol=0)

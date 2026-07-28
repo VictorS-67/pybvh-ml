@@ -56,7 +56,10 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
     ----------
     bvh : Bvh
     include_partitions : bool
-        If True, include heuristic body-part partitions.
+        If True, include heuristic body-part partitions under
+        ``body_partitions``.  These are guessed from joint names — see
+        :func:`get_body_partitions` for when the guess fails and how to
+        tell.
 
     Returns
     -------
@@ -129,9 +132,24 @@ def _has_keyword(normalized: str, keywords: set[str]) -> bool:
 def get_body_partitions(bvh: Bvh) -> dict[str, list[int]]:
     """Heuristic body-part grouping by joint name patterns.
 
-    Groups joints into body parts based on name keywords.  This is
-    heuristic and may not be perfect for all skeleton naming
-    conventions.
+    Groups joints by matching English keywords against joint names
+    (``"LeftForeArm"`` → ``left_arm``), with the side read from a
+    ``Left``/``Right`` substring or an ``L``/``R`` prefix before an
+    uppercase letter.  This is a *guess from naming*, not a fact read from
+    the skeleton: pybvh-ml has no anatomical model, and the alternative — a
+    partition supplied by whoever knows the rig — is always more reliable
+    where it exists.  Rigs named in another language, or with opaque names
+    (``"joint12"``, ``"Bip01 L UpperArm"`` variants outside the keyword
+    lists), will be grouped wrongly or not at all.
+
+    ``other`` is the "no keyword matched" bucket and is the signal to check
+    before trusting the result: on a normal humanoid it should be small
+    (typically end-effector helpers and unnamed props).  A large ``other``,
+    or an empty ``left_arm`` / ``right_leg`` on a skeleton that visibly has
+    those limbs, means the naming convention was not recognized — pass your
+    own joint indices instead of this dict.  There is no signal beyond that:
+    a joint that matched the *wrong* keyword lands in a named group and is
+    indistinguishable from a correct match.
 
     Parameters
     ----------
@@ -144,6 +162,11 @@ def get_body_partitions(bvh: Bvh) -> dict[str, list[int]]:
         ``left_leg``, ``right_leg``, ``other``.
         Values: lists of joint indices in ``joint_angles`` space.
         Every joint appears in exactly one group.
+
+    See Also
+    --------
+    get_lr_pairs : Left/right pairing, also name-derived, but detected by
+        pybvh and overridable per-skeleton via ``Bvh.lr_mapping``.
     """
     partitions: dict[str, list[int]] = {
         "torso": [],

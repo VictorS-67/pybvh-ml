@@ -18,7 +18,14 @@ if importlib.util.find_spec("torch") is None:
 # a misleading "install torch" message.
 import torch as _torch  # noqa: F401, E402
 
-from .datasets import MotionDataset, OnTheFlyDataset
+from .datasets import EpochState, MotionDataset, OnTheFlyDataset, rng_for
 from .collate import collate_motion_batch
 
-__all__ = ["MotionDataset", "OnTheFlyDataset", "collate_motion_batch"]
+__all__ = [
+    "MotionDataset",
+    "OnTheFlyDataset",
+    "collate_motion_batch",
+    # Seeding primitives, usable without subclassing either Dataset.
+    "EpochState",
+    "rng_for",
+]

@@ -32,7 +32,7 @@ It replaces the ~150 lines of preprocessing, augmentation, and dataset-class boi
 pip install pybvh-ml
 ```
 
-This pulls in [pybvh](https://github.com/VictorS-67/pybvh) `>= 0.8, < 0.9` automatically — pybvh-ml 0.5 tracks pybvh 0.8's API (short representation tokens, radians-first parameters).
+This pulls in [pybvh](https://github.com/VictorS-67/pybvh) `>= 0.8.1, < 0.9` automatically — pybvh-ml 0.5 tracks pybvh 0.8's API (short representation tokens, radians-first parameters).
 
 With optional dependencies:
 
@@ -83,7 +83,7 @@ This will change at **1.0**: from then on, pybvh-ml will commit to strict semver
 ## Requirements
 
 - Python >= 3.9
-- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8, < 0.9
+- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8.1, < 0.9
 - NumPy >= 1.21
 
 Optional: PyTorch >= 2.0 (`pip install "pybvh-ml[torch]"`), h5py >= 3.0 (`pip install "pybvh-ml[hdf5]"`).

@@ -143,6 +143,23 @@ def pack_to_flat(
     return np.concatenate([rp, flat_joints], axis=1)
 
 
+def _validate_root_channels(root_channels: int, available: int) -> None:
+    """Reject a root width the packed array cannot supply.
+
+    Slicing past the end is silent in NumPy: asking for 7 root channels
+    of a 4-channel array returns 4 columns and a ``root_pos`` of the
+    wrong width, which then propagates into whatever consumes it.
+    """
+    if root_channels < 1:
+        raise ValueError(
+            f"root_channels must be >= 1, got {root_channels}")
+    if root_channels > available:
+        raise ValueError(
+            f"root_channels={root_channels} exceeds the array's "
+            f"{available} channel(s); pass the root_channels the array "
+            f"was packed with (3 for a position root).")
+
+
 def unpack_from_ctv(
     data: npt.NDArray[np.float64],
     root_channels: int = 3,
@@ -159,8 +176,14 @@ def unpack_from_ctv(
     -------
     root_pos : ndarray, shape (T, root_channels)
     joint_data : ndarray, shape (T, V-1, C)
+
+    Raises
+    ------
+    ValueError
+        If ``root_channels`` exceeds the array's channel count.
     """
     tvc = np.asarray(data, dtype=np.float64).transpose(1, 2, 0)
+    _validate_root_channels(root_channels, tvc.shape[2])
     root_pos = tvc[:, 0, :root_channels].copy()
     joint_data = tvc[:, 1:, :].copy()
     return root_pos, joint_data
@@ -181,8 +204,14 @@ def unpack_from_tvc(
     -------
     root_pos : ndarray, shape (T, root_channels)
     joint_data : ndarray, shape (T, V-1, C)
+
+    Raises
+    ------
+    ValueError
+        If ``root_channels`` exceeds the array's channel count.
     """
     data = np.asarray(data, dtype=np.float64)
+    _validate_root_channels(root_channels, data.shape[2])
     root_pos = data[:, 0, :root_channels].copy()
     joint_data = data[:, 1:, :].copy()
     return root_pos, joint_data

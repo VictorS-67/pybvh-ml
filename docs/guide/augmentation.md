@@ -70,22 +70,30 @@ pipeline = AugmentationPipeline([
     (rotate_vertical, 1.0, {
         "angle": lambda rng: rng.uniform(-np.pi, np.pi),  # random each sample
         "up_axis": "+y",
-        "representation": "quat",
     }),
     (mirror, 0.5, {
         "lr_joint_pairs": lr_pairs,
         "lateral_axis": "+x",
-        "representation": "quat",
     }),
-    (add_joint_noise, 1.0, {
-        "sigma": np.radians(1.0),
-        "representation": "quat",
-    }),
-])
+    (add_joint_noise, 1.0, {"sigma": np.radians(1.0)}),
+], representation="quat")   # pipeline-level default; a step may still override
 
 rng = np.random.default_rng(42)
 root_pos, quats = pipeline(root_pos=root_pos, joint_data=quats, rng=rng)
 ```
+
+A pipeline is homogeneous in practice, so declare `representation` once at the pipeline level rather than repeating it on every step — repeating it is the copy-paste surface where one step in five ends up disagreeing with the rest. A step that declares its own keeps it, and the default only reaches functions that *name* the parameter (a `**kwargs` catch-all doesn't count), so a custom step taking neither is called with exactly its own kwargs. `euler_orders` takes a pipeline-level default the same way.
+
+Built-in steps have to agree on the result: each one's output is the next one's input, so two of them declaring different representation tokens with nothing in between to convert raises at construction rather than quietly producing different arrays under `cache_quats=True` and `False`. A custom step between them lifts the restriction — it may legitimately be doing the conversion.
+
+Steps are `AugmentationStep` named tuples, so introspecting a configured pipeline reads:
+
+```python
+pipeline.augmentations[1].prob            # 0.5
+pipeline.augmentations[1].kwargs["lateral_axis"]   # "+x"
+```
+
+A `NamedTuple` is a `tuple`, so positional access (`pipeline.augmentations[1][2]`) and unpacking still work.
 
 For the common case, skip the boilerplate: the `standard` factory wires rotate + mirror + noise + speed from a `skeleton_info` dict — which a [preprocessed dataset](preprocessing.md#what-the-file-stores) already carries:
 
@@ -103,12 +111,31 @@ pipeline = AugmentationPipeline.standard(
 
 ### How the pipeline avoids conversion churn
 
-With `cache_quats=True` (the default), the pipeline converts your `joint_data` to quaternions once, runs quaternion-internal steps back to back without leaving quat space, and converts back to your declared representation at the end. This is why the pipeline needs to *know* the representation: **at least one step must declare a `representation` kwarg** (or pass `cache_quats=False` to run every step exactly as written). It raises at construction time otherwise — guessing would corrupt non-quat inputs.
+With `cache_quats=True` (the default), the pipeline converts your `joint_data` to quaternions once, runs quaternion-internal steps back to back without leaving quat space, and converts back to your declared representation at the end. This is why the pipeline needs to *know* the representation: **something must declare it** — `AugmentationPipeline(..., representation=...)` or at least one step's kwargs (or pass `cache_quats=False` to run every step exactly as written). It raises otherwise, rather than guessing and corrupting non-quat inputs.
 
 Two guarantees, identical on both paths:
 
 - **Custom steps see your declared representation.** A step function the pipeline doesn't recognize receives `joint_data` in the pipeline's current declared representation — never in whatever internal state a previous built-in step left behind. `cache_quats=True` and `cache_quats=False` are bit-identical.
 - **Outputs never alias inputs.** Even when no step fires, `pipeline(...)` returns freshly allocated arrays — safe to mutate without corrupting a Dataset's cached clips.
+
+### Seeing what a call actually drew
+
+A pipeline with probabilities and callable kwargs makes a different decision for every sample. `return_params=True` reports those decisions alongside the arrays:
+
+```python
+new_pos, new_rot, steps = pipeline(
+    root_pos=root_pos, joint_data=joint_data, rng=rng, return_params=True)
+
+[(s["name"], s["applied"], s["params"]) for s in steps]
+# [('rotate_vertical',           True,  {'angle': -1.4464727375963786}),
+#  ('mirror',                    True,  {}),
+#  ('add_joint_noise',           True,  {}),
+#  ('speed_perturbation_arrays', True,  {'factor': 1.1399704034814648})]
+```
+
+One record per configured step, in pipeline order, so `steps[i]` describes `pipeline.augmentations[i]`. `applied` is the probability draw's outcome — `mirror` at `p=0.5` reports `False` on the samples it skipped. `params` holds what this call *sampled*: the kwargs whose spec is a callable, resolved to the values the augmentation received. Static kwargs (`sigma`, `up_axis`, `lr_joint_pairs`) are pipeline configuration you already have — read them from `pipeline.augmentations` — and `rng` is machinery, so neither clutters the record.
+
+The records are plain dicts, JSON-native for every built-in step: log them next to your training metrics to answer "which augmentation produced this loss spike", or replay a specific sample's draw. (A custom step whose callable returns something exotic — an array, say — is reported verbatim, so serialize those with care.) Asking for them never changes the random stream — the same `rng` yields identical arrays with or without the flag — so it is safe to switch on in a debugging run and off again.
 
 ## Reproducibility
 

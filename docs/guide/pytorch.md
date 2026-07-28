@@ -43,7 +43,7 @@ for epoch in range(num_epochs):
 
 ## The two Dataset classes
 
-**`MotionDataset`** wraps in-memory clip dicts — typically `load_preprocessed(...)["clips"]`, but any list of `{"root_pos", "joint_data", ...}` dicts works (pass `center_root=True` for raw, uncentered hand-built clips).
+**`MotionDataset`** wraps in-memory clip dicts — typically `load_preprocessed(...)["clips"]`, but any list of `{"root_pos", "joint_data", ...}` dicts works (pass `center_root=True` for raw, uncentered hand-built clips). When the clips *do* come from a preprocessed file, `MotionDataset.from_preprocessed(loaded)` is the better entry point: it wires the labels, the stored `representation` and `skeleton_info["euler_orders"]` from the file, so nothing has to be restated at the call site.
 
 **`OnTheFlyDataset`** skips the preprocessed file entirely: give it a list of BVH paths (`str` or `Path`) and it loads, converts, and augments per item — useful when you don't want the preprocessing artifact on disk. `world_up=` and `lr_mapping=` are forwarded to every `pybvh.read_bvh_file` call, matching `preprocess_directory`.
 
@@ -51,11 +51,37 @@ Both support Python negative indexing (`ds[-1]` matches `ds[len(ds)-1]` on the s
 
 ## What `__getitem__` returns, and what collate does
 
-Each item is a dict with `"data"` — the flat `(T, D)` pack of the (augmented, length-standardized) clip — plus `"length"` and optionally `"label"`.
+Each item is a dict with `"data"` — the (augmented, length-standardized) clip packed in the chosen `layout` — plus `"length"` and optionally `"label"`.
 
 **`length` means valid frames in the returned tensor.** When `target_length` pads a shorter clip, `length` is the original frame count (the padded tail is not valid); when it *crops* a longer clip, `length` is `target_length`. If you need the original pre-crop length, recover it from your clip arrays before the dataset.
 
+### Shaping the clip: `temporal` and `layout`
+
+`target_length` says *how many* frames; `temporal` says how to get there, and the choice is not cosmetic:
+
+| `temporal` | Keeps | Use when |
+|---|---|---|
+| `"pad"` (default) | a window: truncate from the end, zero-pad if short | a fixed-duration window is the unit of prediction |
+| `"crop"` | a window, taken from the centre | same, but the middle of the clip is the informative part |
+| `"resample"` | the whole *arc*, at a fixed frame budget, with random per-segment offsets | training, when the shape of the entire clip carries the signal |
+| `"resample_deterministic"` | the same arc, offsets pinned | evaluating the above — same frames every read |
+
+Crop and pad keep a fixed *window*; the resample modes keep the whole *arc* of a clip at a fixed budget, sampling indices spread across its full duration ([`uniform_temporal_sample`](../api/sequences.md)). For a clip whose meaning is its build-up → peak → decay, cropping throws away most of the signal. Both resample modes report `length == target_length` — every returned frame is real data, so there is nothing to mask.
+
+`layout` picks the tensor shape: `"flat"` `(T, D)` (default), or the graph layouts `"ctv"` `(C, T, V)` and `"tvc"` `(T, V, C)` that GCN and skeleton-transformer models consume. `MotionDataset` also converts representations on the way out — `source_repr` / `target_repr` (plus `euler_orders` if either end is Euler) — so a dataset stored as Euler can train as 6D without a second preprocessing pass:
+
+```python
+ds = MotionDataset.from_preprocessed(   # source_repr comes from the file
+    loaded, target_repr="6d", layout="ctv",
+    temporal="resample", target_length=64, seed=0)
+```
+
 `collate_motion_batch` stacks variable-length items into `{"data", "mask", "lengths", "labels"}` with zero-padding to the batch maximum and a bool validity mask. Either every item in a batch carries a label or none does — mixed presence raises a `ValueError` naming the offending index rather than silently dropping labels.
+
+!!! warning "With `layout="flat"`, always pass `collate_fn=collate_motion_batch` — PyTorch's default is not equivalent"
+    A `DataLoader` without `collate_fn` uses `torch.utils.data.default_collate`, which behaves differently depending on your clip lengths. With **variable-length** clips it raises `RuntimeError: stack expects each tensor to be equal size` — it only stacks tensors that already share a shape, and padding them is exactly the work this collate does. That failure is loud and therefore harmless. The trap is **fixed-length** clips (`target_length` set): there `default_collate` succeeds and the `data` tensor is identical, but the keys stay singular (`length` / `label`, not `lengths` / `labels`) and **there is no `mask`**. Clips shorter than `target_length` are still zero-padded inside that tensor, so without the mask those padded frames reach your model looking exactly like real motion, and nothing raises.
+
+    The graph layouts invert this. `collate_motion_batch` pads a time-major axis 0, which `(C, T, V)` does not have — so it raises rather than masking along the channel axis. `"ctv"` / `"tvc"` are fixed-size by construction (they pair with `target_length`, and a resample mode leaves nothing to mask), so `default_collate` is the right choice there.
 
 ![Four variable-length clips collated: the padded batch tensor with its zero tail, and the boolean validity mask marking real frames per row](../gallery/img/collate-mask.png)
 
@@ -77,8 +103,51 @@ With `seed=None`, every call uses fresh OS entropy — simplest, no reproducibil
 
 *The contract, drawn: run B (dashed) lies exactly on run A (solid) for every epoch; each epoch is a fresh draw.*
 
+### Asking what happened to one sample
+
+Seeded draws are replayable, so the dataset can answer after the fact: *sample 5 in epoch 3 looked wrong — what did the augmentation do to it?*
+
+```python
+ds.explain_augmentation(5)              # the current epoch
+ds.explain_augmentation(5, epoch=0)     # or an earlier one
+
+# [{'name': 'rotate_vertical',           'applied': True,  'params': {'angle': 0.034}},
+#  {'name': 'mirror',                    'applied': False, 'params': {}},
+#  {'name': 'add_joint_noise',           'applied': True,  'params': {}},
+#  {'name': 'speed_perturbation_arrays', 'applied': True,  'params': {'factor': 1.020}}]
+```
+
+Nothing is recorded during training and nothing rides along in your batches: the method re-runs that one sample's augmentation on the same `(seed, epoch, idx)` generator the loader used, which reproduces the loader's tensor bit for bit — so the records describe the draw that really ran. Records use the pipeline's [`return_params` format](augmentation.md#seeing-what-a-call-actually-drew).
+
+**On an unseeded dataset it raises**, rather than answering. Without a seed there is no draw to recover, and a freshly drawn answer would be indistinguishable from a real one while describing an augmentation that never touched your data. For the same reason the replay is only truthful while its inputs are unchanged — same pipeline, same clip arrays (for `OnTheFlyDataset`, the same file on disk).
+
+### Using the seeding scheme in your own Dataset
+
+The two pieces above are public, so a Dataset that isn't a `MotionDataset` subclass — one composing `convert_arrays` → `pack_to_ctv` → `uniform_temporal_sample` itself, say — can honor the same contract without reimplementing it:
+
+```python
+from pybvh_ml.torch import EpochState, rng_for
+
+class Feeder(torch.utils.data.Dataset):
+    def __init__(self, clips, seed=0):
+        self.clips, self.seed = clips, seed
+        self.epoch_state = EpochState()
+
+    def set_epoch(self, epoch):
+        self.epoch_state.set(epoch)
+
+    def __getitem__(self, idx):
+        rng = rng_for(self.seed, self.epoch_state.current, idx)
+        ...
+```
+
+`rng_for` gives the order- and worker-independent stream; `EpochState` is the shared-memory counter that makes `set_epoch` reach workers. `EpochState.current` reads 0 until first set.
+
 !!! note "Why `set_epoch` works with worker processes (and what it costs)"
     DataLoader workers hold a *copy* of the dataset, created once — with `persistent_workers=True`, that copy lives for the whole training run, so a plain-attribute epoch would silently freeze at its startup value in every worker. The epoch therefore lives in shared memory (a `multiprocessing.Value`), which worker processes inherit at creation — fork and spawn both. One consequence, stated on both classes: dataset instances can't be `deepcopy`-ed or `torch.save`-ed directly, because shared state only travels to other processes via DataLoader worker inheritance. Save your model, not your dataset.
+
+!!! warning "With `multiprocessing_context="spawn"`, the whole dataset must be picklable"
+    A spawn-started worker doesn't inherit memory — the DataLoader pickles the dataset to it. That reaches your augmentation pipeline, so the `lambda rng: ...` kwargs used throughout this documentation (`"angle": lambda rng: rng.uniform(-np.pi, np.pi)`) fail with `Can't pickle local object`. Move those callables to module level (a `def` at the top of your training script) when you use a spawn loader; the fork default is unaffected.
 
 ## See also
 

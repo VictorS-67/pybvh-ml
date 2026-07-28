@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import numpy.typing as npt
 
-from pybvh import rotations
+from pybvh import parse_axis, rotations
 
 from .augmentation import (
     _build_rotation_matrix,
@@ -32,7 +32,6 @@ from .augmentation import (
     _from_quats,
     _mirror_sign_quat,
     _mirror_sign_rot6d,
-    _parse_axis,
     _swap_lr_pairs,
     _to_quats,
     _validate_drop_rate,
@@ -123,7 +122,8 @@ def _rotate_vertical_staged(
         raise ValueError(
             "rotate_vertical requires at least one joint (joint 0 is "
             "the root whose rotation carries the yaw); got J=0")
-    up_idx, up_sign = _parse_axis(up_axis)
+    up = parse_axis(up_axis)
+    up_idx, up_sign = up.index, up.sign
     signed_angle = angle * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_rp = (R_vert @ root_pos.T).T
@@ -158,7 +158,7 @@ def _mirror_staged(
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
-    lateral_idx, _sign = _parse_axis(lateral_axis)
+    lateral_idx = parse_axis(lateral_axis).index
     new_rp = root_pos.copy()
     new_rp[:, lateral_idx] *= -1.0
 
@@ -251,7 +251,10 @@ def _speed_perturbation_staged(
     idx_left = idx_right - 1
     t_left = t_orig[idx_left]
     t_right = t_orig[idx_right]
-    dt = np.where(t_right - t_left < 1e-15, 1.0, t_right - t_left)
+    # Adjacent samples of linspace(0, 1, F) with F >= 2, so dt is
+    # exactly 1/(F-1) — never the degenerate interval a zero-guard here
+    # would be protecting against.
+    dt = t_right - t_left
     alpha = (t_new - t_left) / dt
     alpha_jt = np.broadcast_to(alpha[:, np.newaxis], (F_new, J))
     new_q = rotations.quat_slerp(q[idx_left], q[idx_right], alpha_jt)

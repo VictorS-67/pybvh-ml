@@ -27,10 +27,10 @@ Supported representations: `"euler"`, `"quat"`, `"6d"`, `"axisangle"` (validated
 The dataset file is self-sufficient — everything needed at training time, no reopening source BVHs:
 
 - **Per-clip arrays**: `root_pos`, `joint_data`, plus optional velocities, foot contacts, quaternions, and labels (below).
-- **Skeleton metadata** (`skeleton_info`): joint names, edges, L/R pairs, Euler orders — and the `world_up` / `rest_forward` / `rest_up` axis strings, so runtime augmentation can be configured straight from the loaded dict.
+- **Skeleton metadata** (`skeleton_info`): joint names, edges, L/R pairs, Euler orders — and the `world_up` / `rest_forward` / `rest_up` axis strings, so runtime augmentation can be configured straight from the loaded dict. Every key is always present: a dataset written before a key existed loads it as `None` rather than omitting it, so there's no `.get()` dance.
 - **Normalization statistics**: per-channel `mean` / `std` over all frames, plus a `constant_channels` bool mask (columns whose raw std was below `1e-8`, guarded to `1.0`).
 - **The `center_root` flag**: whether the stored `root_pos` arrays were centered at preprocessing time (default `True`). Files from older versions load with `None` (unknown).
-- **The uniformity audit** (`uniformity`): per-axis value counts across the corpus, and — when harmonizing — `harmonized_to` with the resolved targets, the `retarget` choice, and per-stage modification counts. The transformation trail is auditable from the file itself.
+- **The uniformity audit** (`uniformity`): per-axis and per-frame-rate value counts across the corpus — the *pre-transform* snapshot — plus a record of what was then applied to it: `harmonized_to` (resolved targets, the `retarget` choice, per-stage modification counts) when harmonizing, or `applied_targets` (the `target_*` kwargs this call applied directly) when not. The transformation trail is auditable from the file itself: a corpus resampled to 30 Hz records both the rates it came from and the rate it is now at. Rigs whose rest pose is too degenerate to measure appear under the `rest_up` key `"unknown"`.
 
 ## Richer outputs
 
@@ -52,6 +52,18 @@ Two notes:
 
 - Pass `foot_joints=` explicitly for footless or nonstandard rigs where auto-detection finds nothing.
 - For `representation="quat"`, `include_quaternions=True` stores nothing extra — the main `joint_data` already *is* the quaternion array, and the loader aliases `clip["joint_quats"]` to it instead of duplicating storage.
+
+## Frame rate
+
+Capture rates and training rates rarely match — 120 Hz mocap feeding a model that trains at 30 Hz. `target_fps=` resamples every clip via SLERP before anything is extracted:
+
+```python
+preprocess_directory("dataset/", "train.npz", target_fps=30)
+```
+
+**Before extraction is the point.** `joint_data`, `include_velocities` and `include_foot_contacts` are all derived from the resampled clip, so they describe the motion at the target rate. Decimating the finished `.npz` afterwards can't reproduce this — beyond needing a hand-maintained list of which stored keys are frame-indexed, velocities are finite differences whose stencil baseline is the *original* `frame_time`, so a decimated velocity array is simply the wrong number.
+
+A directory with mixed rates warns, the way a mixed up-axis does, and `uniformity["fps"]` records the distribution — the rates the clips *came from*. The rate they are now at is `uniformity["applied_targets"]["target_fps"]` (or `harmonized_to["targets"]["target_fps"]` under `harmonize=True`), so a loader can tell a genuinely mixed-rate dataset from a unified one without reopening any BVH. Under `harmonize=True`, `target_fps` becomes the explicit target and the dataset majority fills in when you don't set one.
 
 ## Harmonizing heterogeneous datasets
 

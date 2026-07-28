@@ -52,10 +52,16 @@ print(f"hero clip: {bvh.joint_count} joints, {bvh.frame_count} frames, "
       f"world_up {bvh.world_up}")
 
 # %% [markdown]
+# **The hero clip** — every figure below draws from this one fixture: 24 joints, 75 frames at 30 fps, `+z` up. Rendered with `bvhplot.render` to an inline real-time GIF (resampled to the GIF's 20 fps) so the motion shows wherever the notebook is viewed; the burst of movement past frame ~50 is what many later figures key on.
+
+# %%
+gp.clip_gif(bvh)
+
+# %% [markdown]
 # ## 1 · Tensor layouts & packing
 
 # %% [markdown]
-# **`pack_to_ctv` / `pack_to_tvc` / `pack_to_flat`** — one clip, three model-ready layouts. The root is vertex 0; with 6D joint data (C = 6) its channels `3:6` are zero padding, and `describe_features` maps every flat column back to its feature block.
+# **`pack_to_ctv` / `pack_to_tvc` / `pack_to_flat`** — one clip, three model-ready layouts. The root is vertex 0; with 6D joint data (C = 6) its channels `3:6` are zero padding, and `describe_features` maps every flat column back to its feature block. The CTV and TVC slices hold the *same numbers* — what changes between layouts is the axis order, so the TVC panel is drawn untransposed (V rows, C columns). One diverging color scale everywhere: red = positive, blue = negative, white ≈ 0, clipped at the 98th percentile — the three root-position columns (tens of units, against rotation components bounded by ±1) saturate by design. The dark bands at channels 0 and 4 are the ≈1 entries of near-identity rotations: 6D is the first two rotation-matrix columns, so those channels sit near 1 for joints that barely rotate.
 
 # %%
 from pybvh_ml import pack_to_ctv, pack_to_tvc, pack_to_flat, describe_features
@@ -73,10 +79,16 @@ fig = gp.fig_layouts(ctv, tvc, flat,
 plt.show()
 
 # %% [markdown]
-# **`center_root`** — the packers subtract the first frame's root position (on by default). Center the *whole clip* once and windows keep their place on the global trajectory; pack each *window* with `center_root=True` and every window is re-based to its own origin — the trajectory is destroyed. Top view of the hero clip's root path.
+# **`center_root`** — the packers subtract the first frame's root position (on by default). Center the *whole clip* once and windows keep their place on the global trajectory; pack each *window* with `center_root=True` and every window is re-based to its own origin — the trajectory is destroyed. Top view of the hero clip's root path; both panels are drawn from real `pack_to_tvc` output (the right one from packing each `sliding_window` slice separately, which is exactly the hazard).
 
 # %%
-fig = gp.fig_center_hazard(root_pos, up_index=2, window=32, stride=16)
+from pybvh_ml import sliding_window
+
+clip_packed = pack_to_tvc(root_pos, jd6)        # center_root=True default: whole clip, once
+window_packed = [pack_to_tvc(rp, jd)            # same default per window: re-based every time
+                 for rp, jd in zip(sliding_window(root_pos, 32, stride=16),
+                                   sliding_window(jd6, 32, stride=16))]
+fig = gp.fig_center_hazard(clip_packed, window_packed, stride=16, up_index=2)
 plt.show()
 
 # %% [markdown]
@@ -105,11 +117,25 @@ plt.show()
 # ## 3 · Array-level augmentation
 
 # %% [markdown]
-# **`speed_perturbation_arrays` / `dropout_arrays`** — the two temporal augmentations, invisible in a skeleton still: speed perturbation resamples the time axis (SLERP between frames), dropout drops random frames and re-interpolates across the gaps. One lively joint coordinate over time.
+# **`speed_perturbation_arrays`** — resamples the time axis (SLERP between frames): `factor < 1` stretches the clip over more frames, `factor > 1` compresses it. Speed only exists in time, so this one is rendered, not plotted: side-by-side playback in real wall-clock time — the slow clip lags ever further behind the original, the fast clip finishes early and freezes on its last frame (`sync="pad"`).
 
 # %%
 from pybvh_ml import speed_perturbation_arrays, dropout_arrays
 
+slow = speed_perturbation_arrays(root_pos=root_pos, joint_data=quats,
+                                 factor=0.75, representation="quat")
+fast = speed_perturbation_arrays(root_pos=root_pos, joint_data=quats,
+                                 factor=1.25, representation="quat")
+gp.speed_comparison_gif(
+    [bvh, bvh.from_quat(*slow), bvh.from_quat(*fast)],
+    labels=[f"original ({bvh.frame_count}f)",
+            f"factor=0.75 — slower ({len(slow[0])}f)",
+            f"factor=1.25 — faster ({len(fast[0])}f)"])
+
+# %% [markdown]
+# **`dropout_arrays`** — drops random frames (Bernoulli per frame, first and last always kept) and SLERP-re-interpolates across the gaps; the frame count is unchanged. On smooth mocap the re-interpolated curve hugs the original — most gaps are 1–2 frames — so the mechanism is drawn explicitly: markers on the frames that survived, a rug of the dropped indices, and an inset zooming on the longest gap, where the interpolation visibly cuts the corner. Dropped frames are found by exact comparison — kept frames pass through bit-identical.
+
+# %%
 coords = bvh.node_positions()
 joint_nodes = [bvh.index(n, space="node") for n in bvh.joint_names]
 up = 2                                      # +z up
@@ -117,26 +143,24 @@ lively = int(np.argmax(coords[:, joint_nodes, up].std(axis=0)))
 node = joint_nodes[lively]
 
 
-def track(rp, q):
-    rebuilt = bvh.from_quat(rp, q)
-    return rebuilt.node_positions()[:, node, up]
+def joint_height(b, n):
+    return b.node_positions()[:, n, up]
 
 
-rng = np.random.default_rng(7)
-slow = speed_perturbation_arrays(root_pos=root_pos, joint_data=quats,
-                                 factor=0.75, representation="quat")
-fast = speed_perturbation_arrays(root_pos=root_pos, joint_data=quats,
-                                 factor=1.25, representation="quat")
-drop = dropout_arrays(root_pos=root_pos, joint_data=quats,
-                      drop_rate=0.3, representation="quat", rng=rng)
-
-fig = gp.fig_speed_dropout(f"{bvh.joint_names[lively]} height",
-                           track(root_pos, quats), track(*slow),
-                           track(*fast), track(*drop))
+drop_rate = 0.3
+drop_rp, drop_q = dropout_arrays(root_pos=root_pos, joint_data=quats,
+                                 drop_rate=drop_rate, representation="quat",
+                                 rng=np.random.default_rng(7))
+kept = (np.all(drop_q == quats, axis=(1, 2))
+        & np.all(drop_rp == root_pos, axis=1))
+fig = gp.fig_dropout(f"{bvh.joint_names[lively]} height",
+                     joint_height(bvh, node),
+                     joint_height(bvh.from_quat(drop_rp, drop_q), node),
+                     kept, drop_rate=drop_rate)
 plt.show()
 
 # %% [markdown]
-# **`AugmentationPipeline.standard`** — rotate + mirror + noise + speed wired from a `skeleton_info` dict, with per-step probabilities and per-sample random parameters. Three independent draws from the same pipeline.
+# **`AugmentationPipeline.standard`** — rotate + mirror + noise + speed wired from a `skeleton_info` dict, with per-step probabilities and per-sample random parameters. Three independent draws from the same pipeline, on one *shared* bounding box (per-panel autoscaling would silently absorb the translation and rotation differences). Each panel is captioned with what that draw actually sampled, straight from `return_params=True` — the subtitle under every panel is the pipeline's own record of the call, not a guess. What a frame-0 still can't show, the joint track below does: each draw's x-extent is its sampled speed factor, the jitter is the 1° rotation noise. The track uses a *midline* joint deliberately — yaw rotation and mirroring both leave a midline joint's height untouched (a hand track would show the *opposite* hand on mirrored draws, masquerading as a huge amplitude change), so the curve differences are purely noise + speed.
 
 # %%
 from pybvh_ml import AugmentationPipeline, get_skeleton_info
@@ -144,15 +168,29 @@ from pybvh_ml import AugmentationPipeline, get_skeleton_info
 skel = get_skeleton_info(bvh)
 pipeline = AugmentationPipeline.standard(skel, representation="quat",
                                          up_axis=bvh.world_up)
-draws = []
+draws, drawn_params = [], []
 for i in range(3):
-    rp_i, q_i = pipeline(root_pos=root_pos, joint_data=quats,
-                         rng=np.random.default_rng(i))
+    rp_i, q_i, steps = pipeline(root_pos=root_pos, joint_data=quats,
+                                rng=np.random.default_rng(i),
+                                return_params=True)
     draws.append(bvh.from_quat(rp_i, q_i))
+    drawn_params.append(steps)
 
-fig, axes = bvhplot.frame([bvh, *draws], frame=0,
-                          labels=["original", "draw 0", "draw 1", "draw 2"],
+labels = [f"original ({bvh.frame_count}f)"] + \
+         [f"draw {i} ({d.frame_count}f)\n{gp.describe_draw(s)}"
+          for i, (d, s) in enumerate(zip(draws, drawn_params))]
+fig, axes = bvhplot.frame([bvh, *draws], frame=0, labels=labels,
                           camera=(70, 30))
+gp.share_3d_limits(axes, [bvh, *draws], frame=0)
+
+# liveliest joint NOT in an L/R pair — mirror swaps paired trajectories
+paired = {j for pair in skel["lr_pairs"] for j in pair}
+midline = [j for j in range(bvh.joint_count) if j not in paired]
+mid = midline[int(np.argmax(
+    coords[:, [joint_nodes[j] for j in midline], up].std(axis=0)))]
+fig2 = gp.fig_draw_tracks(f"{bvh.joint_names[mid]} height",
+                          joint_height(bvh, joint_nodes[mid]),
+                          [joint_height(d, joint_nodes[mid]) for d in draws])
 plt.show()
 
 # %% [markdown]
@@ -201,20 +239,22 @@ cropped = standardize_length(flat, target_length=50, method="crop")
 print(f"windows {windows.shape}   padded {padded.shape}   "
       f"cropped {cropped.shape}")
 
-fig = gp.fig_windows(bvh.frame_count, window=32, stride=16,
-                     pad_to=100, crop_to=50)
+fig = gp.fig_windows(flat.shape[0], windows.shape, len(padded), len(cropped),
+                     stride=16)
 plt.show()
 
 # %% [markdown]
-# **`uniform_temporal_sample`** — PySKL-style sampling for skeleton-based recognition: split the clip into `clip_length` equal segments, pick one frame per segment. Train mode draws a random offset per segment; test mode is deterministic.
+# **`uniform_temporal_sample`** — PySKL-style sampling for skeleton-based recognition: split the clip into `clip_length` near-equal segments (integer boundaries `i·F//L`, so sizes alternate when L doesn't divide F — the shading below uses those exact boundaries), pick one frame per segment. Train mode draws a random offset per segment; test mode is a fixed seeded draw — not segment midpoints — identical on every call.
 
 # %%
 from pybvh_ml import uniform_temporal_sample
 
 F, L = bvh.frame_count, 12
+# seeds 1..3: seed 0 would collide with test mode's internal default_rng(0)
+# and render the "test" row as a duplicate of a train draw
 train_draws = [uniform_temporal_sample(F, L, mode="train",
                                        rng=np.random.default_rng(i))
-               for i in range(3)]
+               for i in (1, 2, 3)]
 test_draw = uniform_temporal_sample(F, L, mode="test")
 fig = gp.fig_temporal_sample(F, L, train_draws, test_draw)
 plt.show()
@@ -223,7 +263,7 @@ plt.show()
 # ## 6 · Preprocessing
 
 # %% [markdown]
-# **`compute_normalization_stats` / `normalize_array`** — per-channel z-score over the flat `[root_pos, joint_data]` layout (the `Mean.npy` / `Std.npy` convention). Channels whose std is ~0 are guarded to 1 and flagged in the `constant_channels` mask.
+# **`compute_normalization_stats` / `normalize_array`** — per-channel z-score over the flat `[root_pos, joint_data]` layout (the `Mean.npy` / `Std.npy` convention). How to read it: the raw matrix is saturated horizontal stripes — every channel at its own offset and scale, the "can't feed this to a model" state; after z-scoring, the shared ±3 scale reveals the temporal structure (the motion burst past frame ~50). Channels whose std is ~0 are guarded to 1 and flagged in the `constant_channels` mask — the dark rows of the vertical strip, normalized to exactly 0 rather than ~N(0, 1).
 
 # %%
 from pybvh_ml import compute_normalization_stats, normalize_array
@@ -256,18 +296,19 @@ plt.show()
 # ## 7 · PyTorch batching
 
 # %% [markdown]
-# **`collate_motion_batch`** — variable-length clips stacked into one padded tensor plus a validity mask and true lengths. Four slices of the hero clip, batched.
+# **`collate_motion_batch`** — variable-length clips stacked into one padded tensor plus a validity mask and true lengths. Four slices of the hero clip, batched; the clips are hand-built raw arrays, so the dataset centers them (`center_root=True`) — an uncentered root coordinate would sit at ~constant tens of units and saturate the heatmap. The data panel shows one channel, the centered root x: color is how far the character has travelled along x since its first frame — red = ahead of the start, blue = behind, white ≈ at the start. Zero padding is also exactly 0, i.e. white — indistinguishable from "at the start" by color alone, which is precisely why the mask exists. Light = padding in both panels; the teal steps mark each row's true length.
 
 # %%
 from pybvh_ml.torch import collate_motion_batch
 
 lengths = [75, 60, 45, 30]
 clips = [{"root_pos": root_pos[:n], "joint_data": jd6[:n]} for n in lengths]
-ds = MotionDataset(clips)
+ds = MotionDataset(clips, center_root=True)
 batch = collate_motion_batch([ds[i] for i in range(len(ds))])
 print({k: tuple(v.shape) for k, v in batch.items()})
 
-fig = gp.fig_collate_mask(batch)
+fig = gp.fig_collate_mask(batch, channel=0,
+                          channel_desc="root x − x₀, displacement from start")
 plt.show()
 
 # %% [markdown]

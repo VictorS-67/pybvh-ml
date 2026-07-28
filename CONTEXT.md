@@ -54,7 +54,7 @@ This env has:
 - numpy, matplotlib, pytest
 - torch 2.8.0+cpu (CPU-only)
 - h5py 3.14.0
-- pybvh 0.8.0 (editable install) — pybvh-ml 0.5 pins `pybvh>=0.8,<0.9`
+- pybvh (editable install of the sister repo) — pybvh-ml 0.5 pins `pybvh>=0.8.1,<0.9` (0.8.1 publishes `parse_axis`)
 - mkdocs + mkdocs-material + mkdocstrings (docs site; `mkdocs serve` for local preview, `mkdocs build --strict` as the link-integrity gate)
 
 **Important**: pybvh has its own separate conda env (`pybvh`) with no torch/h5py. pybvh-ml code must never require torch or h5py for core functionality — they are optional, guarded with try/except.
@@ -83,7 +83,7 @@ pybvh-ml/
 ├── bvh_data/                    # Test BVH files (bvh_test1-3, standard_skeleton)
 ├── tests/
 │   ├── conftest.py              # shared fixtures (bvh_example, bvh_test3, rng)
-│   ├── test_pybvh_ml.py         # numpy-core unit tests (22 test classes)
+│   ├── test_pybvh_ml.py         # numpy-core unit tests (38 test classes)
 │   ├── test_torch_datasets.py   # torch Dataset/collate tests (skips without torch)
 │   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
 │   ├── test_docs_api_coverage.py     # docs/api pages ↔ modules two-way sync; __all__ resolution
@@ -199,6 +199,10 @@ Kwargs values can be callables of the form `lambda rng: value`, resolved at each
 
 The pipeline automatically forwards its `rng` to augmentation functions that accept an `rng` parameter (detected via `inspect.signature`). This ensures reproducibility for functions like `dropout_arrays` and `add_joint_noise` without requiring explicit `"rng": lambda rng: rng` in kwargs. If the user provides an explicit `rng` kwarg (static or callable), it takes precedence over the auto-forwarded one.
 
+Both dispatch paths route their probability draw and kwarg resolution through one `_resolve_step`, so draw order can't drift between them. It also builds the per-step record `{"name", "applied", "params"}` that `__call__(..., return_params=True)` returns — callables are resolved *only* when the step fires, which is what keeps the flag stream-neutral (asking for records never consumes a draw). `params` reports only the kwargs whose spec was a callable: static kwargs are configuration the caller already has in `augmentations`, and `rng` is machinery. Step names come from `_step_name`, which tolerates steps that carry no `__name__` (`functools.partial`, callable instances) by unwrapping `partial.func` and falling back to the class name.
+
+`MotionDataset.explain_augmentation(idx, epoch=...)` / `OnTheFlyDataset.explain_augmentation(...)` sit on top of this: they re-run one sample's augmentation on a freshly composed `(seed, epoch, idx)` rng — the same one `__getitem__` used — and return its records. Nothing is recorded during training. Both classes feed the replay from the same `_clip_arrays` helper `__getitem__` uses, so the replay cannot drift from what the loader fed the pipeline; the pipeline is genuinely re-run rather than the draws recomputed, because steps like `add_joint_noise` consume an amount of randomness that depends on the clip's shape. An unseeded dataset raises instead of answering (a fresh draw would be indistinguishable from the real one).
+
 ### 5.7 Uniform temporal sampling matches PySKL
 `uniform_temporal_sample` reproduces the PySKL/MMAction2 `UniformSampleFrames` algorithm as a stateless function. Three regimes:
 - **Short** (`num_frames < clip_length`): sequential `[start..start+clip_length-1]` with random start (train) or start=0 (test). Caller applies `% num_frames`.
@@ -212,7 +216,8 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 4. **Mirror math**: quaternion mirror negates the two imaginary components NOT at the lateral axis. 6D mirror uses `R'[i,j] = s_i * s_j * R[i,j]` where `s[lateral] = -1`. Both derived from `R' = S @ R @ S`.
 5. **Quaternion multiplication comes from pybvh** — `pybvh.rotations.quat_multiply` (public since pybvh 0.8.0; Hamilton convention, wxyz scalar-first order). pybvh-ml carried a private bit-identical copy in `augmentation.py` until 0.5.0.
 6. **`torch/` subpackage fails hard on import if torch is missing** — `pybvh_ml.torch` raises ImportError (via `importlib.util.find_spec`, so a *broken* torch installation surfaces its real traceback instead of a misleading "install torch"). But `import pybvh_ml` (the top-level) works fine without torch.
-7. **The Dataset epoch lives in shared memory** — `_EpochState` wraps a `multiprocessing.Value("i", -1)` (−1 = never-set sentinel) so `set_epoch()` in the main process reaches DataLoader workers, including `persistent_workers=True` (workers are created once and never re-receive the dataset — a plain attribute is structurally frozen there). Deliberately no `__getstate__`/`__setstate__`: swapping the Value during pickling would silently break sharing under spawn. Consequence: dataset instances aren't `deepcopy`/`torch.save`-able; sharing only travels via process inheritance, which is exactly how the DataLoader passes the dataset to workers.
+7. **The Dataset epoch lives in shared memory** — `EpochState` wraps a `multiprocessing.Value("i", -1)` (−1 = never-set sentinel) so `set_epoch()` in the main process reaches DataLoader workers, including `persistent_workers=True` (workers are created once and never re-receive the dataset — a plain attribute is structurally frozen there). The Value comes from an explicit **spawn** context, not the process default: a fork-context lock is an anonymous unlinked semaphore whose handle unpickles into a spawn-started worker and then segfaults it, and Linux defaults to fork — so `multiprocessing_context="spawn"` was broken until 0.5.0. A spawn-context lock is named and survives both start methods. Deliberately no `__getstate__`/`__setstate__`: swapping the Value during pickling would silently break sharing under spawn. Consequences: dataset instances aren't `deepcopy`/`torch.save`-able (sharing only travels via process inheritance, which is exactly how the DataLoader passes the dataset to workers), and under a spawn loader the whole dataset must be picklable — so pipeline kwargs need module-level callables rather than lambdas. Public alongside `rng_for(seed, epoch, idx)` since 0.5.0: a Dataset that isn't a `MotionDataset` subclass needs both to honor the same contract.
+8. **The two stochastic `__getitem__` stages share one per-sample generator** — augmentation draws first, then `temporal="resample"` continues on the same stream. That order is what keeps `explain_augmentation` exact (it replays only the augmentation, from the head of an identical stream). `temporal="resample_deterministic"` deliberately gets `rng=None` instead: `uniform_temporal_sample` honors a supplied rng in test mode too, so passing the advanced stream would make "deterministic" drift with the epoch.
 
 ---
 
@@ -240,7 +245,7 @@ The pipeline automatically forwards its `rng` to augmentation functions that acc
 
 ## 8. Test Patterns
 
-Unit tests are in `tests/test_pybvh_ml.py` (22 test classes) plus `tests/test_torch_datasets.py` (3 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 357 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training). Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (38 test classes) plus `tests/test_torch_datasets.py` (10 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 509 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training) for 1061 with them. Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures** (shared ones live in `tests/conftest.py`):
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)

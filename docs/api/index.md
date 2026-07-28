@@ -11,6 +11,7 @@ The fastest route from "I want to…" to the exact call.
 | Preprocess a BVH directory to one dataset file | `preprocess_directory("data/", "train.npz")` | [Preprocessing](preprocessing.md) |
 | Load a preprocessed dataset | `load_preprocessed("train.npz")` | [Preprocessing](preprocessing.md) |
 | Reconcile mixed skeletons / fps / up-axes | `preprocess_directory(..., harmonize=True)` | [Preprocessing guide](../guide/preprocessing.md#harmonizing-heterogeneous-datasets) |
+| Resample a corpus to a training frame rate | `preprocess_directory(..., target_fps=30)` | [Preprocessing guide](../guide/preprocessing.md#frame-rate) |
 | Compute / apply z-score normalization | `compute_normalization_stats(bvhs)`, `normalize_array(x, stats)` | [Preprocessing](preprocessing.md) |
 | Pack arrays into a model layout | `pack_to_ctv(root_pos, jd)`, `pack_to_tvc(...)`, `pack_to_flat(...)` | [Packing](packing.md) |
 | Unpack a model layout back to arrays | `unpack_from_ctv(x)`, `unpack_from_tvc(x)`, `unpack_from_flat(x)` | [Packing](packing.md) |
@@ -25,9 +26,12 @@ The fastest route from "I want to…" to the exact call.
 | Pad / crop to a fixed length | `standardize_length(data, target_length=128)` | [Sequences](sequences.md) |
 | Sample frames PySKL-style | `sample_temporal(data, clip_length=64, mode="train")` | [Sequences](sequences.md) |
 | Know what each packed column means | `describe_features(num_joints=24, representation="6d")` | [Metadata](metadata.md) |
-| Build a PyTorch Dataset from preprocessed clips | `MotionDataset(clips, target_length=128)` | [PyTorch](torch.md) |
+| Build a PyTorch Dataset from a preprocessed file | `MotionDataset.from_preprocessed(loaded)` | [PyTorch](torch.md) |
+| Build a PyTorch Dataset from clip dicts | `MotionDataset(clips, target_length=128)` | [PyTorch](torch.md) |
 | Build a Dataset straight from BVH paths | `OnTheFlyDataset(paths, representation="6d")` | [PyTorch](torch.md) |
+| Feed a GCN fixed-budget `(C, T, V)` clips | `MotionDataset(..., layout="ctv", temporal="resample")` | [PyTorch guide](../guide/pytorch.md#shaping-the-clip-temporal-and-layout) |
 | Batch variable-length clips with masks | `DataLoader(ds, collate_fn=collate_motion_batch)` | [PyTorch](torch.md) |
+| Seed your own Dataset the same way | `rng_for(seed, epoch, idx)`, `EpochState()` | [PyTorch guide](../guide/pytorch.md#using-the-seeding-scheme-in-your-own-dataset) |
 
 ## Modules at a glance
 

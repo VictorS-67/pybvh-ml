@@ -19,33 +19,12 @@ from __future__ import annotations
 import numpy as np
 import numpy.typing as npt
 
-from pybvh import rotations
+from pybvh import parse_axis, rotations
 
 
 # =========================================================================
 # Private helpers
 # =========================================================================
-
-_AXIS_IDX = {"x": 0, "y": 1, "z": 2}
-
-
-def _parse_axis(axis: str) -> tuple[int, float]:
-    """Parse a signed-axis string into ``(index, sign)``.
-
-    Accepts exactly the six canonical values ``'+x'``, ``'-x'``,
-    ``'+y'``, ``'-y'``, ``'+z'``, ``'-z'`` — matching the
-    :attr:`pybvh.Bvh.world_up` / :meth:`pybvh.Bvh.forward_at`
-    convention.
-    """
-    if (not isinstance(axis, str)
-            or len(axis) != 2
-            or axis[0] not in "+-"
-            or axis[1] not in "xyz"):
-        raise ValueError(
-            f"axis must be one of '+x', '-x', '+y', '-y', '+z', '-z'; "
-            f"got {axis!r}")
-    return _AXIS_IDX[axis[1]], 1.0 if axis[0] == "+" else -1.0
-
 
 def _validate_noise_sigmas(sigma: float, sigma_pos: float) -> None:
     """Reject negative noise standard deviations."""
@@ -97,6 +76,13 @@ def _to_quats(
     if representation == "rotmat":
         # pybvh-ml carries rotmat flat as (F, J, 9); pybvh's
         # rotations.convert expects (..., 3, 3).  Adapt at the boundary.
+        if joint_data.ndim != 3:
+            raise ValueError(
+                f"representation='rotmat' expects joint data flat as "
+                f"(F, J, 9) — the layout convert_arrays documents and "
+                f"produces — got shape {joint_data.shape}. Reshape a "
+                f"(F, J, 3, 3) array with .reshape(F, J, 9) first; "
+                f"augmentation returns the flat layout either way.")
         F, J = joint_data.shape[:2]
         return rotations.convert(
             joint_data.reshape(F, J, 3, 3), "rotmat", "quat")
@@ -225,6 +211,21 @@ def rotate_vertical(
     -------
     new_root_pos : ndarray, shape (F, 3)
     new_joint_data : ndarray, shape (F, J, C)
+
+    Notes
+    -----
+    The rotation is about the **world origin**, not about the
+    character: ``root_pos`` is rotated as a set of points, so a clip
+    whose root sits away from the origin sweeps along an arc rather
+    than turning on the spot.  The alternative convention is a pivot at
+    the character — typically the first frame's root projected to the
+    ground plane — which is turn-in-place.
+
+    The two coincide exactly when the clip's first-frame root is at the
+    origin, which is what ``center_root=True`` produces, so the
+    packing and Dataset paths (where centering is the default) already
+    get turn-in-place from this function.  On uncentered arrays, center
+    before rotating and add the offset back if that is what you want.
     """
     joint_data = np.array(joint_data, dtype=np.float64)
     root_pos = np.array(root_pos, dtype=np.float64)
@@ -234,7 +235,8 @@ def rotate_vertical(
             "rotate_vertical requires at least one joint (joint 0 is "
             "the root whose rotation carries the yaw); got J=0")
 
-    up_idx, up_sign = _parse_axis(up_axis)
+    up = parse_axis(up_axis)
+    up_idx, up_sign = up.index, up.sign
     signed_angle = angle * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_root_pos = (R_vert @ root_pos.T).T
@@ -275,7 +277,18 @@ def mirror(
     root_pos : ndarray, shape (F, 3)
     joint_data : ndarray, shape (F, J, C)
     lr_joint_pairs : list of (int, int)
-        ``[(left_idx, right_idx), ...]`` in joint-array space.
+        ``[(left_idx, right_idx), ...]`` in joint-array space, typically
+        :func:`pybvh_ml.get_lr_pairs`.  **The reflection is applied to every
+        joint; this list only controls which ones additionally swap slots.**
+        That is the right behavior for midline joints (hips, spine, neck,
+        head), which have no partner and must reflect in place.  It is the
+        wrong behavior for a lateral joint whose partner is missing from the
+        list: it reflects in place instead of moving to its partner's slot,
+        producing a pose where that limb mirrors while the rest of the body
+        does not — silently, with no shape or value error.  Completeness of
+        this list is the caller's responsibility; an empty list reflects
+        every joint in place without any swap, which is correct only for a
+        skeleton that is entirely midline.
     lateral_axis : str
         Signed axis string: ``'+x'``, ``'-x'``, ``'+y'``, ``'-y'``,
         ``'+z'``, or ``'-z'``.  The sign is accepted for API symmetry
@@ -291,12 +304,37 @@ def mirror(
     -------
     new_root_pos : ndarray, shape (F, 3)
     new_joint_data : ndarray, shape (F, J, C)
+
+    Notes
+    -----
+    Mirroring is done in **parent-local rotation space** — reflect each
+    rotation, swap the L/R slots — matching :func:`pybvh.transforms.mirror`,
+    so mirroring arrays and mirroring the source :class:`~pybvh.Bvh` give the
+    same motion.  The alternative is mirroring in world space: run FK, reflect
+    the resulting joint positions, and re-solve for local rotations.  The two
+    agree exactly when the rest pose is laterally symmetric (every left
+    joint's offset is the mirror of its right partner's, and midline offsets
+    have no lateral component), which holds for most retargeted rigs.  They
+    diverge on rigs with asymmetric offsets: the local-space result is still a
+    valid pose, but not the exact reflection of the input, with the error
+    accumulating down the chain from the first asymmetric bone.  Neither
+    pybvh nor pybvh-ml implements the world-space variant.
+
+    ``lateral_axis`` must also be given explicitly here, whereas
+    :meth:`pybvh.Bvh.mirror` auto-detects it by averaging left-minus-right
+    rest-pose offsets — again, an array-level function has no rest pose to
+    measure.  The default ``lateral_axis='+x'`` on
+    :meth:`~pybvh_ml.AugmentationPipeline.standard` is a convention, not a
+    measurement: it is correct for the usual Y-up / Z-forward rig and wrong
+    for a rig whose lateral axis is Z.  When in doubt, mirror one clip on the
+    :class:`~pybvh.Bvh` (which measures the axis) and compare against the
+    array path before trusting the assumed axis across a dataset.
     """
     new_data = np.array(joint_data, dtype=np.float64)
     new_root_pos = np.array(root_pos, dtype=np.float64)
     _validate_frame_counts(new_root_pos, new_data)
 
-    lateral_idx, _ = _parse_axis(lateral_axis)
+    lateral_idx = parse_axis(lateral_axis).index
     new_root_pos[:, lateral_idx] *= -1.0
 
     # 6D and quaternion: swap raw joint data, then apply the analytic
@@ -438,6 +476,24 @@ def speed_perturbation_arrays(
         banker's rounding — ``round(2.5) == 2``).  Inputs with fewer
         than 2 frames have nothing to interpolate between and are
         returned as unchanged copies.
+
+    Notes
+    -----
+    Rotations are interpolated with ``pybvh.rotations.quat_slerp``
+    under its ``shortest=True`` default: the interpolant takes the
+    short arc between adjacent frames, so a turn is never read as its
+    >180° complement.  The alternative, ``shortest=False``, preserves a
+    genuine wind-up or spin that exceeds half a turn; it is not exposed
+    here because a per-frame stencil cannot tell one from the other.
+
+    A consequence for ``representation="quat"`` specifically: output
+    quaternions may come back as ``-q`` relative to the corresponding
+    input, since ``q`` and ``-q`` are the same rotation and the short
+    arc picks whichever hemisphere is nearer.  Every other
+    representation is unaffected (the sign is not observable in them).
+    Compare rotations, not raw components, when diffing output against
+    input — or run the input through ``pybvh.rotations.quat_unwrap``
+    first, which makes a sequence hemisphere-continuous.
     """
     if factor <= 0:
         raise ValueError(f"factor must be > 0, got {factor}")
@@ -467,8 +523,10 @@ def speed_perturbation_arrays(
 
     t_left = t_orig[idx_left]
     t_right = t_orig[idx_right]
+    # Adjacent samples of linspace(0, 1, F) with F >= 2, so dt is
+    # exactly 1/(F-1) — never the degenerate interval a zero-guard here
+    # would be protecting against.
     dt = t_right - t_left
-    dt = np.where(dt < 1e-15, 1.0, dt)
     alpha = (t_new - t_left) / dt
 
     q_left = quats[idx_left]
@@ -513,6 +571,20 @@ def dropout_arrays(
     -------
     new_root_pos : ndarray, shape (F, 3)
     new_joint_data : ndarray, shape (F, J, C)
+
+    Notes
+    -----
+    Frames 0 and ``F-1`` are always kept, so every dropped frame has
+    real neighbours on both sides to interpolate between.  Kept frames
+    pass through bit-identically; only the dropped ones are rebuilt.
+
+    Dropped frames are rebuilt with ``pybvh.rotations.quat_slerp``
+    under its ``shortest=True`` default, so for
+    ``representation="quat"`` a rebuilt frame may come back as ``-q``
+    relative to the original — the same rotation in the nearer
+    hemisphere.  See :func:`speed_perturbation_arrays` for the full
+    note; ``pybvh.rotations.quat_unwrap`` makes a sequence
+    hemisphere-continuous if you need to compare components directly.
     """
     _validate_drop_rate(drop_rate)
     if rng is None:

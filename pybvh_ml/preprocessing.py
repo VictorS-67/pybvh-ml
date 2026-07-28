@@ -15,7 +15,7 @@ from typing import Callable
 import numpy as np
 import numpy.typing as npt
 
-from pybvh import Bvh, read_bvh_file
+from pybvh import Bvh, parse_axis, read_bvh_file
 from pybvh import harmonize as pybvh_harmonize
 from pybvh import rotations
 from pybvh_ml.skeleton import get_skeleton_info
@@ -156,17 +156,38 @@ def _load_one(
         return None
 
 
+_REST_UP_UNKNOWN = "unknown"
+"""Audit key for a rig whose rest-pose up axis cannot be measured.
+
+``Bvh.rest_up`` is ``None`` for a degenerate rest pose.  The audit is
+persisted as JSON, so the key has to be a string — see
+:func:`_compute_uniformity`.
+"""
+
+
+def _fps_key(bvh: Bvh) -> str:
+    """A clip's frame rate as a stable dict key.
+
+    Frame rates arrive as ``1 / frame_time`` floats, so keying the audit
+    on the raw value would split ``120.0`` from ``119.99999999`` into two
+    "distinct" rates.  Six significant digits collapses float noise while
+    still separating genuinely different rates (30 vs 29.97).
+    """
+    return f"{1.0 / bvh.frame_time:.6g}"
+
+
 def _compute_uniformity(
     clips: list[Bvh], stems: list[str],
 ) -> dict[str, dict[str, list[str]]]:
-    """Group filenames by their world_up, rest-pose forward, and rest-pose up.
+    """Group filenames by frame rate, world_up, rest-forward, and rest-up.
 
     Returned structure::
 
         {
+          "fps":          {"120": [stem, ...], "30": [stem, ...]},
           "world_up":     {"+z": [stem, ...], "+y": [stem, ...]},
           "rest_forward": {"+y": [stem, ...], "+x": [stem, ...]},
-          "rest_up":      {"+z": [stem, ...], "+y": [stem, ...]},
+          "rest_up":      {"+z": [stem, ...], "unknown": [stem, ...]},
           "rest_anim_mismatch": [stem, ...],  # rest_up != world_up
         }
 
@@ -174,8 +195,20 @@ def _compute_uniformity(
     disagrees with the animation-derived ``world_up`` — the condition
     pybvh warns about per-file at load.  Such files silently corrupt
     training tensors across every rotation representation; pass
-    ``target_rest_up`` to reorient them at load.
+    ``target_rest_up`` to reorient them at load.  A rig whose rest pose
+    is degenerate is *not* listed: ``Bvh.rest_up`` is ``None`` there,
+    and an unmeasurable axis cannot disagree with anything — reporting
+    it as a mismatch claimed a corruption that was never diagnosed.
+
+    ``rest_up`` files those rigs under the string ``"unknown"`` rather
+    than a ``None`` key.  The audit is persisted as JSON, whose object
+    keys must be strings: a ``None`` key round-trips back as the string
+    ``"null"``, so the saved audit would not equal the returned one.
+    Note the deliberate asymmetry with ``skeleton_info["rest_up"]``,
+    which stays ``None`` — there the axis is a JSON *value*, and
+    ``null`` round-trips to ``None`` correctly.
     """
+    fps: dict[str, list[str]] = {}
     world_up: dict[str, list[str]] = {}
     rest_forward: dict[str, list[str]] = {}
     rest_up: dict[str, list[str]] = {}
@@ -183,12 +216,15 @@ def _compute_uniformity(
     for stem, b in zip(stems, clips):
         anim_up = b.world_up
         r_up = b.rest_up
+        fps.setdefault(_fps_key(b), []).append(stem)
         world_up.setdefault(anim_up, []).append(stem)
         rest_forward.setdefault(b.rest_forward, []).append(stem)
-        rest_up.setdefault(r_up, []).append(stem)
-        if r_up != anim_up:
+        rest_up.setdefault(
+            r_up if r_up is not None else _REST_UP_UNKNOWN, []).append(stem)
+        if r_up is not None and r_up != anim_up:
             rest_anim_mismatch.append(stem)
     return {
+        "fps": fps,
         "world_up": world_up,
         "rest_forward": rest_forward,
         "rest_up": rest_up,
@@ -201,6 +237,7 @@ def _warn_if_heterogeneous(
     target_world_up: str | None,
     target_rest_forward: str | None,
     target_rest_up: str | None,
+    target_fps: float | None = None,
     *,
     harmonize: bool = False,
 ) -> None:
@@ -225,11 +262,21 @@ def _warn_if_heterogeneous(
             examples.append(f"{v!r} e.g. {names[:3]}")
         return f"distribution {{{dist}}}; {'; '.join(examples)}"
 
-    def _advice(kwarg: str) -> str:
+    def _advice(kwarg: str, placeholder: str = "'<axis>'") -> str:
         if harmonize:
             return (f"harmonize=True will unify these to the majority "
-                    f"value; pass {kwarg}='<axis>' to override.")
-        return f"Pass {kwarg}='<axis>' to harmonize."
+                    f"value; pass {kwarg}={placeholder} to override.")
+        return f"Pass {kwarg}={placeholder} to harmonize."
+
+    if len(uniformity["fps"]) > 1 and target_fps is None:
+        warnings.warn(
+            "Frame rate is not uniform across the dataset — "
+            f"{_format(uniformity['fps'])}. Every frame-indexed feature "
+            "(joint_data, and any velocities / foot contacts) is sampled "
+            "at each clip's own rate, so a model sees the same motion at "
+            "different speeds. "
+            f"{_advice('target_fps', '<hz>')}",
+            UserWarning, stacklevel=3)
 
     if len(uniformity["world_up"]) > 1 and target_world_up is None:
         warnings.warn(
@@ -301,11 +348,12 @@ def _majority_value(distribution: dict[str, list[str]]) -> str | None:
     """Return the key with the most entries in ``distribution`` (ties broken
     by lexical order for determinism), or ``None`` if empty.
 
-    ``None`` keys are excluded — ``Bvh.rest_up`` is ``None`` for
-    degenerate rigs, and ``None`` can neither win a lexical tie-break
-    against a string nor serve as a reorientation target.
+    The :data:`_REST_UP_UNKNOWN` key is excluded — it records rigs whose
+    rest-pose up axis could not be measured, which is not a value any
+    clip can be reoriented *to*.  A distribution of nothing but unknowns
+    therefore resolves to ``None`` (no target), not to ``"unknown"``.
     """
-    keys = [k for k in distribution if k is not None]
+    keys = [k for k in distribution if k != _REST_UP_UNKNOWN]
     if not keys:
         return None
     return max(keys, key=lambda k: (len(distribution[k]), k))
@@ -335,6 +383,30 @@ def _is_already_uniform_euler_order(
     return all(all(o == target for o in c.euler_orders) for c in clips)
 
 
+def _is_parallel(axis_a: str, axis_b: str) -> bool:
+    """Whether two signed-axis strings name the same axis, sign ignored.
+
+    ``'+z'`` and ``'-z'`` are parallel; a rest-forward direction that is
+    parallel to world up has no ground-plane rotation that reaches it,
+    which is what ``pybvh.reorient_rest_forward`` rejects.
+    """
+    return parse_axis(axis_a).index == parse_axis(axis_b).index
+
+
+def _effective_world_up(uniformity: dict, target_world_up: str | None) -> str:
+    """The up axis every clip will carry once the world-up stage has run.
+
+    An explicit target wins; otherwise it is the audit majority, which
+    for a dataset that already agrees is simply that agreed value — so
+    this answers correctly whether or not any reorientation happens.
+    """
+    if target_world_up is not None:
+        return target_world_up
+    # Bvh.world_up is never None (pybvh falls back rather than returning
+    # nothing), so a non-empty dataset always resolves here.
+    return _majority_value(uniformity["world_up"])
+
+
 def _resolve_harmonize_targets(
     clips: list[Bvh],
     uniformity: dict,
@@ -343,13 +415,14 @@ def _resolve_harmonize_targets(
     target_rest_forward: str | None,
     target_rest_up: str | None,
     target_euler_order: str | None,
-) -> dict[str, str]:
+    target_fps: float | None = None,
+) -> dict[str, str | float]:
     """Resolve target signature for ``pybvh.harmonize``: explicit kwargs win,
     audit majority fills in the rest.  Order-sensitive representations
     additionally resolve a target Euler order; rotation-invariant ones
     drop it (mixing orders is harmless in those tensors).
     """
-    targets: dict[str, str] = {}
+    targets: dict[str, str | float] = {}
 
     def _fill_from_majority(key: str, distribution: dict) -> None:
         # _majority_value returns None when every clip's value is None
@@ -357,6 +430,15 @@ def _resolve_harmonize_targets(
         majority = _majority_value(distribution)
         if majority is not None:
             targets[key] = majority
+
+    if target_fps is not None:
+        targets["target_fps"] = float(target_fps)
+    elif len(uniformity["fps"]) > 1:
+        # Majority is a *rate*, not an axis string — parse the audit key
+        # back to the float pybvh.harmonize expects.
+        majority_fps = _majority_value(uniformity["fps"])
+        if majority_fps is not None:
+            targets["target_fps"] = float(majority_fps)
 
     if target_world_up is not None:
         targets["target_world_up"] = target_world_up
@@ -366,10 +448,43 @@ def _resolve_harmonize_targets(
         targets["target_rest_up"] = target_rest_up
     elif uniformity["rest_anim_mismatch"]:
         _fill_from_majority("target_rest_up", uniformity["rest_up"])
+    effective_up = _effective_world_up(uniformity, target_world_up)
     if target_rest_forward is not None:
+        if _is_parallel(target_rest_forward, effective_up):
+            source = ("target_world_up" if target_world_up is not None
+                      else "the dataset majority")
+            raise ValueError(
+                f"target_rest_forward={target_rest_forward!r} is parallel "
+                f"to the world up every clip will have after harmonizing "
+                f"({effective_up!r}, from {source}). Rest-forward is "
+                f"reached by a rotation in the ground plane, so it must be "
+                f"perpendicular to world up — pick a perpendicular axis, "
+                f"or change target_world_up.")
         targets["target_rest_forward"] = target_rest_forward
     elif len(uniformity["rest_forward"]) > 1:
-        _fill_from_majority("target_rest_forward", uniformity["rest_forward"])
+        # Resolve each axis's majority independently, then drop
+        # rest-forward candidates that are parallel to the up axis the
+        # dataset is heading for: the two majorities are computed from
+        # different clips and need not co-occur in any single one, and
+        # pybvh rejects the parallel pair.  (The alternative — a
+        # majority over whole per-clip axis *signatures* — can pick a
+        # minority convention on the heaviest axis, and composes badly
+        # with an explicit target_world_up.)
+        perpendicular = {
+            axis: stems for axis, stems in uniformity["rest_forward"].items()
+            if not _is_parallel(axis, effective_up)
+        }
+        if perpendicular:
+            _fill_from_majority("target_rest_forward", perpendicular)
+        else:
+            warnings.warn(
+                f"Every rest-forward axis in the dataset "
+                f"({sorted(uniformity['rest_forward'])}) is parallel to the "
+                f"resolved world up ({effective_up!r}), so rest-forward is "
+                f"left unharmonized — clips keep their own facing. Pass "
+                f"target_rest_forward='<axis perpendicular to "
+                f"{effective_up}>' to unify it anyway.",
+                UserWarning, stacklevel=4)
 
     if _channel_layout_depends_on_euler_order(representation):
         if target_euler_order is not None:
@@ -413,6 +528,78 @@ def _normalization_stats_from_arrays(
     return {"mean": mean, "std": std, "constant_channels": constant_channels}
 
 
+def _reject_parallel_rest_forward(
+    clips: list[Bvh],
+    stems: list[str],
+    target_rest_forward: str,
+    target_world_up: str | None,
+) -> None:
+    """Fail, naming the kwargs, on a rest-forward target that cannot be reached.
+
+    ``reorient_rest_forward`` rotates in the ground plane, so a target
+    parallel to a clip's world up is unreachable and pybvh rejects it —
+    per clip, naming no file and no kwarg.  The offending pair is known
+    before any clip is touched, so say so here instead.
+    """
+    if target_world_up is not None:
+        # Every clip carries target_world_up by the time rest-forward runs.
+        if _is_parallel(target_rest_forward, target_world_up):
+            raise ValueError(
+                f"target_rest_forward={target_rest_forward!r} is parallel "
+                f"to target_world_up={target_world_up!r}. Rest-forward is "
+                f"reached by a rotation in the ground plane, so it must be "
+                f"perpendicular to world up.")
+        return
+    offenders = [
+        (s, b.world_up) for s, b in zip(stems, clips)
+        if _is_parallel(target_rest_forward, b.world_up)
+    ]
+    if offenders:
+        listed = ", ".join(f"'{s}' (world_up={up!r})"
+                           for s, up in offenders[:5])
+        raise ValueError(
+            f"target_rest_forward={target_rest_forward!r} is parallel to "
+            f"the world up of {len(offenders)} clip(s): {listed}. "
+            f"Rest-forward is reached by a rotation in the ground plane, "
+            f"so it must be perpendicular to world up — pick a "
+            f"perpendicular axis, or pass target_world_up=... to move "
+            f"those clips first.")
+
+
+def _reject_degenerate_rest_up_targets(
+    clips: list[Bvh], stems: list[str], target_rest_up: str,
+) -> None:
+    """Fail, with names, before a rest-up target hits a degenerate rig.
+
+    A rest-up target sends every clip through ``reorient_rest_up``,
+    which needs a measurable rest-pose up axis to rotate *from*.  A rig
+    that has none (``Bvh.rest_up is None``) raises inside pybvh naming
+    no file, and under ``harmonize=True`` the target can be filled from
+    the dataset majority rather than passed by the caller — so the
+    error would arrive for a kwarg they never wrote.
+
+    Raising here rather than skipping those clips is deliberate: the
+    target exists to repair a genuine rest/animation disagreement among
+    the other clips, and silently leaving some rigs unreoriented would
+    ship exactly the mixed reference frames it was meant to fix.
+    """
+    # TODO(upstream pybvh): batch.harmonize's rest-up stage guard treats
+    # rest_up=None as "differs from the target" and calls
+    # reorient_rest_up on rigs that have nothing to reorient; it should
+    # skip them.  Filed in docs/internal_logs/upstream_feedback.md —
+    # once pybvh ships that, this can relax to a warning.
+    degenerate = [s for s, b in zip(stems, clips) if b.rest_up is None]
+    if not degenerate:
+        return
+    raise ValueError(
+        f"target_rest_up={target_rest_up!r} reorients every clip's rest "
+        f"pose, but {len(degenerate)} clip(s) have no measurable rest-pose "
+        f"up axis (degenerate rest pose): {degenerate[:5]}. Exclude them "
+        f"with filter_fn=..., or drop the rest-up target (with "
+        f"harmonize=True it is filled from the dataset majority, so pass "
+        f"target_rest_up only when you need it).")
+
+
 def _stage_counts(applied_stages: list[dict]) -> dict[str, int]:
     """Aggregate ``HarmonizeReport.applied_stages`` (per-clip list of
     per-stage dicts) into ``{stage_name: clip_count}``."""
@@ -433,6 +620,7 @@ def _run_harmonize(
     target_rest_up: str | None,
     target_euler_order: str | None,
     retarget: bool,
+    target_fps: float | None = None,
 ) -> tuple[list[Bvh], list[str]]:
     """Drive ``pybvh.harmonize`` with resolved targets and surface drops.
 
@@ -459,8 +647,12 @@ def _run_harmonize(
     targets = _resolve_harmonize_targets(
         clips, uniformity, representation,
         target_world_up, target_rest_forward, target_rest_up,
-        target_euler_order,
+        target_euler_order, target_fps,
     )
+    if "target_rest_up" in targets:
+        # Covers the majority-filled target too, not just an explicit one.
+        _reject_degenerate_rest_up_targets(
+            clips, stems, targets["target_rest_up"])
     harmonized, report = pybvh_harmonize(
         clips, reference=clips[0] if retarget else None,
         **targets, return_report=True, verbose=False,
@@ -710,6 +902,7 @@ def preprocess_directory(
     target_rest_forward: str | None = None,
     target_rest_up: str | None = None,
     target_euler_order: str | None = None,
+    target_fps: float | None = None,
     parallel: bool = False,
     max_workers: int | None = None,
 ) -> dict:
@@ -830,6 +1023,24 @@ def preprocess_directory(
         (``"euler"`` / ``"axisangle"``); silently ignored otherwise.
         ``None`` (default) under ``harmonize=True`` picks the majority
         Euler order across clips.
+    target_fps : float or None
+        Frame rate in Hz to resample every clip to, applied **before
+        extraction** via :meth:`pybvh.Bvh.resample` (quaternion SLERP
+        for rotations, linear for root position).  Resampling first is
+        what makes it correct: ``joint_data``, ``include_velocities``
+        and ``include_foot_contacts`` are all derived from the resampled
+        clip, so they describe the motion at the target rate.
+        Decimating the saved arrays afterwards cannot reproduce this —
+        velocities in particular are finite differences whose stencil
+        baseline is set by the *original* ``frame_time``.
+
+        Same dual semantics as ``target_world_up``: with
+        ``harmonize=False`` (default) each clip is resampled directly;
+        with ``harmonize=True`` it becomes the explicit frame-rate
+        target for :func:`pybvh.harmonize`, overriding the audit
+        majority.  ``None`` (default) defers to the dataset majority
+        under ``harmonize=True`` — a mixed-rate dataset is unified to
+        its most common rate — and leaves clips untouched otherwise.
     parallel : bool
         If True, load BVH files using a :class:`ThreadPoolExecutor`.
         Speeds up large directories; per-file I/O is the bottleneck.
@@ -840,8 +1051,8 @@ def preprocess_directory(
     Notes
     -----
     **Uniformity warnings.** After loading, this function inspects
-    every clip's animation-derived ``world_up``, rest-pose forward
-    direction, and rest-pose up axis.  It emits one aggregated
+    every clip's frame rate, animation-derived ``world_up``, rest-pose
+    forward direction, and rest-pose up axis.  It emits one aggregated
     :class:`UserWarning` per category when files disagree, plus a
     separate aggregated warning when any file's rest-pose up axis
     disagrees with its own animation-derived ``world_up`` (pybvh's
@@ -849,10 +1060,10 @@ def preprocess_directory(
     load in favor of this one batch-level message).  Warnings include
     the distribution of values, the first three example filenames per
     minority value, and the exact kwarg that would fix it
-    (``target_world_up``, ``target_rest_forward``, ``target_rest_up``).
-    When the corresponding ``target_*`` kwarg is explicitly set, that
-    category's check is skipped (the target value becomes the
-    post-reorient ground truth).
+    (``target_fps``, ``target_world_up``, ``target_rest_forward``,
+    ``target_rest_up``).  When the corresponding ``target_*`` kwarg is
+    explicitly set, that category's check is skipped (the target value
+    becomes the post-reorient ground truth).
 
     Returns
     -------
@@ -862,26 +1073,40 @@ def preprocess_directory(
         ``uniformity`` is a dict of the form::
 
             {
+              "fps":          {value: [stems, ...]},
               "world_up":     {value: [stems, ...]},
               "rest_forward": {value: [stems, ...]},
               "rest_up":      {value: [stems, ...]},
               "rest_anim_mismatch": [stems, ...],
-              "harmonized_to": {...},   # present only when harmonize=True
+              "harmonized_to":   {...},  # only when harmonize=True
+              "applied_targets": {...},  # only when harmonize=False
             }
 
-        capturing the pre-reorient state of the dataset (useful for
-        CI gates that want to fail on heterogeneity).
+        The four distributions capture the **pre-transform** state of
+        the dataset (useful for CI gates that want to fail on
+        heterogeneity); what was then *done* to it is the other two
+        keys, exactly one of which can be present.
         ``rest_anim_mismatch`` lists files whose rest-pose up axis
         disagrees with their animation-derived ``world_up`` — the
-        condition ``target_rest_up`` repairs.
+        condition ``target_rest_up`` repairs.  Rigs with an
+        unmeasurable rest pose are filed under ``rest_up`` key
+        ``"unknown"`` and excluded from ``rest_anim_mismatch``.
 
         When ``harmonize=True``, ``harmonized_to`` carries the
-        resolved target signature (``world_up``, ``rest_up``,
-        ``rest_forward``, ``euler_order`` — only those that ran),
-        ``stage_counts`` (per-stage count of clips modified, from
-        pybvh's ``HarmonizeReport.applied_stages``), and the
-        serialized ``report`` itself (JSON-native ``dict`` from
-        ``dataclasses.asdict``).
+        resolved target signature (``target_fps``,
+        ``target_world_up``, ``target_rest_up``,
+        ``target_rest_forward``, ``target_euler_order`` — only those
+        that were resolved), the ``retarget`` choice and pinned
+        ``reference``, ``stage_counts`` (per-stage count of clips
+        modified, from pybvh's ``HarmonizeReport.applied_stages``),
+        and the serialized ``report`` itself (JSON-native ``dict``
+        from ``dataclasses.asdict``).
+
+        Otherwise ``applied_targets`` records the ``target_*`` kwargs
+        this call applied directly, under the same names — absent when
+        none was passed.  ``target_euler_order`` never appears: it is
+        honored only under ``harmonize=True``, so recording it here
+        would claim a transform that did not run.
     """
     bvh_dir = Path(bvh_dir)
     output_path = Path(output_path)
@@ -930,23 +1155,40 @@ def preprocess_directory(
     uniformity = _compute_uniformity(clips, stems)
     _warn_if_heterogeneous(
         uniformity, target_world_up, target_rest_forward, target_rest_up,
-        harmonize=harmonize)
+        target_fps, harmonize=harmonize)
 
     if harmonize:
         clips, stems = _run_harmonize(
             clips, stems, uniformity, representation,
             target_world_up, target_rest_forward, target_rest_up,
-            target_euler_order, retarget,
+            target_euler_order, retarget, target_fps,
         )
     else:
+        if target_rest_forward is not None:
+            _reject_parallel_rest_forward(
+                clips, stems, target_rest_forward, target_world_up)
+        if target_rest_up is not None:
+            _reject_degenerate_rest_up_targets(clips, stems, target_rest_up)
+
+        # Stage order mirrors pybvh.harmonize: resample, then world-up
+        # (which moves the whole scene), then the rest-pose axes.
+        applied_targets: dict[str, str | float] = {}
+        if target_fps is not None:
+            clips = [b.resample(target_fps) for b in clips]
+            applied_targets["target_fps"] = float(target_fps)
         if target_world_up is not None:
             clips = [b.reorient_world_up(target_world_up) or b for b in clips]
+            applied_targets["target_world_up"] = target_world_up
         if target_rest_forward is not None:
             clips = [
                 b.reorient_rest_forward(target_rest_forward) or b
                 for b in clips]
+            applied_targets["target_rest_forward"] = target_rest_forward
         if target_rest_up is not None:
             clips = [b.reorient_rest_up(target_rest_up) or b for b in clips]
+            applied_targets["target_rest_up"] = target_rest_up
+        if applied_targets:
+            uniformity["applied_targets"] = applied_targets
 
     _check_skeleton_compatibility(clips, stems, representation)
 
@@ -1145,13 +1387,23 @@ def load_preprocessed(path: str | Path) -> dict:
         pybvh-ml >= 0.3 (absent for older files).
 
         ``uniformity`` is the axis-uniformity audit recorded at
-        preprocessing time (world-up / rest-forward / rest-up
-        distributions, and ``harmonized_to`` — resolved targets,
-        ``retarget`` choice, and the full harmonize report — when the
-        dataset was built with ``harmonize=True``).  Files written
-        before pybvh-ml 0.5.0 load it as ``None``.
+        preprocessing time: the pre-transform frame-rate / world-up /
+        rest-forward / rest-up distributions, plus a record of what was
+        applied to them — ``harmonized_to`` (resolved targets,
+        ``retarget`` choice, and the full harmonize report) when the
+        dataset was built with ``harmonize=True``, or
+        ``applied_targets`` (the ``target_*`` kwargs applied directly)
+        when it was not.  Files written before pybvh-ml 0.5.0 load it
+        as ``None``.
 
         ``center_root`` is the flag the dataset was preprocessed with (files written before pybvh-ml 0.5.0 don't record it, so it loads as ``None``).  When it is ``True``, the stored ``root_pos`` arrays are already centered — repack them with ``pack_to_*(..., center_root=False)``.
+
+        ``skeleton_info`` always carries every key
+        :func:`~pybvh_ml.skeleton.get_skeleton_info` documents, whatever
+        version wrote the file: keys an older dataset never recorded
+        (``world_up`` / ``rest_forward`` / ``rest_up`` before 0.5.0) read
+        back as ``None`` rather than being absent, so consumers can index
+        them directly.
     """
     path = Path(path)
     _validate_output_suffix(path)
@@ -1161,13 +1413,37 @@ def load_preprocessed(path: str | Path) -> dict:
     return _load_npz(path)
 
 
+# Keys :func:`~pybvh_ml.skeleton.get_skeleton_info` always produces.
+# Datasets written by older pybvh-ml versions predate some of them, and
+# a key that is sometimes absent forces every consumer into a `.get()`
+# dance; loading fills them with None so the shape is version-stable.
+_SKELETON_INFO_KEYS = (
+    "num_joints", "joint_names", "edges", "euler_orders",
+    "lr_pairs", "lr_mapping", "world_up", "rest_forward", "rest_up",
+)
+
+
+def _normalize_skeleton_info(skel_info: dict) -> dict:
+    """Fill the ``skeleton_info`` keys an older dataset never recorded.
+
+    Optional-by-design keys (``foot_joints``, ``body_partitions``) are
+    left absent: those signal a preprocessing choice, and inventing a
+    ``None`` for them would make "not requested" indistinguishable from
+    "requested and empty".
+    """
+    normalized: dict = dict.fromkeys(_SKELETON_INFO_KEYS)
+    normalized.update(skel_info)
+    return normalized
+
+
 def _load_npz(path: Path) -> dict:
     """Load from .npz format."""
     data = np.load(path, allow_pickle=False)
     num_clips = int(data["num_clips"])
     representation = str(data["representation"])
     filenames = list(data["filenames"])
-    skel_info = json.loads(str(data["skeleton_info_json"]))
+    skel_info = _normalize_skeleton_info(
+        json.loads(str(data["skeleton_info_json"])))
 
     clips = []
     for i in range(num_clips):
@@ -1220,7 +1496,8 @@ def _load_hdf5(path: Path) -> dict:
     with h5py.File(path, "r") as f:
         num_clips = int(f.attrs["num_clips"])
         representation = str(f.attrs["representation"])
-        skel_info = json.loads(str(f.attrs["skeleton_info_json"]))
+        skel_info = _normalize_skeleton_info(
+            json.loads(str(f.attrs["skeleton_info_json"])))
 
         clips = []
         for i in range(num_clips):

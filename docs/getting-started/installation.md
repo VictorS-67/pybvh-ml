@@ -6,7 +6,7 @@
 pip install pybvh-ml
 ```
 
-This pulls in [pybvh](https://victors-67.github.io/pybvh/) `>= 0.8, < 0.9` automatically — pybvh-ml 0.5 tracks pybvh 0.8's API (short representation tokens, radians-first parameters).
+This pulls in [pybvh](https://victors-67.github.io/pybvh/) `>= 0.8.1, < 0.9` automatically — pybvh-ml 0.5 tracks pybvh 0.8's API (short representation tokens, radians-first parameters).
 
 ## Optional extras
 
@@ -20,7 +20,7 @@ PyTorch is never required: all core functions take and return NumPy arrays, and 
 ## Requirements
 
 - Python >= 3.9
-- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8, < 0.9
+- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8.1, < 0.9
 - NumPy >= 1.21
 
 Optional: PyTorch >= 2.0, h5py >= 3.0.
