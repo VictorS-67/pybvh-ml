@@ -3,6 +3,7 @@ from __future__ import annotations
 
 __version__ = "0.5.0"
 
+from .arrays import MotionArrays
 from .packing import (
     pack_to_ctv,
     pack_to_tvc,
@@ -30,7 +31,8 @@ from .metadata import (
 from .augmentation import (
     rotate_vertical,
     mirror,
-    add_joint_noise,
+    add_joint_rotation_noise,
+    add_root_position_noise,
     speed_perturbation_arrays,
     dropout_arrays,
 )
@@ -48,6 +50,9 @@ from .preprocessing import (
 
 __all__ = [
     "__version__",
+
+    # arrays
+    "MotionArrays",
     # packing
     "pack_to_ctv",
     "pack_to_tvc",
@@ -71,7 +76,8 @@ __all__ = [
     # augmentation
     "rotate_vertical",
     "mirror",
-    "add_joint_noise",
+    "add_joint_rotation_noise",
+    "add_root_position_noise",
     "speed_perturbation_arrays",
     "dropout_arrays",
     "convert_arrays",

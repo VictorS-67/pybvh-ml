@@ -26,7 +26,9 @@ Supported representations: `"euler"`, `"quat"`, `"6d"`, `"axisangle"` (validated
 
 The dataset file is self-sufficient — everything needed at training time, no reopening source BVHs:
 
-- **Per-clip arrays**: `root_pos`, `joint_data`, plus optional velocities, foot contacts, quaternions, and labels (below).
+- **Per-clip arrays**: `root_pos`, `joint_rot`, plus optional velocities, foot contacts, quaternions, and labels (below). Datasets written before 0.5.0 name the rotations `joint_data` on disk; both keys load, and `load_preprocessed` always hands back `joint_rot`.
+
+  The optional three are **static features**: unlike `joint_rot` they are not refreshed by augmentation, so use them for evaluation and targets rather than as augmentation-invariant training inputs.
 - **Skeleton metadata** (`skeleton_info`): joint names, edges, L/R pairs, Euler orders — and the `world_up` / `rest_forward` / `rest_up` axis strings, so runtime augmentation can be configured straight from the loaded dict. Every key is always present: a dataset written before a key existed loads it as `None` rather than omitting it, so there's no `.get()` dance.
 - **Normalization statistics**: per-channel `mean` / `std` over all frames, plus a `constant_channels` bool mask (columns whose raw std was below `1e-8`, guarded to `1.0`).
 - **The `center_root` flag**: whether the stored `root_pos` arrays were centered at preprocessing time (default `True`). Files from older versions load with `None` (unknown).
@@ -51,7 +53,7 @@ preprocess_directory(
 Two notes:
 
 - Pass `foot_joints=` explicitly for footless or nonstandard rigs where auto-detection finds nothing.
-- For `representation="quat"`, `include_quaternions=True` stores nothing extra — the main `joint_data` already *is* the quaternion array, and the loader aliases `clip["joint_quats"]` to it instead of duplicating storage.
+- For `representation="quat"`, `include_quaternions=True` stores nothing extra — the main `joint_rot` already *is* the quaternion array, and the loader aliases `clip["joint_quats"]` to it instead of duplicating storage.
 
 ## Frame rate
 
@@ -61,7 +63,7 @@ Capture rates and training rates rarely match — 120 Hz mocap feeding a model t
 preprocess_directory("dataset/", "train.npz", target_fps=30)
 ```
 
-**Before extraction is the point.** `joint_data`, `include_velocities` and `include_foot_contacts` are all derived from the resampled clip, so they describe the motion at the target rate. Decimating the finished `.npz` afterwards can't reproduce this — beyond needing a hand-maintained list of which stored keys are frame-indexed, velocities are finite differences whose stencil baseline is the *original* `frame_time`, so a decimated velocity array is simply the wrong number.
+**Before extraction is the point.** `joint_rot`, `include_velocities` and `include_foot_contacts` are all derived from the resampled clip, so they describe the motion at the target rate. Decimating the finished `.npz` afterwards can't reproduce this — beyond needing a hand-maintained list of which stored keys are frame-indexed, velocities are finite differences whose stencil baseline is the *original* `frame_time`, so a decimated velocity array is simply the wrong number.
 
 A directory with mixed rates warns, the way a mixed up-axis does, and `uniformity["fps"]` records the distribution — the rates the clips *came from*. The rate they are now at is `uniformity["applied_targets"]["target_fps"]` (or `harmonized_to["targets"]["target_fps"]` under `harmonize=True`), so a loader can tell a genuinely mixed-rate dataset from a unified one without reopening any BVH. Under `harmonize=True`, `target_fps` becomes the explicit target and the dataset majority fills in when you don't set one.
 
@@ -117,7 +119,7 @@ x_norm = normalize_array(x, stats)     # (x - mean) / std
 x = denormalize_array(x_norm, stats)   # back to BVH units
 ```
 
-`compute_normalization_stats` takes a list of `Bvh` objects and computes stats over all frames in the flat `[root_pos, joint_data]` channel layout (`include_root_pos=False` drops the first 3 columns). Zero-variance channels get their std guarded to `1.0` and flagged in the `constant_channels` mask.
+`compute_normalization_stats` takes a list of `Bvh` objects and computes stats over all frames in the flat `[root_pos, joint_rot]` channel layout (`include_root_pos=False` drops the first 3 columns). Zero-variance channels get their std guarded to `1.0` and flagged in the `constant_channels` mask.
 
 `preprocess_directory` stores the same stats in its output file, so after `load_preprocessed` you can pass the loaded dict straight to `normalize_array` — the direct entry point is for workflows that skip the on-disk artifact. Pass `center_root=True` to reproduce exactly the stats a `preprocess_directory` run stores under its default first-frame root centering.
 

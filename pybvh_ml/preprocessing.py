@@ -272,7 +272,7 @@ def _warn_if_heterogeneous(
         warnings.warn(
             "Frame rate is not uniform across the dataset — "
             f"{_format(uniformity['fps'])}. Every frame-indexed feature "
-            "(joint_data, and any velocities / foot contacts) is sampled "
+            "(joint_rot, and any velocities / foot contacts) is sampled "
             "at each clip's own rate, so a model sees the same motion at "
             "different speeds. "
             f"{_advice('target_fps', '<hz>')}",
@@ -926,11 +926,11 @@ def preprocess_directory(
         ``representation="quat"`` the main joint data already is the
         quaternion array, so no duplicate is stored on disk —
         :func:`load_preprocessed` aliases ``clip["joint_quats"]`` to
-        ``clip["joint_data"]`` in that case.
+        ``clip["joint_rot"]`` in that case.
     include_velocities : bool
         If True, compute per-joint linear velocities via
         :meth:`pybvh.Bvh.joint_velocities` (central stencil, edge
-        padding — shape ``(F, J, 3)`` aligned with ``joint_data`` /
+        padding — shape ``(F, J, 3)`` aligned with ``joint_rot`` /
         ``joint_angles``, no end sites) and store them per clip.
         Static features: **not** refreshed after augmentation, so use
         for evaluation / targets, not as augmentation-invariant
@@ -1027,7 +1027,7 @@ def preprocess_directory(
         Frame rate in Hz to resample every clip to, applied **before
         extraction** via :meth:`pybvh.Bvh.resample` (quaternion SLERP
         for rotations, linear for root position).  Resampling first is
-        what makes it correct: ``joint_data``, ``include_velocities``
+        what makes it correct: ``joint_rot``, ``include_velocities``
         and ``include_foot_contacts`` are all derived from the resampled
         clip, so they describe the motion at the target rate.
         Decimating the saved arrays afterwards cannot reproduce this —
@@ -1296,7 +1296,7 @@ def _save_npz(
         save_dict["constant_channels"] = stats["constant_channels"]
     for i, (rp, jd) in enumerate(zip(root_pos_list, joint_data_list)):
         save_dict[f"clip_{i}_root_pos"] = rp
-        save_dict[f"clip_{i}_joint_data"] = jd
+        save_dict[f"clip_{i}_joint_rot"] = jd
     if joint_quats_list:
         for i, jq in enumerate(joint_quats_list):
             save_dict[f"clip_{i}_joint_quats"] = jq
@@ -1357,7 +1357,7 @@ def _save_hdf5(
         for i, (rp, jd) in enumerate(zip(root_pos_list, joint_data_list)):
             grp = f.create_group(f"clip_{i}")
             grp.create_dataset("root_pos", data=rp)
-            grp.create_dataset("joint_data", data=jd)
+            grp.create_dataset("joint_rot", data=jd)
             grp.attrs["filename"] = stems[i]
             if joint_quats_list:
                 grp.create_dataset("joint_quats", data=joint_quats_list[i])
@@ -1379,7 +1379,9 @@ def load_preprocessed(path: str | Path) -> dict:
     -------
     dict
         Keys: ``clips`` (list of dicts with ``root_pos``,
-        ``joint_data``, optionally ``joint_quats`` / ``velocities`` /
+        ``joint_rot`` (named ``joint_data`` in datasets written before
+        pybvh-ml 0.5.0; both keys load, the new name is what you read),
+        optionally ``joint_quats`` / ``velocities`` /
         ``foot_contacts``), ``labels``, ``mean``, ``std``,
         ``skeleton_info``, ``representation``, ``filenames``,
         ``center_root``, ``uniformity``.  Also includes
@@ -1422,6 +1424,14 @@ _SKELETON_INFO_KEYS = (
     "lr_pairs", "lr_mapping", "world_up", "rest_forward", "rest_up",
 )
 
+# Per-clip arrays stored beside the mandatory root_pos / joint_rot pair,
+# each written only when its preprocessing flag was set.  Listed once
+# because both loaders iterate it, and they must stay in step.  All
+# three are *static* features: unlike joint_rot they are not refreshed
+# by augmentation, so they belong to evaluation and targets rather than
+# to augmentation-invariant training inputs.
+_OPTIONAL_CLIP_STREAMS = ("joint_quats", "velocities", "foot_contacts")
+
 
 def _normalize_skeleton_info(skel_info: dict) -> dict:
     """Fill the ``skeleton_info`` keys an older dataset never recorded.
@@ -1447,18 +1457,20 @@ def _load_npz(path: Path) -> dict:
 
     clips = []
     for i in range(num_clips):
+        rot_key = (f"clip_{i}_joint_rot" if f"clip_{i}_joint_rot" in data
+                   else f"clip_{i}_joint_data")
         clip: dict[str, npt.NDArray[np.float64]] = {
             "root_pos": data[f"clip_{i}_root_pos"],
-            "joint_data": data[f"clip_{i}_joint_data"],
+            "joint_rot": data[rot_key],
         }
-        for extra in ("joint_quats", "velocities", "foot_contacts"):
+        for extra in _OPTIONAL_CLIP_STREAMS:
             key = f"clip_{i}_{extra}"
             if key in data:
                 clip[extra] = data[key]
         # Quat datasets carry no duplicate joint_quats on disk — the
-        # primary joint_data already is the quaternion array.
+        # primary joint_rot already is the quaternion array.
         if representation == "quat" and "joint_quats" not in clip:
-            clip["joint_quats"] = clip["joint_data"]
+            clip["joint_quats"] = clip["joint_rot"]
         clips.append(clip)
 
     result: dict = {
@@ -1502,17 +1514,18 @@ def _load_hdf5(path: Path) -> dict:
         clips = []
         for i in range(num_clips):
             grp = f[f"clip_{i}"]
+            rot_key = "joint_rot" if "joint_rot" in grp else "joint_data"
             clip: dict[str, npt.NDArray[np.float64]] = {
                 "root_pos": grp["root_pos"][()],
-                "joint_data": grp["joint_data"][()],
+                "joint_rot": grp[rot_key][()],
             }
-            for extra in ("joint_quats", "velocities", "foot_contacts"):
+            for extra in _OPTIONAL_CLIP_STREAMS:
                 if extra in grp:
                     clip[extra] = grp[extra][()]
             # Quat datasets carry no duplicate joint_quats on disk — the
-            # primary joint_data already is the quaternion array.
+            # primary joint_rot already is the quaternion array.
             if representation == "quat" and "joint_quats" not in clip:
-                clip["joint_quats"] = clip["joint_data"]
+                clip["joint_quats"] = clip["joint_rot"]
             clips.append(clip)
 
         result: dict = {

@@ -6,49 +6,71 @@ Three conventions, everywhere:
 
 - **Keyword-only arguments** — call sites stay readable inside pipeline configs.
 - **Angles are in radians**, matching pybvh 0.8's radians-first API. Coming from degrees? `np.radians(90)`.
-- **Invalid inputs raise `ValueError`** — mismatched `root_pos` / `joint_data` frame counts, negative sigmas, out-of-range drop rates, empty joint arrays, zero-norm quaternions. No silent no-ops.
+- **Invalid inputs raise `ValueError`** — mismatched `root_pos` / `joint_rot` frame counts (checked once, when the `MotionArrays` is built), negative sigmas, out-of-range drop rates, empty joint arrays, zero-norm quaternions. No silent no-ops.
 
-## The five functions
+## `MotionArrays`, the thing every function takes
+
+One clip's motion travels through the library as a single
+[`MotionArrays`](../api/arrays.md): `root_pos` plus `joint_rot`.  Every
+augmentation takes one and returns a new one, so a pipeline is a chain of
+`MotionArrays -> MotionArrays` and adding a stream later — per-joint
+positions are next — costs no call-site changes.
+
+```python
+from pybvh_ml import MotionArrays
+
+arrays = MotionArrays.from_bvh(bvh, "quat")     # or build it yourself:
+arrays = MotionArrays(root_pos=root_pos, joint_rot=quats)
+```
+
+It is frozen: derive a new one with `arrays.replace(joint_rot=...)`
+rather than assigning to a field.  That is what lets every function in
+the package rely on the frame counts having been checked once.
+
+## The six functions
 
 ```python
 import numpy as np
 from pybvh_ml import (
-    rotate_vertical, mirror,
-    speed_perturbation_arrays, dropout_arrays, add_joint_noise,
+    MotionArrays, rotate_vertical, mirror,
+    speed_perturbation_arrays, dropout_arrays,
+    add_joint_rotation_noise, add_root_position_noise,
     get_lr_pairs,
 )
 
 rng = np.random.default_rng(42)
+arrays = MotionArrays(root_pos=root_pos, joint_rot=quats)
 
 # Vertical rotation — up_axis is a signed axis string matching bvh.world_up.
 # The sign flips the rotation direction, so '+y' and '-y' yaw oppositely.
-root_pos, quats = rotate_vertical(
-    root_pos=root_pos, joint_data=quats,
-    angle=np.pi / 2, up_axis="+y",
-    representation="quat")
+arrays = rotate_vertical(
+    arrays, angle=np.pi / 2, up_axis="+y", representation="quat")
 
 # Left-right mirroring — lateral_axis uses the same signed-string form
 # but is sign-invariant ('+x' and '-x' are equivalent).
 lr_pairs = get_lr_pairs(bvh)
-root_pos, quats = mirror(
-    root_pos=root_pos, joint_data=quats,
-    lr_joint_pairs=lr_pairs, lateral_axis="+x",
+arrays = mirror(
+    arrays, lr_joint_pairs=lr_pairs, lateral_axis="+x",
     representation="quat")
 
 # Speed perturbation (SLERP interpolation between frames).
-root_pos, quats = speed_perturbation_arrays(
-    root_pos=root_pos, joint_data=quats,
-    factor=1.2, representation="quat")
+arrays = speed_perturbation_arrays(
+    arrays, factor=1.2, representation="quat")
 
 # Frame dropout (drop and re-interpolate random frames).
-root_pos, quats = dropout_arrays(
-    root_pos=root_pos, joint_data=quats,
-    drop_rate=0.1, representation="quat", rng=rng)
+arrays = dropout_arrays(
+    arrays, drop_rate=0.1, representation="quat", rng=rng)
 
 # Joint rotation noise (applied in quaternion space internally).
-root_pos, quats = add_joint_noise(
-    root_pos=root_pos, joint_data=quats,
-    sigma=np.radians(1.0), representation="quat", rng=rng)
+# `degrees=True` would let you write sigma=1.0 instead.
+arrays = add_joint_rotation_noise(
+    arrays, sigma=np.radians(1.0), representation="quat", rng=rng)
+
+# Root translation noise — a separate function because its sigma is a
+# length, not an angle, so no single `degrees=` flag could serve both.
+arrays = add_root_position_noise(arrays, sigma=0.5, rng=rng)
+
+root_pos, quats = arrays.root_pos, arrays.joint_rot
 ```
 
 Representation-specific notes:
@@ -64,7 +86,8 @@ Representation-specific notes:
 ```python
 import numpy as np
 from pybvh_ml import AugmentationPipeline
-from pybvh_ml.augmentation import rotate_vertical, mirror, add_joint_noise
+from pybvh_ml.augmentation import (
+    rotate_vertical, mirror, add_joint_rotation_noise)
 
 pipeline = AugmentationPipeline([
     (rotate_vertical, 1.0, {
@@ -75,11 +98,11 @@ pipeline = AugmentationPipeline([
         "lr_joint_pairs": lr_pairs,
         "lateral_axis": "+x",
     }),
-    (add_joint_noise, 1.0, {"sigma": np.radians(1.0)}),
+    (add_joint_rotation_noise, 1.0, {"sigma": np.radians(1.0)}),
 ], representation="quat")   # pipeline-level default; a step may still override
 
 rng = np.random.default_rng(42)
-root_pos, quats = pipeline(root_pos=root_pos, joint_data=quats, rng=rng)
+arrays = pipeline(MotionArrays(root_pos=root_pos, joint_rot=quats), rng=rng)
 ```
 
 A pipeline is homogeneous in practice, so declare `representation` once at the pipeline level rather than repeating it on every step — repeating it is the copy-paste surface where one step in five ends up disagreeing with the rest. A step that declares its own keeps it, and the default only reaches functions that *name* the parameter (a `**kwargs` catch-all doesn't count), so a custom step taking neither is called with exactly its own kwargs. `euler_orders` takes a pipeline-level default the same way.
@@ -111,25 +134,26 @@ pipeline = AugmentationPipeline.standard(
 
 ### How the pipeline avoids conversion churn
 
-With `cache_quats=True` (the default), the pipeline converts your `joint_data` to quaternions once, runs quaternion-internal steps back to back without leaving quat space, and converts back to your declared representation at the end. This is why the pipeline needs to *know* the representation: **something must declare it** — `AugmentationPipeline(..., representation=...)` or at least one step's kwargs (or pass `cache_quats=False` to run every step exactly as written). It raises otherwise, rather than guessing and corrupting non-quat inputs.
+With `cache_quats=True` (the default), the pipeline converts your `joint_rot` to quaternions once, runs quaternion-internal steps back to back without leaving quat space, and converts back to your declared representation at the end. This is why the pipeline needs to *know* the representation: **something must declare it** — `AugmentationPipeline(..., representation=...)` or at least one step's kwargs (or pass `cache_quats=False` to run every step exactly as written). It raises otherwise, rather than guessing and corrupting non-quat inputs.
 
 Two guarantees, identical on both paths:
 
-- **Custom steps see your declared representation.** A step function the pipeline doesn't recognize receives `joint_data` in the pipeline's current declared representation — never in whatever internal state a previous built-in step left behind. `cache_quats=True` and `cache_quats=False` are bit-identical.
+- **Custom steps see your declared representation.** A step function the pipeline doesn't recognize receives `arrays.joint_rot` in the pipeline's current declared representation — never in whatever internal state a previous built-in step left behind. `cache_quats=True` and `cache_quats=False` are bit-identical.
 - **Outputs never alias inputs.** Even when no step fires, `pipeline(...)` returns freshly allocated arrays — safe to mutate without corrupting a Dataset's cached clips.
 
 ### Seeing what a call actually drew
 
-A pipeline with probabilities and callable kwargs makes a different decision for every sample. `return_params=True` reports those decisions alongside the arrays:
+A pipeline with probabilities and callable kwargs makes a different decision for every sample. `return_params=True` reports those decisions alongside the arrays — it is the only thing that changes the return arity, turning the `MotionArrays` into an `(arrays, steps)` pair:
 
 ```python
-new_pos, new_rot, steps = pipeline(
-    root_pos=root_pos, joint_data=joint_data, rng=rng, return_params=True)
+arrays, steps = pipeline(
+    MotionArrays(root_pos=root_pos, joint_rot=joint_rot),
+    rng=rng, return_params=True)
 
 [(s["name"], s["applied"], s["params"]) for s in steps]
 # [('rotate_vertical',           True,  {'angle': -1.4464727375963786}),
 #  ('mirror',                    True,  {}),
-#  ('add_joint_noise',           True,  {}),
+#  ('add_joint_rotation_noise',  True,  {}),
 #  ('speed_perturbation_arrays', True,  {'factor': 1.1399704034814648})]
 ```
 

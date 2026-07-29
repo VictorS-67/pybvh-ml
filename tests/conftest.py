@@ -7,6 +7,9 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# tests/ itself, so both this suite and tests/integration can import
+# `helpers` without a package dance.
+sys.path.insert(0, str(Path(__file__).parent))
 
 from pybvh import read_bvh_file  # noqa: E402
 

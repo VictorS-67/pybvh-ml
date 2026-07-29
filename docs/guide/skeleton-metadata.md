@@ -13,7 +13,7 @@ partitions = pybvh_ml.get_body_partitions(bvh) # {"torso": [...], "left_arm": [.
 ```
 
 - **`get_edge_list`** — parent/child joint index pairs, the input to any GCN adjacency matrix.
-- **`get_lr_pairs`** — left/right joint index pairs, detected from joint names via pybvh's L/R heuristics (`LeftArm`/`RightArm`, `LArm`/`RArm`, `arm_l`/`arm_r`, …). This is what [`mirror`](augmentation.md#the-five-functions) consumes.
+- **`get_lr_pairs`** — left/right joint index pairs, detected from joint names via pybvh's L/R heuristics (`LeftArm`/`RightArm`, `LArm`/`RArm`, `arm_l`/`arm_r`, …). This is what [`mirror`](augmentation.md#the-six-functions) consumes.
 - **`get_body_partitions`** — named body-part groups (torso, arms, legs, head) as joint index lists, for part-based pooling or attention masks.
 
 ![A skeleton with joints color-coded by body-part partition: torso, head, left and right arms and legs, each with its joint count in the legend](../gallery/img/skeleton-partitions.png)

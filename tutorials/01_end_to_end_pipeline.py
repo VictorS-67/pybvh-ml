@@ -92,7 +92,7 @@ print("saved to:", out_path)
 #
 # `load_preprocessed` returns a dict: clips, labels, mean/std, skeleton metadata, and
 # (since 0.3) a `constant_channels` mask. Each clip is itself a dict with `root_pos` +
-# `joint_data` (6D rotations, shape `(F, J, 6)`).
+# `joint_rot` (6D rotations, shape `(F, J, 6)`).
 
 # %%
 from pybvh_ml import load_preprocessed
@@ -101,16 +101,19 @@ data = load_preprocessed(out_path)
 print("keys:", sorted(data.keys()))
 print("clip[0] keys:", sorted(data["clips"][0].keys()))
 print("clip[0] root_pos shape:", data["clips"][0]["root_pos"].shape)
-print("clip[0] joint_data shape:", data["clips"][0]["joint_data"].shape)
+print("clip[0] joint_rot shape:", data["clips"][0]["joint_rot"].shape)
 
 # %% [markdown]
-# The stored `mean` / `std` follow the `Mean.npy` / `Std.npy` convention used by HumanML3D and MDM, in the same flat `[root_pos, joint_data]` channel layout as `pack_to_flat`. Apply them with `normalize_array` at training time and map model output back into BVH units with `denormalize_array` — both live in pybvh-ml (as does `compute_normalization_stats`, for computing the same stats straight from a list of `Bvh` objects without going through `preprocess_directory`).
+# The stored `mean` / `std` follow the `Mean.npy` / `Std.npy` convention used by HumanML3D and MDM, in the same flat `[root_pos, joint_rot]` channel layout as `pack_to_flat`. Apply them with `normalize_array` at training time and map model output back into BVH units with `denormalize_array` — both live in pybvh-ml (as does `compute_normalization_stats`, for computing the same stats straight from a list of `Bvh` objects without going through `preprocess_directory`).
 
 # %%
-from pybvh_ml import normalize_array, denormalize_array, pack_to_flat
+from pybvh_ml import (MotionArrays, normalize_array, denormalize_array,
+                      pack_to_flat)
 
 clip = data["clips"][0]
-flat = pack_to_flat(clip["root_pos"], clip["joint_data"], center_root=False)
+flat = pack_to_flat(
+    MotionArrays(root_pos=clip["root_pos"], joint_rot=clip["joint_rot"]),
+    center_root=False)
 normalized = normalize_array(flat, data)  # data carries "mean" / "std"
 print("normalized dataset mean ~ 0:", abs(normalized.mean()) < 1e-10)
 roundtrip = denormalize_array(normalized, data)

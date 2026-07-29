@@ -5,14 +5,17 @@ All functions accept any rotation representation supported by pybvh:
 ``"quat"``, ``"6d"``, ``"axisangle"``, ``"rotmat"``, or ``"euler"``.
 Euler arrays additionally require an ``euler_orders`` kwarg.
 
-All functions take and return ``(root_pos, joint_data)`` — root position
-first, matching pybvh's ``Bvh.from_*`` / ``Bvh.to_*`` convention.  All
-parameters are keyword-only: since ``root_pos`` and ``joint_data`` are
-shape-compatible ndarrays, accepting them positionally would make a
-swapped call silently corrupt data.  Call with
-``rotate_vertical(root_pos=..., joint_data=..., angle=..., ...)``.
+Every function takes a :class:`~pybvh_ml.MotionArrays` as its single
+positional argument and returns a new one; every other parameter is
+keyword-only.  The container is a distinct type, so passing it
+positionally cannot be confused with anything else — whereas the loose
+``(root_pos, joint_data)`` pair it replaces was two shape-compatible
+ndarrays a swapped call would have silently corrupted.  Call with
+``rotate_vertical(arrays, angle=..., up_axis=..., representation=...)``.
 
-Angles are in **radians** throughout, matching pybvh's convention.
+Angles are in **radians** by default, matching pybvh's convention.  The
+functions that take one accept ``degrees=True`` to interpret it in
+degrees instead, mirroring pybvh's own opt-in flag.
 """
 from __future__ import annotations
 
@@ -21,42 +24,28 @@ import numpy.typing as npt
 
 from pybvh import parse_axis, rotations
 
+from .arrays import MotionArrays, require_joint_rot
+
 
 # =========================================================================
 # Private helpers
 # =========================================================================
 
-def _validate_noise_sigmas(sigma: float, sigma_pos: float) -> None:
-    """Reject negative noise standard deviations."""
+def _validate_sigma(sigma: float, name: str = "sigma") -> None:
+    """Reject a negative noise standard deviation."""
     if sigma < 0:
-        raise ValueError(f"sigma must be >= 0, got {sigma}")
-    if sigma_pos < 0:
-        raise ValueError(f"sigma_pos must be >= 0, got {sigma_pos}")
+        raise ValueError(f"{name} must be >= 0, got {sigma}")
+
+
+def _as_radians(angle: float, degrees: bool) -> float:
+    """Interpret an angle argument under the ``degrees`` flag."""
+    return float(np.radians(angle)) if degrees else float(angle)
 
 
 def _validate_drop_rate(drop_rate: float) -> None:
     """Reject drop rates outside the documented ``[0, 1)`` range."""
     if not 0.0 <= drop_rate < 1.0:
         raise ValueError(f"drop_rate must be in [0, 1), got {drop_rate}")
-
-
-def _validate_frame_counts(
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
-) -> None:
-    """Reject root_pos / joint_data arrays with different frame counts.
-
-    A mismatch means the caller paired arrays from different clips (or
-    different slices of one clip) — downstream math would silently
-    interpolate or index the wrong frames.
-    """
-    rp_shape = np.shape(root_pos)
-    jd_shape = np.shape(joint_data)
-    if rp_shape[0] != jd_shape[0]:
-        raise ValueError(
-            f"root_pos and joint_data disagree on frame count: "
-            f"root_pos has {rp_shape[0]} frames (shape {rp_shape}), "
-            f"joint_data has {jd_shape[0]} (shape {jd_shape})")
 
 
 def _to_quats(
@@ -169,32 +158,30 @@ def _swap_lr_pairs(
 # =========================================================================
 
 def rotate_vertical(
+    arrays: MotionArrays,
     *,
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
     angle: float,
     up_axis: str,
     representation: str,
+    degrees: bool = False,
     euler_orders: list[str] | None = None,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Rotate joint arrays around the vertical axis.
-
-    All arguments are keyword-only.  ``root_pos`` and ``joint_data``
-    are shape-compatible ndarrays (both have leading dim ``F``); a
-    swapped positional call would silently corrupt, so the API refuses
-    positional binding and forces explicit names.
 
     Only the root joint (index 0) and root position are modified;
     non-root joints are in parent-local space and stay unchanged.
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-        Root translation per frame.
-    joint_data : ndarray, shape (F, J, C)
-        Joint rotation data in ``representation`` format.
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     angle : float
-        Rotation angle in radians.
+        Rotation angle in radians, or degrees when ``degrees=True``.
+    degrees : bool, optional
+        Interpret ``angle`` in degrees.  Default False (radians), the
+        convention throughout pybvh and pybvh-ml; the flag exists so a
+        caller whose configs are written in degrees can pass them
+        straight through instead of converting at every call site.
     up_axis : str
         Signed axis string: ``'+x'``, ``'-x'``, ``'+y'``, ``'-y'``,
         ``'+z'``, or ``'-z'``.  The sign flips the rotation direction,
@@ -209,8 +196,7 @@ def rotate_vertical(
 
     Returns
     -------
-    new_root_pos : ndarray, shape (F, 3)
-    new_joint_data : ndarray, shape (F, J, C)
+    MotionArrays
 
     Notes
     -----
@@ -227,9 +213,9 @@ def rotate_vertical(
     get turn-in-place from this function.  On uncentered arrays, center
     before rotating and add the offset back if that is what you want.
     """
-    joint_data = np.array(joint_data, dtype=np.float64)
-    root_pos = np.array(root_pos, dtype=np.float64)
-    _validate_frame_counts(root_pos, joint_data)
+    joint_data = np.array(
+        require_joint_rot(arrays, "rotate_vertical"), dtype=np.float64)
+    root_pos = np.array(arrays.root_pos, dtype=np.float64)
     if joint_data.shape[1] == 0:
         raise ValueError(
             "rotate_vertical requires at least one joint (joint 0 is "
@@ -237,7 +223,7 @@ def rotate_vertical(
 
     up = parse_axis(up_axis)
     up_idx, up_sign = up.index, up.sign
-    signed_angle = angle * up_sign
+    signed_angle = _as_radians(angle, degrees) * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_root_pos = (R_vert @ root_pos.T).T
 
@@ -248,25 +234,26 @@ def rotate_vertical(
         col1 = joint_data[:, 0, 3:]
         new_data[:, 0, :3] = (R_vert @ col0.T).T
         new_data[:, 0, 3:] = (R_vert @ col1.T).T
-        return new_root_pos, new_data
+        return MotionArrays(root_pos=new_root_pos, joint_rot=new_data)
 
     # All other representations: work through quaternion space.
     quats = _to_quats(joint_data, representation, euler_orders)
     q_rot = _build_rotation_quat(signed_angle, up_idx)
     new_quats = quats.copy()
     new_quats[:, 0] = rotations.quat_multiply(q_rot, quats[:, 0])
-    return new_root_pos, _from_quats(new_quats, representation, euler_orders)
+    return MotionArrays(
+        root_pos=new_root_pos,
+        joint_rot=_from_quats(new_quats, representation, euler_orders))
 
 
 def mirror(
+    arrays: MotionArrays,
     *,
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
     lr_joint_pairs: list[tuple[int, int]],
     lateral_axis: str,
     representation: str,
     euler_orders: list[str] | None = None,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Mirror joint arrays left-right.
 
     Swaps left and right joint data, negates the lateral component of
@@ -274,8 +261,8 @@ def mirror(
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C)
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     lr_joint_pairs : list of (int, int)
         ``[(left_idx, right_idx), ...]`` in joint-array space, typically
         :func:`pybvh_ml.get_lr_pairs`.  **The reflection is applied to every
@@ -302,8 +289,7 @@ def mirror(
 
     Returns
     -------
-    new_root_pos : ndarray, shape (F, 3)
-    new_joint_data : ndarray, shape (F, J, C)
+    MotionArrays
 
     Notes
     -----
@@ -330,9 +316,9 @@ def mirror(
     :class:`~pybvh.Bvh` (which measures the axis) and compare against the
     array path before trusting the assumed axis across a dataset.
     """
-    new_data = np.array(joint_data, dtype=np.float64)
-    new_root_pos = np.array(root_pos, dtype=np.float64)
-    _validate_frame_counts(new_root_pos, new_data)
+    new_data = np.array(
+        require_joint_rot(arrays, "mirror"), dtype=np.float64)
+    new_root_pos = np.array(arrays.root_pos, dtype=np.float64)
 
     lateral_idx = parse_axis(lateral_axis).index
     new_root_pos[:, lateral_idx] *= -1.0
@@ -343,12 +329,12 @@ def mirror(
     if representation == "6d":
         _swap_lr_pairs(new_data, lr_joint_pairs)
         new_data *= _mirror_sign_rot6d(lateral_idx)
-        return new_root_pos, new_data
+        return MotionArrays(root_pos=new_root_pos, joint_rot=new_data)
 
     if representation == "quat":
         _swap_lr_pairs(new_data, lr_joint_pairs)
         new_data *= _mirror_sign_quat(lateral_idx)
-        return new_root_pos, new_data
+        return MotionArrays(root_pos=new_root_pos, joint_rot=new_data)
 
     # All other representations: convert to quaternions first, swap in
     # quat space, mask, convert back.  Converting before the swap keeps
@@ -360,56 +346,80 @@ def mirror(
     quats = _to_quats(new_data, representation, euler_orders)
     _swap_lr_pairs(quats, lr_joint_pairs)
     quats *= _mirror_sign_quat(lateral_idx)
-    return new_root_pos, _from_quats(quats, representation, euler_orders)
+    return MotionArrays(
+        root_pos=new_root_pos,
+        joint_rot=_from_quats(quats, representation, euler_orders))
 
 
-def add_joint_noise(
+def add_joint_rotation_noise(
+    arrays: MotionArrays,
     *,
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
     sigma: float,
     representation: str,
-    sigma_pos: float = 0.0,
+    degrees: bool = False,
     rng: np.random.Generator | None = None,
     euler_orders: list[str] | None = None,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Add Gaussian rotation noise to joint arrays.
+) -> MotionArrays:
+    """Add Gaussian rotation noise to every joint.
 
     For each joint at each frame, generates a small random rotation
     (axis uniformly random on the unit sphere, angle sampled from
-    ``N(0, sigma)`` in radians) and composes it with the original
-    rotation: ``q_noisy = q_noise * q_original``.
-
-    Optionally adds Gaussian noise to root positions as well.
+    ``N(0, sigma)``) and composes it with the original rotation:
+    ``q_noisy = q_noise * q_original``.
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C)
+    arrays : MotionArrays
+        Must carry ``joint_rot``.  ``root_pos`` passes through
+        unchanged — jittering the root trajectory is
+        :func:`add_root_position_noise`, a separate function because its
+        sigma is a length rather than an angle.
     sigma : float
-        Standard deviation of rotation noise in radians.
+        Standard deviation of the rotation noise, in radians (or degrees
+        when ``degrees=True``).
     representation : str
         One of ``"quat"``, ``"6d"``, ``"axisangle"``,
         ``"rotmat"``, ``"euler"``.
-    sigma_pos : float
-        Standard deviation of root position noise, in the data's
-        positional units (default 0 = none).
+    degrees : bool, optional
+        Interpret ``sigma`` in degrees.  Default False (radians).
     rng : numpy Generator, optional
+        ``sigma=0`` is a no-op in value but **still draws** from the
+        generator, so a seeded pipeline's draw sequence does not depend
+        on the sigma it was configured with.  (:func:`pybvh.transforms.add_rotation_noise`
+        short-circuits instead; ours cannot without changing the stream
+        of every already-seeded pipeline.)
     euler_orders : list of str, optional
         Required when ``representation="euler"``, ignored otherwise.
 
     Returns
     -------
-    new_root_pos : ndarray, shape (F, 3)
-    new_joint_data : ndarray, shape (F, J, C)
+    MotionArrays
+
+    Notes
+    -----
+    The noise model is **isotropic in rotation space**: one random axis
+    per joint per frame, with the magnitude drawn from ``N(0, sigma)``.
+    The alternative — and what :func:`pybvh.transforms.add_rotation_noise`
+    does — is independent Gaussian noise on each Euler channel, which is
+    cheaper but anisotropic (its effective magnitude depends on the
+    channel order and on how near the pose is to gimbal lock), and is not
+    even well defined for a ``6d`` or ``quat`` array.  This function is
+    representation-agnostic, so it takes the isotropic route.  The two
+    agree in distribution only in the small-angle limit for a joint whose
+    rotation is near identity.
+
+    See Also
+    --------
+    add_root_position_noise : The root-translation counterpart.
     """
-    _validate_noise_sigmas(sigma, sigma_pos)
+    _validate_sigma(sigma)
     if rng is None:
         rng = np.random.default_rng()
 
-    joint_data = np.asarray(joint_data, dtype=np.float64)
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-    _validate_frame_counts(root_pos, joint_data)
+    joint_data = np.asarray(
+        require_joint_rot(arrays, "add_joint_rotation_noise"),
+        dtype=np.float64)
+    sigma_rad = _as_radians(sigma, degrees)
 
     quats = _to_quats(joint_data, representation, euler_orders)
     F, J, _ = quats.shape
@@ -419,7 +429,7 @@ def add_joint_noise(
     norm = np.where(norm < 1e-15, 1.0, norm)
     axis = axis / norm
 
-    half_angle = rng.normal(0, sigma, (F, J)) / 2.0
+    half_angle = rng.normal(0, sigma_rad, (F, J)) / 2.0
     q_noise = np.empty((F, J, 4), dtype=np.float64)
     q_noise[..., 0] = np.cos(half_angle)
     q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
@@ -431,25 +441,73 @@ def add_joint_noise(
     # quat_to_rotmat contract and fail loudly instead of emitting NaN.
     if np.any(norms == 0.0):
         raise ValueError(
-            "joint_data contains a zero-norm quaternion; the zero "
+            "joint_rot contains a zero-norm quaternion; the zero "
             "quaternion does not represent a rotation")
     noisy_quats /= norms
 
-    new_root_pos = root_pos.copy()
-    if sigma_pos > 0:
-        new_root_pos = new_root_pos + rng.normal(0, sigma_pos, root_pos.shape)
+    return MotionArrays(
+        root_pos=arrays.root_pos.copy(),
+        joint_rot=_from_quats(noisy_quats, representation, euler_orders))
 
-    return new_root_pos, _from_quats(noisy_quats, representation, euler_orders)
+
+def add_root_position_noise(
+    arrays: MotionArrays,
+    *,
+    sigma: float,
+    rng: np.random.Generator | None = None,
+) -> MotionArrays:
+    """Add Gaussian noise to the root translation.
+
+    Split from :func:`add_joint_rotation_noise` because the two sigmas
+    are in different units — radians there, the data's length unit here —
+    so a single ``degrees=`` flag could only ever have applied to one of
+    them.  pybvh made the same split for the same reason in 0.8.1
+    (``add_noise`` → ``add_rotation_noise`` + ``add_position_noise``).
+
+    To reproduce a combined call, chain them with the **same** generator,
+    rotation first::
+
+        arrays = add_joint_rotation_noise(arrays, sigma=s, rng=rng,
+                                          representation="6d")
+        arrays = add_root_position_noise(arrays, sigma=p, rng=rng)
+
+    Parameters
+    ----------
+    arrays : MotionArrays
+        ``joint_rot`` passes through untouched, and may be ``None``.
+    sigma : float
+        Standard deviation of the noise added to ``root_pos``, in the
+        data's positional units.  There is no ``degrees=`` here because
+        this is a length, not an angle.
+    rng : numpy Generator, optional
+        ``sigma=0`` is a no-op and draws nothing, matching
+        :func:`pybvh.transforms.add_position_noise` and preserving what
+        the fused ``add_joint_noise(sigma_pos=0)`` did.
+
+    Returns
+    -------
+    MotionArrays
+
+    See Also
+    --------
+    add_joint_rotation_noise : The joint-rotation counterpart.
+    """
+    _validate_sigma(sigma)
+    if rng is None:
+        rng = np.random.default_rng()
+
+    root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
+    noise = rng.normal(0, sigma, root_pos.shape) if sigma > 0 else 0.0
+    return arrays.replace(root_pos=root_pos + noise)
 
 
 def speed_perturbation_arrays(
+    arrays: MotionArrays,
     *,
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
     factor: float,
     representation: str,
     euler_orders: list[str] | None = None,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Speed perturbation via time resampling.
 
     Uses SLERP for rotation interpolation (via quaternion space) and
@@ -457,8 +515,8 @@ def speed_perturbation_arrays(
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C)
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     factor : float
         Speed factor.  ``> 1`` = faster (fewer frames),
         ``< 1`` = slower (more frames).
@@ -470,8 +528,8 @@ def speed_perturbation_arrays(
 
     Returns
     -------
-    new_root_pos : ndarray, shape (F', 3)
-    new_joint_data : ndarray, shape (F', J, C)
+    MotionArrays
+        Arrays of ``F'`` frames.
         For ``F >= 2``, ``F' = max(2, round(F / factor))`` (Python
         banker's rounding — ``round(2.5) == 2``).  Inputs with fewer
         than 2 frames have nothing to interpolate between and are
@@ -498,13 +556,15 @@ def speed_perturbation_arrays(
     if factor <= 0:
         raise ValueError(f"factor must be > 0, got {factor}")
 
-    joint_data = np.asarray(joint_data, dtype=np.float64)
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-    _validate_frame_counts(root_pos, joint_data)
+    joint_data = np.asarray(
+        require_joint_rot(arrays, "speed_perturbation_arrays"),
+        dtype=np.float64)
+    root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
 
     F = root_pos.shape[0]
     if F < 2:
-        return root_pos.copy(), joint_data.copy()
+        return MotionArrays(root_pos=root_pos.copy(),
+                            joint_rot=joint_data.copy())
 
     F_new = max(2, round(F / factor))
     t_orig = np.linspace(0.0, 1.0, F)
@@ -534,18 +594,19 @@ def speed_perturbation_arrays(
     alpha_jt = np.broadcast_to(alpha[:, np.newaxis], (F_new, J))
     new_quats = rotations.quat_slerp(q_left, q_right, alpha_jt)
 
-    return new_root_pos, _from_quats(new_quats, representation, euler_orders)
+    return MotionArrays(
+        root_pos=new_root_pos,
+        joint_rot=_from_quats(new_quats, representation, euler_orders))
 
 
 def dropout_arrays(
+    arrays: MotionArrays,
     *,
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
     drop_rate: float,
     representation: str,
     rng: np.random.Generator | None = None,
     euler_orders: list[str] | None = None,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Frame dropout with SLERP interpolation.
 
     Randomly drops frames and fills the gaps with SLERP-interpolated
@@ -556,8 +617,8 @@ def dropout_arrays(
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C)
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     drop_rate : float
         Fraction of frames to drop, in ``[0, 1)``.
     representation : str
@@ -569,8 +630,7 @@ def dropout_arrays(
 
     Returns
     -------
-    new_root_pos : ndarray, shape (F, 3)
-    new_joint_data : ndarray, shape (F, J, C)
+    MotionArrays
 
     Notes
     -----
@@ -590,13 +650,15 @@ def dropout_arrays(
     if rng is None:
         rng = np.random.default_rng()
 
-    joint_data = np.asarray(joint_data, dtype=np.float64)
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-    _validate_frame_counts(root_pos, joint_data)
+    joint_data = np.asarray(
+        require_joint_rot(arrays, "dropout_arrays"), dtype=np.float64)
+    root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
 
     F = root_pos.shape[0]
+    unchanged = MotionArrays(root_pos=root_pos.copy(),
+                             joint_rot=joint_data.copy())
     if F < 2 or drop_rate == 0:
-        return root_pos.copy(), joint_data.copy()
+        return unchanged
 
     keep_mask = rng.random(F) >= drop_rate
     keep_mask[0] = True
@@ -605,7 +667,7 @@ def dropout_arrays(
 
     dropped = np.where(~keep_mask)[0]
     if len(dropped) == 0:
-        return root_pos.copy(), joint_data.copy()
+        return unchanged
 
     ins = np.searchsorted(kept_indices, dropped, side='right')
     left_idx = kept_indices[np.clip(ins - 1, 0, len(kept_indices) - 1)]
@@ -632,4 +694,6 @@ def dropout_arrays(
     new_quats = quats.copy()
     new_quats[dropped] = rotations.quat_slerp(q_left, q_right, alpha_jt)
 
-    return new_root_pos, _from_quats(new_quats, representation, euler_orders)
+    return MotionArrays(
+        root_pos=new_root_pos,
+        joint_rot=_from_quats(new_quats, representation, euler_orders))

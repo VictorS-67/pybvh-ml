@@ -56,8 +56,12 @@ print(f"{summary['num_clips']} clips, "
 # Load back: per-clip arrays, normalization stats, skeleton metadata.
 data = pybvh_ml.load_preprocessed("train.npz")
 root_pos = data["clips"][0]["root_pos"]      # (F, 3)
-joint_data = data["clips"][0]["joint_data"]  # (F, J, 6) for 6D
+joint_rot = data["clips"][0]["joint_rot"]    # (F, J, 6) for 6D
 mean, std = data["mean"], data["std"]        # for input normalization
+
+# One clip travels as a MotionArrays — what every augmentation and packer takes.
+arrays = pybvh_ml.MotionArrays(root_pos=root_pos, joint_rot=joint_rot)
+tensor = pybvh_ml.pack_to_ctv(arrays)        # (C, T, V) for a GCN
 ```
 
 From there: runtime [augmentation](https://victors-67.github.io/pybvh-ml/guide/augmentation/) in your data loader, [PyTorch Datasets](https://victors-67.github.io/pybvh-ml/guide/pytorch/) with worker-safe per-epoch seeding, and [skeleton graph metadata](https://victors-67.github.io/pybvh-ml/guide/skeleton-metadata/) for GCNs — the [documentation](https://victors-67.github.io/pybvh-ml/) covers each piece.
@@ -83,7 +87,7 @@ This will change at **1.0**: from then on, pybvh-ml will commit to strict semver
 ## Requirements
 
 - Python >= 3.9
-- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8.1, < 0.9
+- [pybvh](https://github.com/VictorS-67/pybvh) >= 0.8.2, < 0.9
 - NumPy >= 1.21
 
 Optional: PyTorch >= 2.0 (`pip install "pybvh-ml[torch]"`), h5py >= 3.0 (`pip install "pybvh-ml[hdf5]"`).

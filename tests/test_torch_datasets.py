@@ -15,9 +15,11 @@ torch = pytest.importorskip("torch")
 from pybvh_ml.torch import (
     EpochState, MotionDataset, OnTheFlyDataset, collate_motion_batch, rng_for,
 )
-from pybvh_ml.augmentation import rotate_vertical, add_joint_noise
+from pybvh_ml.augmentation import rotate_vertical, add_joint_rotation_noise
 from pybvh_ml.convert import convert_arrays
 from pybvh_ml.pipeline import AugmentationPipeline
+from pybvh_ml import MotionArrays
+from helpers import as_pair, as_triple
 
 
 class TestTorchDatasets:
@@ -29,9 +31,9 @@ class TestTorchDatasets:
         root_pos, rot6d = bvh_example.to_6d()
         # Create 3 clips with different lengths
         clips = [
-            {"root_pos": root_pos[:30].copy(), "joint_data": rot6d[:30].copy()},
-            {"root_pos": root_pos[:20].copy(), "joint_data": rot6d[:20].copy()},
-            {"root_pos": root_pos[:40].copy(), "joint_data": rot6d[:40].copy()},
+            {"root_pos": root_pos[:30].copy(), "joint_rot": rot6d[:30].copy()},
+            {"root_pos": root_pos[:20].copy(), "joint_rot": rot6d[:20].copy()},
+            {"root_pos": root_pos[:40].copy(), "joint_rot": rot6d[:40].copy()},
         ]
         return clips
 
@@ -159,18 +161,18 @@ class TestTorchDatasets:
     # --- set_epoch + seeded augmentation (0.3) ---
 
     def _make_seeded_dataset(self, sample_clips, seed):
-        from pybvh_ml.augmentation import add_joint_noise
+        from pybvh_ml.augmentation import add_joint_rotation_noise
         from pybvh_ml.pipeline import AugmentationPipeline
         # Build a fresh quat-primary dataset so noise aug can run in place.
         from pybvh_ml.convert import convert_arrays
         quat_clips = []
         for c in sample_clips:
-            rot6d = c["joint_data"]
+            rot6d = c["joint_rot"]
             quats = convert_arrays(rot6d, from_repr="6d", to_repr="quat")
             quat_clips.append({"root_pos": c["root_pos"].copy(),
-                               "joint_data": quats})
+                               "joint_rot": quats})
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
+            (add_joint_rotation_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         return MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=seed)
@@ -194,17 +196,17 @@ class TestTorchDatasets:
 
     def test_seed_none_is_nondeterministic(self, sample_clips):
         """With seed=None, repeated __getitem__ uses fresh entropy."""
-        from pybvh_ml.augmentation import add_joint_noise
+        from pybvh_ml.augmentation import add_joint_rotation_noise
         from pybvh_ml.pipeline import AugmentationPipeline
         from pybvh_ml.convert import convert_arrays
         quat_clips = [
             {"root_pos": c["root_pos"].copy(),
-             "joint_data": convert_arrays(
-                 c["joint_data"], from_repr="6d", to_repr="quat")}
+             "joint_rot": convert_arrays(
+                 c["joint_rot"], from_repr="6d", to_repr="quat")}
             for c in sample_clips
         ]
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
+            (add_joint_rotation_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         ds = MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=None)
@@ -234,17 +236,17 @@ class TestTorchDatasets:
 
     def test_no_warn_when_seed_none(self, sample_clips):
         """seed=None means fresh entropy per call — no epoch contract needed."""
-        from pybvh_ml.augmentation import add_joint_noise
+        from pybvh_ml.augmentation import add_joint_rotation_noise
         from pybvh_ml.pipeline import AugmentationPipeline
         from pybvh_ml.convert import convert_arrays
         quat_clips = [
             {"root_pos": c["root_pos"].copy(),
-             "joint_data": convert_arrays(
-                 c["joint_data"], from_repr="6d", to_repr="quat")}
+             "joint_rot": convert_arrays(
+                 c["joint_rot"], from_repr="6d", to_repr="quat")}
             for c in sample_clips
         ]
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
+            (add_joint_rotation_noise, 1.0, {"sigma": np.radians(5.0), "representation": "quat"}),
         ])
         ds = MotionDataset(
             quat_clips, target_length=30, augmentation=pipeline, seed=None)
@@ -296,14 +298,14 @@ class TestSetEpochWorkers:
         def make():
             clips = [
                 {"root_pos": root_pos[:30].copy(),
-                 "joint_data": rot6d[:30].copy()},
+                 "joint_rot": rot6d[:30].copy()},
                 {"root_pos": root_pos[:20].copy(),
-                 "joint_data": rot6d[:20].copy()},
+                 "joint_rot": rot6d[:20].copy()},
                 {"root_pos": root_pos[:40].copy(),
-                 "joint_data": rot6d[:40].copy()},
+                 "joint_rot": rot6d[:40].copy()},
             ]
             pipeline = AugmentationPipeline([
-                (add_joint_noise, 1.0,
+                (add_joint_rotation_noise, 1.0,
                  {"sigma": np.radians(5.0), "representation": "6d"}),
             ])
             return MotionDataset(clips, target_length=30,
@@ -386,8 +388,8 @@ class TestDatasetErgonomics:
     def clips_6d(self, bvh_example):
         root_pos, rot6d = bvh_example.to_6d()
         return [
-            {"root_pos": root_pos[:30].copy(), "joint_data": rot6d[:30].copy()},
-            {"root_pos": root_pos[:20].copy(), "joint_data": rot6d[:20].copy()},
+            {"root_pos": root_pos[:30].copy(), "joint_rot": rot6d[:30].copy()},
+            {"root_pos": root_pos[:20].copy(), "joint_rot": rot6d[:20].copy()},
         ]
 
     def test_negative_index_matches_positive(self, clips_6d):
@@ -395,7 +397,7 @@ class TestDatasetErgonomics:
         Regression: a raw negative index crashed SeedSequence, but only
         when seeded augmentation was active."""
         pipeline = AugmentationPipeline([
-            (add_joint_noise, 1.0,
+            (add_joint_rotation_noise, 1.0,
              {"sigma": np.radians(5.0), "representation": "6d"}),
         ])
         ds = MotionDataset(clips_6d, target_length=30,
@@ -480,8 +482,8 @@ class TestExplainAugmentation:
     def clips_6d(self, bvh_example):
         root_pos, rot6d = bvh_example.to_6d()
         return [
-            {"root_pos": root_pos[:30].copy(), "joint_data": rot6d[:30].copy()},
-            {"root_pos": root_pos[:20].copy(), "joint_data": rot6d[:20].copy()},
+            {"root_pos": root_pos[:30].copy(), "joint_rot": rot6d[:30].copy()},
+            {"root_pos": root_pos[:20].copy(), "joint_rot": rot6d[:20].copy()},
         ]
 
     @staticmethod
@@ -495,7 +497,7 @@ class TestExplainAugmentation:
             (rotate_vertical, rotate_prob, {
                 "angle": lambda rng: rng.uniform(-np.pi, np.pi),
                 "up_axis": "+y", "representation": "6d"}),
-            (add_joint_noise, 1.0,
+            (add_joint_rotation_noise, 1.0,
              {"sigma": np.radians(5.0), "representation": "6d"}),
         ])
 
@@ -514,12 +516,10 @@ class TestExplainAugmentation:
         loaded = ds[1]["data"]
 
         params = ds.explain_augmentation(1)
-        rp, jd = ds._clip_arrays(1)
-        rp2, jd2, replay = ds.augmentation(
-            root_pos=rp, joint_data=jd, rng=rng_for(42, 3, 1),
-            return_params=True)
+        rp, jd = as_pair(ds._clip_arrays(1))
+        rp2, jd2, replay = as_triple(ds.augmentation(MotionArrays(root_pos=rp, joint_rot=jd), rng=rng_for(42, 3, 1), return_params=True))
         torch.testing.assert_close(
-            loaded, torch.tensor(pack_to_flat(rp2, jd2, center_root=False),
+            loaded, torch.tensor(pack_to_flat(MotionArrays(root_pos=rp2, joint_rot=jd2), center_root=False),
                                  dtype=torch.float32), rtol=0, atol=0)
         assert params == replay
 
@@ -577,16 +577,14 @@ class TestExplainAugmentation:
         ds.set_epoch(1)
         loaded = ds[0]["data"]
         params = ds.explain_augmentation(0)
-        rp, jd = ds._clip_arrays(0)
-        rp2, jd2, replay = ds.augmentation(
-            root_pos=rp, joint_data=jd, rng=rng_for(11, 1, 0),
-            return_params=True)
+        rp, jd = as_pair(ds._clip_arrays(0))
+        rp2, jd2, replay = as_triple(ds.augmentation(MotionArrays(root_pos=rp, joint_rot=jd), rng=rng_for(11, 1, 0), return_params=True))
         torch.testing.assert_close(
-            loaded, torch.tensor(pack_to_flat(rp2, jd2, center_root=False),
+            loaded, torch.tensor(pack_to_flat(MotionArrays(root_pos=rp2, joint_rot=jd2), center_root=False),
                                  dtype=torch.float32), rtol=0, atol=0)
         assert params == replay
         assert [r["name"] for r in params] == [
-            "rotate_vertical", "add_joint_noise"]
+            "rotate_vertical", "add_joint_rotation_noise"]
 
 
 class TestSeedingPrimitives:
@@ -654,7 +652,7 @@ class TestDatasetLayouts:
     def clips(self, bvh_example):
         root_pos, rot6d = bvh_example.to_6d()
         return [{"root_pos": root_pos[:30].copy(),
-                 "joint_data": rot6d[:30].copy()}]
+                 "joint_rot": rot6d[:30].copy()}]
 
     def test_flat_is_the_default(self, clips):
         ds = MotionDataset(clips)
@@ -674,8 +672,7 @@ class TestDatasetLayouts:
     def test_layout_matches_the_standalone_packer(self, clips):
         from pybvh_ml import pack_to_ctv
         ds = MotionDataset(clips, layout="ctv")
-        expected = pack_to_ctv(clips[0]["root_pos"], clips[0]["joint_data"],
-                               center_root=False)
+        expected = pack_to_ctv(MotionArrays(root_pos=clips[0]["root_pos"], joint_rot=clips[0]["joint_rot"]), center_root=False)
         torch.testing.assert_close(
             ds[0]["data"], torch.tensor(expected, dtype=torch.float32),
             rtol=0, atol=0)
@@ -712,8 +709,8 @@ class TestDatasetTemporalModes:
     def clips(self, bvh_example):
         root_pos, rot6d = bvh_example.to_6d()
         return [
-            {"root_pos": root_pos[:40].copy(), "joint_data": rot6d[:40].copy()},
-            {"root_pos": root_pos[:12].copy(), "joint_data": rot6d[:12].copy()},
+            {"root_pos": root_pos[:40].copy(), "joint_rot": rot6d[:40].copy()},
+            {"root_pos": root_pos[:12].copy(), "joint_rot": rot6d[:12].copy()},
         ]
 
     def test_pad_remains_the_default(self, clips):
@@ -785,7 +782,7 @@ class TestDatasetTemporalModes:
     def test_resample_rejects_an_empty_clip(self, bvh_example):
         root_pos, rot6d = bvh_example.to_6d()
         empty = [{"root_pos": root_pos[:0].copy(),
-                  "joint_data": rot6d[:0].copy()}]
+                  "joint_rot": rot6d[:0].copy()}]
         ds = MotionDataset(empty, target_length=8,
                            temporal="resample_deterministic")
         with pytest.raises(ValueError, match="0 frames"):
@@ -805,13 +802,13 @@ class TestDatasetRepresentationConversion:
     @pytest.fixture
     def euler_clips(self, bvh_example):
         return [{"root_pos": bvh_example.root_pos[:20].copy(),
-                 "joint_data": bvh_example.joint_angles[:20].copy()}]
+                 "joint_rot": bvh_example.joint_angles[:20].copy()}]
 
     def test_converts_to_target(self, euler_clips, bvh_example):
         orders = list(bvh_example.euler_orders)
         ds = MotionDataset(euler_clips, source_repr="euler",
                            target_repr="6d", euler_orders=orders)
-        expected = convert_arrays(euler_clips[0]["joint_data"], "euler", "6d",
+        expected = convert_arrays(euler_clips[0]["joint_rot"], "euler", "6d",
                                   euler_orders=orders)
         J = bvh_example.joint_count
         assert ds[0]["data"].shape == (20, 3 + J * 6)
@@ -839,7 +836,7 @@ class TestDatasetRepresentationConversion:
             representation="6d")
         ds = MotionDataset(euler_clips, source_repr="euler", target_repr="6d",
                            euler_orders=orders, augmentation=pipeline, seed=2)
-        _, jd = ds._clip_arrays(0)
+        _, jd = as_pair(ds._clip_arrays(0))
         assert jd.shape[-1] == 6
         assert ds.explain_augmentation(0)[0]["applied"] is True
 
@@ -894,7 +891,7 @@ class TestTemporalAndAugmentationInteraction:
     def clips(self, bvh_example):
         root_pos, rot6d = bvh_example.to_6d()
         return [{"root_pos": root_pos[:40].copy(),
-                 "joint_data": rot6d[:40].copy()}]
+                 "joint_rot": rot6d[:40].copy()}]
 
     def _pipeline(self, bvh_example):
         return AugmentationPipeline(
@@ -916,7 +913,7 @@ class TestTemporalAndAugmentationInteraction:
         output is the frame selection moving, and nothing else.
         """
         pipeline = AugmentationPipeline(
-            [(add_joint_noise, 1.0, {"sigma": 0.0})], representation="6d")
+            [(add_joint_rotation_noise, 1.0, {"sigma": 0.0})], representation="6d")
         ds = MotionDataset(clips, target_length=16, seed=3,
                            temporal="resample_deterministic",
                            augmentation=pipeline)
@@ -944,10 +941,8 @@ class TestTemporalAndAugmentationInteraction:
                            augmentation=self._pipeline(bvh_example))
         ds.set_epoch(2)
         params = ds.explain_augmentation(0)
-        rp, jd = ds._clip_arrays(0)
-        _, _, replay = ds.augmentation(
-            root_pos=rp, joint_data=jd, rng=rng_for(8, 2, 0),
-            return_params=True)
+        rp, jd = as_pair(ds._clip_arrays(0))
+        _, _, replay = as_triple(ds.augmentation(MotionArrays(root_pos=rp, joint_rot=jd), rng=rng_for(8, 2, 0), return_params=True))
         assert params == replay
 
     def test_seeded_getitem_is_reproducible_with_both_stages(

@@ -66,7 +66,8 @@ This env has:
 ```
 pybvh-ml/
 ├── pybvh_ml/
-│   ├── __init__.py              # Public API (28 exports)
+│   ├── __init__.py              # Public API (32 exports)
+│   ├── arrays.py                # MotionArrays — the container every surface takes
 │   ├── packing.py               # Tensor layout conversion (CTV, TVC, flat)
 │   ├── augmentation.py          # Array-level augmentation (all representations, no Bvh objects)
 │   ├── convert.py               # Representation conversion dispatch
@@ -99,25 +100,31 @@ pybvh-ml/
 
 ### Module responsibilities
 
+**`arrays.py`** — The container every array-level surface speaks
+- `MotionArrays(root_pos=(F,3), joint_rot=(F,J,C) | None)` — keyword-only, frozen, validates shapes and the shared frame count once at construction
+- `MotionArrays.from_bvh(bvh, representation, center_root=False)` — the producer edge, so extract → augment → pack never hand-assembles the container
+- `.replace(**fields)` — the only mutation path, revalidating
+- Deliberately **not** a tuple and not unpackable: the 0.6.0 position streams must be additive, and a 2-field tuple could not grow
+
 **`packing.py`** — Tensor layout conversion
-- `pack_to_ctv(root_pos, joint_data, center_root=True)` → `(C, T, V)` ndarray
-- `pack_to_tvc(root_pos, joint_data, center_root=True)` → `(T, V, C)` ndarray
-- `pack_to_flat(root_pos, joint_data, center_root=True)` → `(T, D)` ndarray
-- `unpack_from_ctv(data, root_channels=3)` → `(root_pos, joint_data)`
-- `unpack_from_tvc(data, root_channels=3)` → `(root_pos, joint_data)`
+- `pack_to_ctv(arrays, center_root=True)` → `(C, T, V)` ndarray
+- `pack_to_tvc(arrays, center_root=True)` → `(T, V, C)` ndarray
+- `pack_to_flat(arrays, center_root=True)` → `(T, D)` ndarray
+- `unpack_from_ctv(data, root_channels=3)` → `MotionArrays`
+- `unpack_from_tvc(data, root_channels=3)` → `MotionArrays`
 - Root position is always vertex 0, zero-padded to C channels if `C > 3`
 
 **`augmentation.py`** — Array-level augmentation (operates on pre-extracted numpy arrays, no Bvh object needed)
-- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Supported representations: `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`)
-- All public functions are **keyword-only**: `root_pos` and `joint_data` are shape-compatible ndarrays, so positional binding is refused to prevent silent-corruption swaps
+- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Plus `add_root_position_noise`, which takes none — its sigma is a length. Supported representations: `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`)
+- Each takes a `MotionArrays` positionally and returns a new one; every other parameter is **keyword-only**. `rotate_vertical` and `add_joint_rotation_noise` accept `degrees=True` to read their angle in degrees (radians remain the default)
 - Fast paths: `rotate_vertical` and `mirror` skip the quaternion round-trip when `representation="6d"` (direct rotation of the two column vectors / analytic sign mask)
-- Quat-internal ops (`add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert to/from quaternion space once; `AugmentationPipeline(cache_quats=True)` amortizes the conversion across consecutive steps
+- Quat-internal ops (`add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert to/from quaternion space once; `AugmentationPipeline(cache_quats=True)` amortizes the conversion across consecutive steps
 
 **`convert.py`** — Representation conversion
 - `convert_arrays(joint_data, from_repr, to_repr, euler_orders)` — unified representation conversion dispatch for `(F, J, C)` arrays, wrapping pybvh's rotation functions
 
 **`pipeline.py`** — Composable augmentation pipeline
-- `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection). `__call__` is keyword-only (`root_pos=`, `joint_data=`, `rng=`).
+- `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection). `__call__` takes a `MotionArrays` positionally; `rng=` / `return_params=` stay keyword-only.
 - `AugmentationPipeline.standard(skeleton_info, ...)` classmethod — opinionated factory that builds the canonical rotate + mirror + noise + speed pipeline from a `skeleton_info` dict. Each step is optional (pass `None` or `mirror_prob=0` to skip). For anything beyond the exposed kwargs, build the pipeline directly with the `(fn, prob, kwargs)` constructor.
 - `cache_quats=True` (default) shares one quaternion cache across consecutive staged steps via `_staged.py`'s `STAGED_DISPATCH` registry. User-defined augmentations are supported transparently (cache flushed, function called normally, staging resumed cold). Set `cache_quats=False` for historical bit-exact behavior.
 
@@ -163,7 +170,7 @@ pybvh-ml/
 ### 5.1 Unified augmentation across representations
 Array-level augmentation is a single function per operation, parameterized by a `representation=` kwarg that covers every representation pybvh supports (`"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"`). Internally:
 - **Quaternion** — primary internal representation for rotation-space math (SLERP, Hamilton product, unit-sphere noise). Clean, no gimbal lock.
-- **6D** — fast paths in `rotate_vertical` and `mirror` operate directly on `(F, J, 6)` without a quat round-trip. Other ops (`add_joint_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert once, stay in quat, convert back — or, with `AugmentationPipeline(cache_quats=True)`, share the cache across consecutive steps.
+- **6D** — fast paths in `rotate_vertical` and `mirror` operate directly on `(F, J, 6)` without a quat round-trip. Other ops (`add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert once, stay in quat, convert back — or, with `AugmentationPipeline(cache_quats=True)`, share the cache across consecutive steps.
 - **Axis-angle / rotmat / euler** — supported uniformly via convert-to-quat, mutate, convert-back. Euler additionally requires `euler_orders=`.
 
 ### 5.2 Preprocessing and runtime are separate
@@ -192,16 +199,16 @@ pybvh-ml uses these pybvh entry points:
 Normalization is pybvh-ml's own public API since 0.5.0: `compute_normalization_stats` / `normalize_array` / `denormalize_array` live in `preprocessing.py` (absorbed from pybvh 0.8.0, which removed the trio from `pybvh.batch`). The Bvh-list entry point extracts via `extract_repr` and applies pybvh-ml's intentionally loose skeleton check (`_check_skeleton_compatibility`, bone-length variation accepted); `preprocess_directory` shares the same array-level core (`_normalization_stats_from_arrays`) on its already-extracted arrays.
 
 ### 5.5 Joint noise is quaternion-internal
-`add_joint_noise` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma) in radians), converts to quaternion, and composes via Hamilton product (`pybvh.rotations.quat_multiply`). This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. The public `representation=` kwarg controls the input/output format; the math itself is always quat-space.
+`add_joint_rotation_noise` generates noise as random axis-angle perturbations (random axis on the unit sphere, angle from N(0, sigma) in radians), converts to quaternion, and composes via Hamilton product (`pybvh.rotations.quat_multiply`). This avoids gimbal lock sensitivity and gives uniform perturbation regardless of pose. The public `representation=` kwarg controls the input/output format; the math itself is always quat-space.
 
 ### 5.6 Callable kwargs and rng forwarding in AugmentationPipeline
 Kwargs values can be callables of the form `lambda rng: value`, resolved at each invocation. This enables per-sample random parameter sampling (e.g., random rotation angles) without modifying augmentation function signatures. Static kwargs continue to work unchanged.
 
-The pipeline automatically forwards its `rng` to augmentation functions that accept an `rng` parameter (detected via `inspect.signature`). This ensures reproducibility for functions like `dropout_arrays` and `add_joint_noise` without requiring explicit `"rng": lambda rng: rng` in kwargs. If the user provides an explicit `rng` kwarg (static or callable), it takes precedence over the auto-forwarded one.
+The pipeline automatically forwards its `rng` to augmentation functions that accept an `rng` parameter (detected via `inspect.signature`). This ensures reproducibility for functions like `dropout_arrays` and `add_joint_rotation_noise` without requiring explicit `"rng": lambda rng: rng` in kwargs. If the user provides an explicit `rng` kwarg (static or callable), it takes precedence over the auto-forwarded one.
 
 Both dispatch paths route their probability draw and kwarg resolution through one `_resolve_step`, so draw order can't drift between them. It also builds the per-step record `{"name", "applied", "params"}` that `__call__(..., return_params=True)` returns — callables are resolved *only* when the step fires, which is what keeps the flag stream-neutral (asking for records never consumes a draw). `params` reports only the kwargs whose spec was a callable: static kwargs are configuration the caller already has in `augmentations`, and `rng` is machinery. Step names come from `_step_name`, which tolerates steps that carry no `__name__` (`functools.partial`, callable instances) by unwrapping `partial.func` and falling back to the class name.
 
-`MotionDataset.explain_augmentation(idx, epoch=...)` / `OnTheFlyDataset.explain_augmentation(...)` sit on top of this: they re-run one sample's augmentation on a freshly composed `(seed, epoch, idx)` rng — the same one `__getitem__` used — and return its records. Nothing is recorded during training. Both classes feed the replay from the same `_clip_arrays` helper `__getitem__` uses, so the replay cannot drift from what the loader fed the pipeline; the pipeline is genuinely re-run rather than the draws recomputed, because steps like `add_joint_noise` consume an amount of randomness that depends on the clip's shape. An unseeded dataset raises instead of answering (a fresh draw would be indistinguishable from the real one).
+`MotionDataset.explain_augmentation(idx, epoch=...)` / `OnTheFlyDataset.explain_augmentation(...)` sit on top of this: they re-run one sample's augmentation on a freshly composed `(seed, epoch, idx)` rng — the same one `__getitem__` used — and return its records. Nothing is recorded during training. Both classes feed the replay from the same `_clip_arrays` helper `__getitem__` uses, so the replay cannot drift from what the loader fed the pipeline; the pipeline is genuinely re-run rather than the draws recomputed, because steps like `add_joint_rotation_noise` consume an amount of randomness that depends on the clip's shape. An unseeded dataset raises instead of answering (a fresh draw would be indistinguishable from the real one).
 
 ### 5.7 Uniform temporal sampling matches PySKL
 `uniform_temporal_sample` reproduces the PySKL/MMAction2 `UniformSampleFrames` algorithm as a stateless function. Three regimes:
@@ -210,7 +217,7 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 - **Uniform** (`num_frames >= 2*clip_length`): integer segment boundaries (`i * num_frames // clip_length`), discrete random offset per segment.
 
 ### 5.8 Implementation-level conventions
-1. **All augmentation functions take and return `(root_pos, joint_data)`** — root first, matching pybvh's `Bvh.from_*` / `Bvh.to_*` and pybvh-ml's own `pack_to_flat` / `extract_repr`. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
+1. **All augmentation functions take and return a `MotionArrays`** — one clip's `root_pos` plus `joint_rot`, passed positionally (it is a distinct type, so a swap is not expressible) with every other parameter keyword-only. The container is frozen and validates frame counts once at construction, which is why no function re-checks them. It exists so a later stream — per-joint positions in 0.6.0 — is additive rather than an arity break at every call site. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
 2. **`convert_arrays` routes through rotation matrices** as intermediate. Per-joint Euler orders are handled by grouping joints by unique order and batch-converting each group.
 3. **Packing zero-pads root only** — root has 3 channels (position), joints have C_joint channels. In CTV/TVC layouts, `C = max(3, C_joint)`. Since C_joint >= 3 for all real representations, joint data is never padded.
 4. **Mirror math**: quaternion mirror negates the two imaginary components NOT at the lateral axis. 6D mirror uses `R'[i,j] = s_i * s_j * R[i,j]` where `s[lateral] = -1`. Both derived from `R' = S @ R @ S`.
@@ -245,7 +252,7 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 
 ## 8. Test Patterns
 
-Unit tests are in `tests/test_pybvh_ml.py` (38 test classes) plus `tests/test_torch_datasets.py` (10 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 509 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training) for 1061 with them. Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (42 test classes) plus `tests/test_torch_datasets.py` (10 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 543 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training) for 1095 with them. Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures** (shared ones live in `tests/conftest.py`):
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)

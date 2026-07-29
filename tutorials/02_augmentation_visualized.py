@@ -43,12 +43,13 @@ import numpy as np
 
 from pybvh import read_bvh_file, bvhplot
 from pybvh_ml.skeleton import get_lr_pairs
+from pybvh_ml import MotionArrays
 from pybvh_ml.augmentation import (
     rotate_vertical,
     mirror,
     speed_perturbation_arrays,
     dropout_arrays,
-    add_joint_noise,
+    add_joint_rotation_noise,
 )
 
 REPO_ROOT = Path.cwd().parent if Path.cwd().name == "tutorials" else Path.cwd()
@@ -61,8 +62,9 @@ print("joints:", bvh.joint_count, "frames:", bvh.frame_count, "up:", bvh.world_u
 # %% [markdown]
 # ## Helper: apply an array-level augmentation and rebuild a `Bvh` for plotting
 #
-# pybvh-ml augmentations return `(new_root_pos, new_joint_data)` as NumPy arrays.
-# To render, we hand those back to pybvh via `bvh.from_quat(root_pos, quats)`.
+# pybvh-ml augmentations take and return a `MotionArrays` — one clip's `root_pos`
+# plus `joint_rot`. To render, we hand its two fields back to pybvh via
+# `bvh.from_quat(root_pos, quats)`.
 #
 # This helper runs the full extract → augment → rebuild loop so each subsequent section
 # stays focused on the augmentation itself.
@@ -72,9 +74,8 @@ def aug_as_bvh(bvh, aug_fn, **kwargs):
     '''Run an augmentation in quaternion space and rebuild a Bvh for plotting.'''
     root_pos, quats = bvh.to_quat()
     kwargs.setdefault("representation", "quat")
-    new_root_pos, new_quats = aug_fn(
-        root_pos=root_pos, joint_data=quats, **kwargs)
-    return bvh.from_quat(new_root_pos, new_quats)
+    out = aug_fn(MotionArrays(root_pos=root_pos, joint_rot=quats), **kwargs)
+    return bvh.from_quat(out.root_pos, out.joint_rot)
 
 
 # %% [markdown]
@@ -155,7 +156,7 @@ print(f"frames modified by dropout+SLERP: {diff_frames} / {bvh.frame_count}")
 
 # %%
 rng = np.random.default_rng(0)
-noisy = aug_as_bvh(bvh, add_joint_noise, sigma=np.radians(3.0), rng=rng)
+noisy = aug_as_bvh(bvh, add_joint_rotation_noise, sigma=np.radians(3.0), rng=rng)
 
 fig, axes = bvhplot.frame([bvh, noisy],
                           frame=0,
@@ -190,12 +191,13 @@ pipeline = AugmentationPipeline([
         "lateral_axis": lateral_axis,
         "representation": "quat",
     }),
-    (add_joint_noise, 1.0, {"sigma": np.radians(2.0), "representation": "quat"}),
+    (add_joint_rotation_noise, 1.0,
+     {"sigma": np.radians(2.0), "representation": "quat"}),
 ])
 
 # Build a single-clip dataset from our fixture and inspect the per-epoch behaviour.
 root_pos, quats = bvh.to_quat()
-clip = {"root_pos": root_pos.copy(), "joint_data": quats}
+clip = {"root_pos": root_pos.copy(), "joint_rot": quats}
 
 ds_a = MotionDataset([clip], target_length=32, augmentation=pipeline, seed=42)
 ds_b = MotionDataset([clip], target_length=32, augmentation=pipeline, seed=42)

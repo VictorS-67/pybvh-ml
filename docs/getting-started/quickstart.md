@@ -25,7 +25,7 @@ data = pybvh_ml.load_preprocessed("train.npz")
 
 clip = data["clips"][0]
 clip["root_pos"]        # (F, 3) root translation
-clip["joint_data"]      # (F, J, 6) for 6D
+clip["joint_rot"]       # (F, J, 6) for 6D
 mean, std = data["mean"], data["std"]   # per-channel z-score stats
 skel = data["skeleton_info"]            # edges, lr_pairs, world_up, ...
 ```
@@ -36,18 +36,20 @@ The file is self-sufficient: it carries the skeleton metadata (including the axi
 
 ```python
 import numpy as np
-from pybvh_ml import AugmentationPipeline
+from pybvh_ml import AugmentationPipeline, MotionArrays
 
 pipeline = AugmentationPipeline.standard(
     skel, representation="6d", up_axis=skel["world_up"],
 )
 rng = np.random.default_rng(42)
-root_pos, joint_data = pipeline(
-    root_pos=clip["root_pos"], joint_data=clip["joint_data"], rng=rng,
+arrays = pipeline(
+    MotionArrays(root_pos=clip["root_pos"], joint_rot=clip["joint_rot"]),
+    rng=rng,
 )
+root_pos, joint_rot = arrays.root_pos, arrays.joint_rot
 ```
 
-The `standard` factory wires vertical rotation + mirroring + joint noise + speed perturbation from the skeleton metadata. Each step is also a standalone function — the [Augmentation guide](../guide/augmentation.md) covers all five.
+The `standard` factory wires vertical rotation + mirroring + joint noise + speed perturbation from the skeleton metadata. Each step is also a standalone function — the [Augmentation guide](../guide/augmentation.md) covers all six.
 
 ## Train (optional PyTorch layer)
 

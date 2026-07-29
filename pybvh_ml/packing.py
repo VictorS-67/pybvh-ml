@@ -1,8 +1,8 @@
 """Tensor layout conversion for ML pipelines.
 
-Converts between pybvh's structured arrays (root_pos, joint_data)
-and the tensor layouts that ML models consume: ``(C, T, V)``,
-``(T, V, C)``, and flat ``(T, D)``.
+Converts between :class:`~pybvh_ml.MotionArrays` and the tensor
+layouts that ML models consume: ``(C, T, V)``, ``(T, V, C)``, and flat
+``(T, D)``.
 
 Conventions
 -----------
@@ -21,6 +21,8 @@ from __future__ import annotations
 import numpy as np
 import numpy.typing as npt
 
+from .arrays import MotionArrays, require_joint_rot
+
 
 def _center(
     root_pos: npt.NDArray[np.float64],
@@ -38,18 +40,15 @@ def _center(
 
 
 def pack_to_ctv(
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
+    arrays: MotionArrays,
     center_root: bool = True,
 ) -> npt.NDArray[np.float64]:
     """Pack root position and joint data into ``(C, T, V)`` layout.
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-        Root translation per frame.
-    joint_data : ndarray, shape (F, J, C_joint)
-        Per-joint rotation data (Euler, quaternion, 6D, etc.).
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     center_root : bool
         If True, subtract first frame's root position.
         This flag is for standalone packing of raw extractions.  Clips from a dataset preprocessed with ``center_root=True`` (see :func:`~pybvh_ml.preprocessing.preprocess_directory` and the ``center_root`` key of :func:`~pybvh_ml.preprocessing.load_preprocessed`) are already centered — pass ``False`` for those.  Re-centering a whole already-centered clip is a harmless no-op, but re-centering a *windowed sub-clip* zeroes the window's first frame and destroys the clip-relative trajectory.
@@ -61,8 +60,9 @@ def pack_to_ctv(
         Root is vertex 0: its position fills channels ``0:3``, and
         when ``C_joint > 3`` its channels ``3:C`` are zero padding.
     """
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-    joint_data = np.asarray(joint_data, dtype=np.float64)
+    root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
+    joint_data = np.asarray(
+        require_joint_rot(arrays, "pack_to_ctv"), dtype=np.float64)
     rp = _center(root_pos, center_root)
 
     F = rp.shape[0]
@@ -80,16 +80,15 @@ def pack_to_ctv(
 
 
 def pack_to_tvc(
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
+    arrays: MotionArrays,
     center_root: bool = True,
 ) -> npt.NDArray[np.float64]:
     """Pack root position and joint data into ``(T, V, C)`` layout.
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C_joint)
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     center_root : bool
         If True, subtract first frame's root position.  Arrays from a preprocessed dataset saved with ``center_root=True`` are already centered — see :func:`pack_to_ctv`.
 
@@ -98,8 +97,9 @@ def pack_to_tvc(
     ndarray, shape (T, V, C)
         ``T = F``, ``V = 1 + J``, ``C = max(3, C_joint)``.
     """
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-    joint_data = np.asarray(joint_data, dtype=np.float64)
+    root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
+    joint_data = np.asarray(
+        require_joint_rot(arrays, "pack_to_tvc"), dtype=np.float64)
     rp = _center(root_pos, center_root)
 
     F = rp.shape[0]
@@ -115,16 +115,15 @@ def pack_to_tvc(
 
 
 def pack_to_flat(
-    root_pos: npt.NDArray[np.float64],
-    joint_data: npt.NDArray[np.float64],
+    arrays: MotionArrays,
     center_root: bool = True,
 ) -> npt.NDArray[np.float64]:
     """Pack root position and joint data into flat ``(T, D)`` layout.
 
     Parameters
     ----------
-    root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C_joint)
+    arrays : MotionArrays
+        Must carry ``joint_rot``.
     center_root : bool
         If True, subtract first frame's root position.  Arrays from a preprocessed dataset saved with ``center_root=True`` are already centered — see :func:`pack_to_ctv`.
 
@@ -134,8 +133,9 @@ def pack_to_flat(
         ``D = 3 + J * C_joint``.  Root position occupies columns
         ``0:3``, joint data occupies ``3:D``.
     """
-    root_pos = np.asarray(root_pos, dtype=np.float64)
-    joint_data = np.asarray(joint_data, dtype=np.float64)
+    root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
+    joint_data = np.asarray(
+        require_joint_rot(arrays, "pack_to_flat"), dtype=np.float64)
     rp = _center(root_pos, center_root)
 
     F = rp.shape[0]
@@ -163,7 +163,7 @@ def _validate_root_channels(root_channels: int, available: int) -> None:
 def unpack_from_ctv(
     data: npt.NDArray[np.float64],
     root_channels: int = 3,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Unpack ``(C, T, V)`` back to root position and joint data.
 
     Parameters
@@ -174,8 +174,7 @@ def unpack_from_ctv(
 
     Returns
     -------
-    root_pos : ndarray, shape (T, root_channels)
-    joint_data : ndarray, shape (T, V-1, C)
+    MotionArrays
 
     Raises
     ------
@@ -186,13 +185,13 @@ def unpack_from_ctv(
     _validate_root_channels(root_channels, tvc.shape[2])
     root_pos = tvc[:, 0, :root_channels].copy()
     joint_data = tvc[:, 1:, :].copy()
-    return root_pos, joint_data
+    return MotionArrays(root_pos=root_pos, joint_rot=joint_data)
 
 
 def unpack_from_tvc(
     data: npt.NDArray[np.float64],
     root_channels: int = 3,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Unpack ``(T, V, C)`` back to root position and joint data.
 
     Parameters
@@ -202,8 +201,7 @@ def unpack_from_tvc(
 
     Returns
     -------
-    root_pos : ndarray, shape (T, root_channels)
-    joint_data : ndarray, shape (T, V-1, C)
+    MotionArrays
 
     Raises
     ------
@@ -214,14 +212,14 @@ def unpack_from_tvc(
     _validate_root_channels(root_channels, data.shape[2])
     root_pos = data[:, 0, :root_channels].copy()
     joint_data = data[:, 1:, :].copy()
-    return root_pos, joint_data
+    return MotionArrays(root_pos=root_pos, joint_rot=joint_data)
 
 
 def unpack_from_flat(
     data: npt.NDArray[np.float64],
     root_channels: int = 3,
     joint_channels: int = 3,
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+) -> MotionArrays:
     """Unpack flat ``(T, D)`` back to root position and joint data.
 
     Parameters
@@ -235,8 +233,7 @@ def unpack_from_flat(
 
     Returns
     -------
-    root_pos : ndarray, shape (T, root_channels)
-    joint_data : ndarray, shape (T, J, joint_channels)
+    MotionArrays
     """
     data = np.asarray(data, dtype=np.float64)
     root_pos = data[:, :root_channels].copy()
@@ -250,4 +247,4 @@ def unpack_from_flat(
             f"(e.g. 4 for quat, 6 for 6d).")
     J = flat_joints.shape[1] // joint_channels
     joint_data = flat_joints.reshape(data.shape[0], J, joint_channels).copy()
-    return root_pos, joint_data
+    return MotionArrays(root_pos=root_pos, joint_rot=joint_data)

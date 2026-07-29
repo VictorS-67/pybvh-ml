@@ -5,7 +5,7 @@ Runnable end-to-end Jupyter notebooks, from first preprocess to a trained classi
 ## Available tutorials
 
 1. **[End-to-end pipeline](https://github.com/VictorS-67/pybvh-ml/blob/main/tutorials/01_end_to_end_pipeline.ipynb)** — BVH directory → `preprocess_directory` → `MotionDataset` with augmentation → tiny MLP classifier, training loop included.
-2. **[Augmentation visualized](https://github.com/VictorS-67/pybvh-ml/blob/main/tutorials/02_augmentation_visualized.ipynb)** — every array-level augmentation (`rotate_vertical`, `mirror`, `speed_perturbation_arrays`, `dropout_arrays`, `add_joint_noise`) shown before/after on a real skeleton, plus pipeline composition and `set_epoch` reproducibility.
+2. **[Augmentation visualized](https://github.com/VictorS-67/pybvh-ml/blob/main/tutorials/02_augmentation_visualized.ipynb)** — every array-level augmentation (`rotate_vertical`, `mirror`, `speed_perturbation_arrays`, `dropout_arrays`, `add_joint_rotation_noise`, `add_root_position_noise`) shown before/after on a real skeleton, plus pipeline composition and `set_epoch` reproducibility.
 3. **[Heterogeneous preprocessing](https://github.com/VictorS-67/pybvh-ml/blob/main/tutorials/03_heterogeneous_preprocessing.ipynb)** — mixing skeletons, frame rates, and up-axes: `harmonize=True` + `skip_errors` + the representation-aware compatibility check as a robust ingest recipe.
 
 A reader who finishes all three has walked the full library surface: preprocessing, packing, augmentation, and the PyTorch layer.

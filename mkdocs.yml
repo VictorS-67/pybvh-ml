@@ -68,6 +68,7 @@ nav:
     - Skeleton Graph Metadata: guide/skeleton-metadata.md
   - API Reference:
     - api/index.md
+    - Motion Arrays (the container): api/arrays.md
     - Packing (tensor layouts): api/packing.md
     - Augmentation: api/augmentation.md
     - Augmentation Pipeline: api/pipeline.md

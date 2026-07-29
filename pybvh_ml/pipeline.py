@@ -6,13 +6,13 @@ or any data loading loop.
 from __future__ import annotations
 
 import inspect
-from typing import Callable, NamedTuple
+from typing import Callable, Mapping, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
 
 from ._staged import STAGED_DISPATCH, _StagingState
-from .augmentation import _validate_frame_counts
+from .arrays import MotionArrays, require_joint_rot
 
 
 class AugmentationStep(NamedTuple):
@@ -85,13 +85,58 @@ def _step_name(fn: Callable) -> str:
     return type(fn).__name__
 
 
+def _call_step(
+    fn: Callable,
+    arrays: MotionArrays,
+    resolved: dict,
+) -> MotionArrays:
+    """Invoke one step and check it honoured the step contract.
+
+    A step is ``fn(arrays, **kwargs) -> MotionArrays``.  Steps written
+    against pybvh-ml <= 0.4 took ``(root_pos=, joint_data=)`` and
+    returned a 2-tuple; both halves of that older contract are detected
+    here and reported as a migration, because the natural failure
+    otherwise is an ``AttributeError`` on a tuple several frames away
+    from the step that caused it.
+    """
+    try:
+        out = fn(arrays, **resolved)
+    except TypeError as exc:
+        if _looks_like_legacy_step(fn):
+            raise TypeError(
+                f"augmentation step {_step_name(fn)!r} appears to use the "
+                f"pre-0.5.0 signature (root_pos=..., joint_data=...). Steps "
+                f"now take a MotionArrays positionally and return one: "
+                f"def step(arrays, **kwargs) -> MotionArrays. Read "
+                f"arrays.root_pos / arrays.joint_rot inside, and return "
+                f"arrays.replace(joint_rot=...)") from exc
+        raise
+    if not isinstance(out, MotionArrays):
+        raise TypeError(
+            f"augmentation step {_step_name(fn)!r} returned "
+            f"{type(out).__name__}, expected MotionArrays. Steps returning "
+            f"a (root_pos, joint_data) tuple are the pre-0.5.0 contract; "
+            f"return arrays.replace(joint_rot=...) instead.")
+    return out
+
+
+def _looks_like_legacy_step(fn: Callable) -> bool:
+    """True when *fn* declares the pre-0.5.0 ``root_pos`` / ``joint_data``."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (ValueError, TypeError):
+        return False
+    return "root_pos" in params or "joint_data" in params
+
+
 class AugmentationPipeline:
     """Composable sequence of augmentations with per-step probabilities.
 
     Each augmentation is a tuple of ``(fn, probability, kwargs)`` where
-    *fn* has signature ``fn(root_pos, joint_data, **kwargs)`` and
-    returns ``(new_root_pos, new_joint_data)`` — root first, matching
-    pybvh's ``Bvh.from_*`` / ``Bvh.to_*`` convention.
+    *fn* has signature ``fn(arrays, **kwargs) -> MotionArrays`` —
+    :class:`~pybvh_ml.MotionArrays` in, a new one out.  Custom steps
+    read ``arrays.root_pos`` / ``arrays.joint_rot`` and typically return
+    ``arrays.replace(joint_rot=...)``.
 
     Kwargs values may be **callables** of the form ``lambda rng: value``,
     which are resolved at each invocation using the pipeline's rng.
@@ -137,7 +182,7 @@ class AugmentationPipeline:
         ``representation="euler"``.
     cache_quats : bool, default True
         Share a quaternion cache across pybvh-ml's built-in
-        augmentations.  Functions like :func:`add_joint_noise` and
+        augmentations.  Functions like :func:`add_joint_rotation_noise` and
         :func:`speed_perturbation_arrays` always operate in quaternion
         space internally; when a pipeline strings several of them
         together with ``representation="axisangle"`` or ``"euler"``,
@@ -145,7 +190,7 @@ class AugmentationPipeline:
         typically a 2–3× speedup on non-6d pipelines, 1.5× on 6d.
         User-defined augmentations not registered in the internal
         staging table are supported transparently: the cache is
-        flushed around them and they receive ``joint_data`` in their
+        flushed around them and they receive ``joint_rot`` in their
         declared ``representation`` kwarg — or, when they declare
         none, in the pipeline's current declared representation (the
         most recent step carrying a ``representation`` kwarg), exactly
@@ -171,7 +216,7 @@ class AugmentationPipeline:
       ``dropout_arrays`` with a fixed keep-mask) should run before
       speed perturbation or be written to tolerate variable
       lengths.
-    * **Noise + re-augmentation.** ``add_joint_noise`` perturbs
+    * **Noise + re-augmentation.** ``add_joint_rotation_noise`` perturbs
       rotations in place (via quaternion space); following it with a
       second rotation-space step is fine, but a subsequent
       deterministic check (e.g. equality to the input) will naturally
@@ -190,8 +235,10 @@ class AugmentationPipeline:
     ...         "lateral_axis": "+x",
     ...     }),
     ... ], representation="6d")
-    >>> new_pos, new_rot6d = pipeline(
-    ...     root_pos=root_pos, joint_data=joint_rot6d, rng=rng)
+    >>> out = pipeline(MotionArrays(root_pos=root_pos,
+    ...                                 joint_rot=joint_rot6d), rng=rng)
+    >>> out.joint_rot.shape
+    (120, 31, 6)
     """
 
     def __init__(
@@ -257,6 +304,7 @@ class AugmentationPipeline:
         mirror_prob: float = 0.5,
         noise_sigma: float | None = np.radians(1.0),
         speed_factor_range: tuple[float, float] | None = (0.8, 1.2),
+        degrees: bool = False,
         cache_quats: bool = True,
     ) -> "AugmentationPipeline":
         """Build the canonical rotate + mirror + noise + speed pipeline.
@@ -289,7 +337,16 @@ class AugmentationPipeline:
             set from ``bvh.world_up`` and the dataset's lateral
             convention otherwise.
         rotate_angle_range : (float, float) or None
-            Random yaw range in radians; ``None`` skips rotation.
+            Random yaw range in radians (degrees when ``degrees=True``);
+            ``None`` skips rotation.
+        degrees : bool
+            Interpret ``rotate_angle_range`` and ``noise_sigma`` in
+            degrees.  Default False (radians).  One flag serves both
+            because both are angles — which is exactly why root-position
+            noise is not a knob on this factory: its sigma is a length,
+            and a single flag could not have covered it.  Use
+            :func:`~pybvh_ml.add_root_position_noise` as an explicit
+            step for that.
         mirror_prob : float
             Probability of left/right mirror.  ``0`` skips it.
             Silently skipped when ``skeleton_info["lr_pairs"]`` is
@@ -306,7 +363,7 @@ class AugmentationPipeline:
         # Local import to keep the pipeline module free of a hard
         # dependency cycle with augmentation at import time.
         from .augmentation import (
-            add_joint_noise,
+            add_joint_rotation_noise,
             mirror as mirror_fn,
             rotate_vertical,
             speed_perturbation_arrays,
@@ -325,6 +382,7 @@ class AugmentationPipeline:
             steps.append((rotate_vertical, 1.0, {
                 "angle": lambda rng, lo=lo, hi=hi: rng.uniform(lo, hi),
                 "up_axis": up_axis,
+                "degrees": degrees,
             }))
 
         if mirror_prob > 0 and lr_pairs:
@@ -334,7 +392,10 @@ class AugmentationPipeline:
             }))
 
         if noise_sigma is not None:
-            steps.append((add_joint_noise, 1.0, {"sigma": noise_sigma}))
+            steps.append((add_joint_rotation_noise, 1.0, {
+                "sigma": noise_sigma,
+                "degrees": degrees,
+            }))
 
         if speed_factor_range is not None:
             lo, hi = speed_factor_range
@@ -347,34 +408,29 @@ class AugmentationPipeline:
 
     def __call__(
         self,
+        arrays: MotionArrays,
         *,
-        root_pos: npt.NDArray[np.float64],
-        joint_data: npt.NDArray[np.float64],
         rng: np.random.Generator | None = None,
         return_params: bool = False,
-    ) -> tuple:
+    ) -> MotionArrays | tuple[MotionArrays, list[dict]]:
         """Apply augmentations with their configured probabilities.
-
-        All arguments are keyword-only.  ``root_pos`` and ``joint_data``
-        are shape-compatible ndarrays; refusing positional binding
-        prevents a silent-corruption swap.
 
         Parameters
         ----------
-        root_pos : ndarray, shape (F, 3)
-        joint_data : ndarray
-            Joint rotation data (any representation).
+        arrays : MotionArrays
+            The clip to augment.  Positional because it is a distinct
+            type — every other argument stays keyword-only.
         rng : numpy Generator, optional
             Random number generator.  Defaults to a new unseeded one.
         return_params : bool, default False
             Also return what this call drew (see *params* below).
             Purely additive: the random stream is untouched, so a given
-            ``rng`` produces identical arrays either way.
+            ``rng`` produces identical arrays either way.  This is the
+            only thing that changes the return arity.
 
         Returns
         -------
-        new_root_pos : ndarray
-        new_joint_data : ndarray
+        MotionArrays
             Always freshly allocated — the outputs never alias the input arrays, even when no augmentation fires.
         params : list of dict
             Only when ``return_params=True``.  One record per configured
@@ -393,9 +449,7 @@ class AugmentationPipeline:
 
         Examples
         --------
-        >>> new_pos, new_rot, steps = pipeline(
-        ...     root_pos=root_pos, joint_data=joint_data, rng=rng,
-        ...     return_params=True)
+        >>> out, steps = pipeline(arrays, rng=rng, return_params=True)
         >>> [(s["name"], s["applied"]) for s in steps]
         [('rotate_vertical', True), ('mirror', False)]
         >>> steps[0]["params"]["angle"]
@@ -403,12 +457,15 @@ class AugmentationPipeline:
         """
         if rng is None:
             rng = np.random.default_rng()
-        # Validate at entry on both paths.  The staged ops bypass the
-        # public functions' own checks, and the direct path would
-        # otherwise only raise if some step happened to fire — making a
-        # mismatch a stochastic error under p < 1 steps, and no error at
-        # all when nothing fires.
-        _validate_frame_counts(root_pos, joint_data)
+        if not isinstance(arrays, MotionArrays):
+            raise TypeError(
+                f"AugmentationPipeline takes a MotionArrays, got "
+                f"{type(arrays).__name__}. The (root_pos=, joint_data=) "
+                f"keyword form was replaced in 0.5.0: build the container "
+                f"once with MotionArrays(root_pos=..., joint_rot=...) and "
+                f"read out.root_pos / out.joint_rot from the result.")
+        root_pos = arrays.root_pos
+        joint_data = require_joint_rot(arrays, "AugmentationPipeline")
 
         call = self._call_staged if self.cache_quats else self._call_direct
         new_root_pos, new_joint_data, params = call(root_pos, joint_data, rng)
@@ -420,9 +477,10 @@ class AugmentationPipeline:
             new_root_pos = root_pos.copy()
         if new_joint_data is joint_data:
             new_joint_data = joint_data.copy()
+        out = MotionArrays(root_pos=new_root_pos, joint_rot=new_joint_data)
         if return_params:
-            return new_root_pos, new_joint_data, params
-        return new_root_pos, new_joint_data
+            return out, params
+        return out
 
     def _resolve_step(
         self,
@@ -451,12 +509,27 @@ class AugmentationPipeline:
         return True, resolved, record
 
     @staticmethod
-    def _forward_rng(fn: Callable, resolved: dict,
+    def _declared_params(fn: Callable) -> Mapping[str, object]:
+        """Parameter names *fn* declares, or empty when uninspectable.
+
+        ``inspect.signature`` raises on some C-implemented callables.
+        Every caller here uses the result to decide whether to *add* a
+        kwarg, so an empty mapping degrades to "pass exactly what the
+        step was configured with" — which is the right fallback, and
+        better than propagating an error from a convenience feature.
+        """
+        try:
+            return inspect.signature(fn).parameters
+        except (ValueError, TypeError):
+            return {}
+
+    @classmethod
+    def _forward_rng(cls, fn: Callable, resolved: dict,
                      rng: np.random.Generator) -> None:
         """Give *fn* the pipeline's rng when it takes one and none was set."""
         if "rng" in resolved:
             return
-        if "rng" in inspect.signature(fn).parameters:
+        if "rng" in cls._declared_params(fn):
             resolved["rng"] = rng
 
     def _apply_defaults(self, fn: Callable, resolved: dict) -> None:
@@ -483,7 +556,7 @@ class AugmentationPipeline:
         ]
         if not missing:
             return
-        params = inspect.signature(fn).parameters
+        params = self._declared_params(fn)
         for name, value in missing:
             if name in params:
                 resolved[name] = value
@@ -508,8 +581,10 @@ class AugmentationPipeline:
                 continue
             self._apply_defaults(fn, resolved)
             self._forward_rng(fn, resolved, rng)
-            root_pos, joint_data = fn(
-                root_pos=root_pos, joint_data=joint_data, **resolved)
+            out = _call_step(
+                fn, MotionArrays(root_pos=root_pos, joint_rot=joint_data),
+                resolved)
+            root_pos, joint_data = out.root_pos, out.joint_rot
 
         return root_pos, joint_data, records
 
@@ -576,11 +651,13 @@ class AugmentationPipeline:
                 # don't declare a representation.
                 state.ensure_repr(final_repr)
                 self._forward_rng(fn, resolved, rng)
-                root_pos, new_jd = fn(
-                    root_pos=root_pos, joint_data=state.jd, **resolved)
+                out = _call_step(
+                    fn, MotionArrays(root_pos=root_pos, joint_rot=state.jd),
+                    resolved)
+                root_pos = out.root_pos
                 # We don't know what the unknown function did internally;
                 # treat the result as opaque data still in final_repr.
-                state.set_jd_invalidate_quats(new_jd, final_repr)
+                state.set_jd_invalidate_quats(out.joint_rot, final_repr)
 
         # At the end, ensure joint_data is back in the representation
         # the user expects.

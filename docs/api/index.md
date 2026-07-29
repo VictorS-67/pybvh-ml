@@ -15,9 +15,10 @@ The fastest route from "I want to…" to the exact call.
 | Compute / apply z-score normalization | `compute_normalization_stats(bvhs)`, `normalize_array(x, stats)` | [Preprocessing](preprocessing.md) |
 | Pack arrays into a model layout | `pack_to_ctv(root_pos, jd)`, `pack_to_tvc(...)`, `pack_to_flat(...)` | [Packing](packing.md) |
 | Unpack a model layout back to arrays | `unpack_from_ctv(x)`, `unpack_from_tvc(x)`, `unpack_from_flat(x)` | [Packing](packing.md) |
-| Rotate a clip around the up axis | `rotate_vertical(root_pos=…, joint_data=…, angle=…)` | [Augmentation](augmentation.md) |
-| Mirror a clip left/right | `mirror(root_pos=…, joint_data=…, lr_joint_pairs=…)` | [Augmentation](augmentation.md) |
-| Perturb speed / drop frames / add noise | `speed_perturbation_arrays(...)`, `dropout_arrays(...)`, `add_joint_noise(...)` | [Augmentation](augmentation.md) |
+| Hold one clip's arrays | `MotionArrays(root_pos=…, joint_rot=…)` | [Motion Arrays](arrays.md) |
+| Rotate a clip around the up axis | `rotate_vertical(arrays, angle=…, up_axis=…)` | [Augmentation](augmentation.md) |
+| Mirror a clip left/right | `mirror(arrays, lr_joint_pairs=…, lateral_axis=…)` | [Augmentation](augmentation.md) |
+| Perturb speed / drop frames / add noise | `speed_perturbation_arrays(...)`, `dropout_arrays(...)`, `add_joint_rotation_noise(...)`, `add_root_position_noise(...)` | [Augmentation](augmentation.md) |
 | Compose augmentations with probabilities | `AugmentationPipeline([...])` / `AugmentationPipeline.standard(skel)` | [Pipeline](pipeline.md) |
 | Convert rotation representations on arrays | `convert_arrays(jd, "euler", "6d", euler_orders=…)` | [Conversion](convert.md) |
 | Get graph edges / L/R pairs / body parts | `get_edge_list(bvh)`, `get_lr_pairs(bvh)`, `get_body_partitions(bvh)` | [Skeleton](skeleton.md) |

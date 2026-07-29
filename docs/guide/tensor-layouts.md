@@ -1,6 +1,6 @@
 # Tensor Layouts & Packing
 
-pybvh gives you structured arrays: `root_pos` of shape `(F, 3)` and `joint_data` of shape `(F, J, C)`. Models want tensors in a specific layout. The packers convert between the two, in both directions.
+pybvh gives you structured arrays: `root_pos` of shape `(F, 3)` and per-joint rotations of shape `(F, J, C)`. pybvh-ml carries the pair as a [`MotionArrays`](../api/arrays.md), and models want tensors in a specific layout. The packers convert between the two, in both directions.
 
 ## The three layouts
 
@@ -27,6 +27,7 @@ The root vertex carries 3 position channels; when `C > 3` (quat, 6D, or rotmat j
 
 ```python
 from pybvh_ml import (
+    MotionArrays,
     pack_to_ctv, pack_to_tvc, pack_to_flat,
     unpack_from_ctv, unpack_from_tvc, unpack_from_flat,
 )
@@ -35,14 +36,16 @@ import pybvh
 bvh = pybvh.read_bvh_file("walk.bvh")
 root_pos, rot6d = bvh.to_6d()          # (F, 3), (F, J, 6)
 
-ctv = pack_to_ctv(root_pos, rot6d)     # (6, F, J+1)
-tvc = pack_to_tvc(root_pos, rot6d)     # (F, J+1, 6)
-flat = pack_to_flat(root_pos, rot6d)   # (F, 3 + J*6)
+arrays = MotionArrays(root_pos=root_pos, joint_rot=rot6d)
+
+ctv = pack_to_ctv(arrays)     # (6, F, J+1)
+tvc = pack_to_tvc(arrays)     # (F, J+1, 6)
+flat = pack_to_flat(arrays)   # (F, 3 + J*6)
 
 root_back, rot_back = unpack_from_ctv(ctv)
 ```
 
-Every `pack_to_*` has a matching `unpack_from_*` that inverts it (up to the `center_root` shift — see below). `unpack_from_flat` needs to know the channel split: pass `joint_channels=` matching the packed representation (e.g. `joint_channels=6` for 6D), or it raises a `ValueError` when `D - root_channels` isn't divisible by it.
+Every `pack_to_*` has a matching `unpack_from_*` that inverts it, returning a `MotionArrays` (up to the `center_root` shift — see below). `unpack_from_flat` needs to know the channel split: pass `joint_channels=` matching the packed representation (e.g. `joint_channels=6` for 6D), or it raises a `ValueError` when `D - root_channels` isn't divisible by it.
 
 ## `center_root` — read this once, save a debugging session
 

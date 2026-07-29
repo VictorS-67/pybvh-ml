@@ -11,11 +11,30 @@ import torch
 from torch.utils.data import Dataset
 
 from pybvh import read_bvh_file
+from pybvh_ml.arrays import MotionArrays, require_joint_rot
 from pybvh_ml.convert import convert_arrays
 from pybvh_ml.packing import pack_to_ctv, pack_to_flat, pack_to_tvc
-from pybvh_ml.preprocessing import extract_repr
 from pybvh_ml.sequences import standardize_length, uniform_temporal_sample
 from pybvh_ml.pipeline import AugmentationPipeline
+
+
+def _clip_joint_rot(clip: dict) -> np.ndarray:
+    """Read a clip dict's rotation array under either key.
+
+    ``load_preprocessed`` returns ``joint_rot``; datasets written before
+    pybvh-ml 0.5.0 — and hand-built clip dicts carried over from that
+    era — say ``joint_data``.  Accepting both here means a caller who
+    assembles clips themselves gets a named error rather than a
+    ``KeyError`` from inside ``__getitem__``.
+    """
+    if "joint_rot" in clip:
+        return clip["joint_rot"]
+    if "joint_data" in clip:
+        return clip["joint_data"]
+    raise KeyError(
+        "clip dict has no 'joint_rot' key (renamed from 'joint_data' in "
+        "pybvh-ml 0.5.0). Clips from load_preprocessed already use the new "
+        "name; hand-built clips should too.")
 
 
 def rng_for(
@@ -98,9 +117,8 @@ def _replay_augmentation_params(
     elif epoch < 0:
         raise ValueError(f"epoch must be >= 0, got {epoch}")
 
-    root_pos, joint_data = dataset._clip_arrays(idx)
-    _, _, params = dataset.augmentation(
-        root_pos=root_pos, joint_data=joint_data,
+    _, params = dataset.augmentation(
+        dataset._clip_arrays(idx),
         rng=rng_for(dataset.seed, epoch, idx), return_params=True)
     return params
 
@@ -254,12 +272,11 @@ def _validate_layout_and_temporal(
 
 
 def _apply_temporal(
-    root_pos: np.ndarray,
-    joint_data: np.ndarray,
+    arrays: MotionArrays,
     target_length: int | None,
     temporal: str,
     rng: np.random.Generator | None,
-) -> tuple[np.ndarray, np.ndarray, int]:
+) -> tuple[MotionArrays, int]:
     """Standardize a clip to *target_length* frames.
 
     Runs on the ``(F, 3)`` / ``(F, J, C)`` arrays rather than on the
@@ -268,17 +285,24 @@ def _apply_temporal(
     the flat layout the two orders are equivalent — packing is a
     per-frame concatenation, and zero padding commutes with it.
 
-    Returns ``(root_pos, joint_data, length)``, where *length* is the
-    number of valid (non-padding) frames in the result.
+    Returns ``(arrays, length)``, where *length* is the number of valid
+    (non-padding) frames in the result.  One index vector or one
+    standardization is applied to every present stream, so they cannot
+    drift out of step.
     """
+    root_pos = arrays.root_pos
+    joint_data = require_joint_rot(arrays, "MotionDataset")
     F = root_pos.shape[0]
     if target_length is None:
-        return root_pos, joint_data, F
+        return arrays, F
 
     if temporal in ("pad", "crop"):
         return (
-            standardize_length(root_pos, target_length, method=temporal),
-            standardize_length(joint_data, target_length, method=temporal),
+            MotionArrays(
+                root_pos=standardize_length(
+                    root_pos, target_length, method=temporal),
+                joint_rot=standardize_length(
+                    joint_data, target_length, method=temporal)),
             # Both modes discard frames when the clip is too long
             # ("pad" from the end, "crop" from both ends) and zero-pad
             # when it is too short — so report only the valid frames
@@ -301,12 +325,13 @@ def _apply_temporal(
         rng=rng if mode == "train" else None) % F
     # Resampling indexes into the clip, so every returned frame is real
     # data: no padding, and the valid length is always the full budget.
-    return root_pos[indices], joint_data[indices], target_length
+    return (MotionArrays(root_pos=root_pos[indices],
+                         joint_rot=joint_data[indices]),
+            target_length)
 
 
 def _finalize(
-    root_pos: np.ndarray,
-    joint_data: np.ndarray,
+    arrays: MotionArrays,
     *,
     layout: str,
     temporal: str,
@@ -319,9 +344,8 @@ def _finalize(
     made that choice on the raw arrays, and packing must not silently
     re-center.
     """
-    root_pos, joint_data, length = _apply_temporal(
-        root_pos, joint_data, target_length, temporal, rng)
-    packed = _LAYOUT_PACKERS[layout](root_pos, joint_data, center_root=False)
+    arrays, length = _apply_temporal(arrays, target_length, temporal, rng)
+    packed = _LAYOUT_PACKERS[layout](arrays, center_root=False)
     return torch.tensor(packed, dtype=torch.float32), length
 
 
@@ -553,7 +577,7 @@ class MotionDataset(Dataset):
         """Whether ``__getitem__`` consumes the per-sample rng at all."""
         return self.augmentation is not None or self.temporal == "resample"
 
-    def _clip_arrays(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+    def _clip_arrays(self, idx: int) -> MotionArrays:
         """Sample *idx*'s arrays as the augmentation receives them.
 
         Shared by ``__getitem__`` and ``explain_augmentation`` so the
@@ -563,18 +587,18 @@ class MotionDataset(Dataset):
         """
         clip = self.clips[idx]
         root_pos = clip["root_pos"].copy()
-        joint_data = clip["joint_data"].copy()
+        joint_data = _clip_joint_rot(clip).copy()
         if self.center_root and root_pos.shape[0] > 0:
             root_pos = root_pos - root_pos[0:1]
         if self.target_repr is not None:
             joint_data = convert_arrays(
                 joint_data, self.source_repr, self.target_repr,
                 euler_orders=self.euler_orders)
-        return root_pos, joint_data
+        return MotionArrays(root_pos=root_pos, joint_rot=joint_data)
 
     def __getitem__(self, idx: int) -> dict:
         idx = _normalize_index(idx, len(self.clips), "MotionDataset")
-        root_pos, joint_data = self._clip_arrays(idx)
+        arrays = self._clip_arrays(idx)
 
         rng = None
         if self._draws_randomness:
@@ -587,11 +611,10 @@ class MotionDataset(Dataset):
         # explain_augmentation replay a sample exactly: it re-runs only
         # the augmentation, from the head of an identical stream.
         if self.augmentation is not None:
-            root_pos, joint_data = self.augmentation(
-                root_pos=root_pos, joint_data=joint_data, rng=rng)
+            arrays = self.augmentation(arrays, rng=rng)
 
         tensor, length = _finalize(
-            root_pos, joint_data, layout=self.layout,
+            arrays, layout=self.layout,
             temporal=self.temporal, target_length=self.target_length,
             rng=rng)
 
@@ -731,7 +754,7 @@ class OnTheFlyDataset(Dataset):
         """Whether ``__getitem__`` consumes the per-sample rng at all."""
         return self.augmentation is not None or self.temporal == "resample"
 
-    def _clip_arrays(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+    def _clip_arrays(self, idx: int) -> MotionArrays:
         """Sample *idx*'s arrays as the augmentation receives them.
 
         Re-reads the source file, so ``explain_augmentation`` replays
@@ -740,14 +763,12 @@ class OnTheFlyDataset(Dataset):
         bvh = read_bvh_file(
             self.bvh_paths[idx], world_up=self.world_up,
             lr_mapping=self.lr_mapping)
-        root_pos, joint_data = extract_repr(bvh, self.representation)
-        if self.center_root and root_pos.shape[0] > 0:
-            root_pos = root_pos - root_pos[0:1]
-        return root_pos, joint_data
+        return MotionArrays.from_bvh(
+            bvh, self.representation, center_root=self.center_root)
 
     def __getitem__(self, idx: int) -> dict:
         idx = _normalize_index(idx, len(self.bvh_paths), "OnTheFlyDataset")
-        root_pos, joint_data = self._clip_arrays(idx)
+        arrays = self._clip_arrays(idx)
 
         rng = None
         if self._draws_randomness:
@@ -757,11 +778,10 @@ class OnTheFlyDataset(Dataset):
 
         # Draw order matters — see the note in MotionDataset.__getitem__.
         if self.augmentation is not None:
-            root_pos, joint_data = self.augmentation(
-                root_pos=root_pos, joint_data=joint_data, rng=rng)
+            arrays = self.augmentation(arrays, rng=rng)
 
         tensor, length = _finalize(
-            root_pos, joint_data, layout=self.layout,
+            arrays, layout=self.layout,
             temporal=self.temporal, target_length=self.target_length,
             rng=rng)
 

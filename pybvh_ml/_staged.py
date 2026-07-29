@@ -34,9 +34,11 @@ from .augmentation import (
     _mirror_sign_rot6d,
     _swap_lr_pairs,
     _to_quats,
+    _as_radians,
     _validate_drop_rate,
-    _validate_noise_sigmas,
-    add_joint_noise,
+    _validate_sigma,
+    add_joint_rotation_noise,
+    add_root_position_noise,
     dropout_arrays,
     mirror,
     rotate_vertical,
@@ -105,8 +107,8 @@ class _StagingState:
 #
 # Each takes ``(root_pos, state, **resolved_kwargs, rng=None)`` and
 # returns the new ``root_pos``.  State mutations happen in-place.
-# Parameter order mirrors the public ``(root_pos, joint_data, ...)``
-# convention — ``state`` here is the joint-data carrier.
+# The two carriers mirror ``MotionArrays``' two fields — ``root_pos``
+# by value, ``state`` standing in for ``joint_rot`` plus its cache.
 # =========================================================================
 
 def _rotate_vertical_staged(
@@ -115,6 +117,7 @@ def _rotate_vertical_staged(
     angle: float,
     up_axis: str,
     representation: str,
+    degrees: bool = False,
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
@@ -124,7 +127,7 @@ def _rotate_vertical_staged(
             "the root whose rotation carries the yaw); got J=0")
     up = parse_axis(up_axis)
     up_idx, up_sign = up.index, up.sign
-    signed_angle = angle * up_sign
+    signed_angle = _as_radians(angle, degrees) * up_sign
     R_vert = _build_rotation_matrix(signed_angle, up_idx)
     new_rp = (R_vert @ root_pos.T).T
 
@@ -177,19 +180,20 @@ def _mirror_staged(
     return new_rp
 
 
-def _add_joint_noise_staged(
+def _add_joint_rotation_noise_staged(
     root_pos: npt.NDArray[np.float64],
     state: _StagingState,
     sigma: float,
     representation: str,  # kept for signature symmetry; not used in math
-    sigma_pos: float = 0.0,
+    degrees: bool = False,
     rng: np.random.Generator | None = None,
     euler_orders: list[str] | None = None,
     **_: object,
 ) -> npt.NDArray[np.float64]:
-    _validate_noise_sigmas(sigma, sigma_pos)
+    _validate_sigma(sigma)
     if rng is None:
         rng = np.random.default_rng()
+    sigma_rad = _as_radians(sigma, degrees)
 
     q = state.materialize_quats()
     F, J, _ = q.shape
@@ -198,7 +202,7 @@ def _add_joint_noise_staged(
     norm = np.where(norm < 1e-15, 1.0, norm)
     axis = axis / norm
 
-    half_angle = rng.normal(0, sigma, (F, J)) / 2.0
+    half_angle = rng.normal(0, sigma_rad, (F, J)) / 2.0
     q_noise = np.empty((F, J, 4), dtype=np.float64)
     q_noise[..., 0] = np.cos(half_angle)
     q_noise[..., 1:] = np.sin(half_angle)[..., np.newaxis] * axis
@@ -209,16 +213,32 @@ def _add_joint_noise_staged(
     # input quaternion; fail loudly like the public function.
     if np.any(norms == 0.0):
         raise ValueError(
-            "joint_data contains a zero-norm quaternion; the zero "
+            "joint_rot contains a zero-norm quaternion; the zero "
             "quaternion does not represent a rotation")
     noisy /= norms
     state.set_from_quats(noisy)
 
-    if sigma_pos > 0:
-        return root_pos + rng.normal(0, sigma_pos, root_pos.shape)
-    # Copy even without positional noise: staged functions must never
-    # hand the caller's own root_pos back (aliasing would let later
-    # in-place edits reach the caller's array).
+    # Copy: staged functions must never hand the caller's own root_pos
+    # back (aliasing would let later in-place edits reach the caller's
+    # array).
+    return root_pos.copy()
+
+
+def _add_root_position_noise_staged(
+    root_pos: npt.NDArray[np.float64],
+    state: _StagingState,
+    sigma: float,
+    rng: np.random.Generator | None = None,
+    **_: object,
+) -> npt.NDArray[np.float64]:
+    # Never touches the rotations, so unlike every other staged function
+    # this one leaves the quat cache alone — a positional-jitter step no
+    # longer forces a materialization it does not need.
+    _validate_sigma(sigma)
+    if rng is None:
+        rng = np.random.default_rng()
+    if sigma > 0:
+        return root_pos + rng.normal(0, sigma, root_pos.shape)
     return root_pos.copy()
 
 
@@ -317,7 +337,8 @@ def _dropout_staged(
 STAGED_DISPATCH = {
     rotate_vertical: _rotate_vertical_staged,
     mirror: _mirror_staged,
-    add_joint_noise: _add_joint_noise_staged,
+    add_joint_rotation_noise: _add_joint_rotation_noise_staged,
+    add_root_position_noise: _add_root_position_noise_staged,
     speed_perturbation_arrays: _speed_perturbation_staged,
     dropout_arrays: _dropout_staged,
 }

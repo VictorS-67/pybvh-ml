@@ -43,7 +43,7 @@ for epoch in range(num_epochs):
 
 ## The two Dataset classes
 
-**`MotionDataset`** wraps in-memory clip dicts — typically `load_preprocessed(...)["clips"]`, but any list of `{"root_pos", "joint_data", ...}` dicts works (pass `center_root=True` for raw, uncentered hand-built clips). When the clips *do* come from a preprocessed file, `MotionDataset.from_preprocessed(loaded)` is the better entry point: it wires the labels, the stored `representation` and `skeleton_info["euler_orders"]` from the file, so nothing has to be restated at the call site.
+**`MotionDataset`** wraps in-memory clip dicts — typically `load_preprocessed(...)["clips"]`, but any list of `{"root_pos", "joint_rot", ...}` dicts works (pass `center_root=True` for raw, uncentered hand-built clips). When the clips *do* come from a preprocessed file, `MotionDataset.from_preprocessed(loaded)` is the better entry point: it wires the labels, the stored `representation` and `skeleton_info["euler_orders"]` from the file, so nothing has to be restated at the call site.
 
 **`OnTheFlyDataset`** skips the preprocessed file entirely: give it a list of BVH paths (`str` or `Path`) and it loads, converts, and augments per item — useful when you don't want the preprocessing artifact on disk. `world_up=` and `lr_mapping=` are forwarded to every `pybvh.read_bvh_file` call, matching `preprocess_directory`.
 
@@ -113,7 +113,7 @@ ds.explain_augmentation(5, epoch=0)     # or an earlier one
 
 # [{'name': 'rotate_vertical',           'applied': True,  'params': {'angle': 0.034}},
 #  {'name': 'mirror',                    'applied': False, 'params': {}},
-#  {'name': 'add_joint_noise',           'applied': True,  'params': {}},
+#  {'name': 'add_joint_rotation_noise',  'applied': True,  'params': {}},
 #  {'name': 'speed_perturbation_arrays', 'applied': True,  'params': {'factor': 1.020}}]
 ```
 

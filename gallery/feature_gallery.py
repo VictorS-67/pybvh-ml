@@ -64,11 +64,13 @@ gp.clip_gif(bvh)
 # **`pack_to_ctv` / `pack_to_tvc` / `pack_to_flat`** — one clip, three model-ready layouts. The root is vertex 0; with 6D joint data (C = 6) its channels `3:6` are zero padding, and `describe_features` maps every flat column back to its feature block. The CTV and TVC slices hold the *same numbers* — what changes between layouts is the axis order, so the TVC panel is drawn untransposed (V rows, C columns). One diverging color scale everywhere: red = positive, blue = negative, white ≈ 0, clipped at the 98th percentile — the three root-position columns (tens of units, against rotation components bounded by ±1) saturate by design. The dark bands at channels 0 and 4 are the ≈1 entries of near-identity rotations: 6D is the first two rotation-matrix columns, so those channels sit near 1 for joints that barely rotate.
 
 # %%
-from pybvh_ml import pack_to_ctv, pack_to_tvc, pack_to_flat, describe_features
+from pybvh_ml import (MotionArrays, pack_to_ctv, pack_to_tvc, pack_to_flat,
+                      describe_features)
 
-ctv = pack_to_ctv(root_pos, jd6, center_root=False)
-tvc = pack_to_tvc(root_pos, jd6, center_root=False)
-flat = pack_to_flat(root_pos, jd6, center_root=False)
+hero = MotionArrays(root_pos=root_pos, joint_rot=jd6)
+ctv = pack_to_ctv(hero, center_root=False)
+tvc = pack_to_tvc(hero, center_root=False)
+flat = pack_to_flat(hero, center_root=False)
 desc = describe_features(bvh.joint_count, representation="6d")
 print(f"CTV {ctv.shape}   TVC {tvc.shape}   flat {flat.shape}")
 
@@ -84,8 +86,8 @@ plt.show()
 # %%
 from pybvh_ml import sliding_window
 
-clip_packed = pack_to_tvc(root_pos, jd6)        # center_root=True default: whole clip, once
-window_packed = [pack_to_tvc(rp, jd)            # same default per window: re-based every time
+clip_packed = pack_to_tvc(hero)                 # center_root=True default: whole clip, once
+window_packed = [pack_to_tvc(MotionArrays(root_pos=rp, joint_rot=jd))  # same default per window
                  for rp, jd in zip(sliding_window(root_pos, 32, stride=16),
                                    sliding_window(jd6, 32, stride=16))]
 fig = gp.fig_center_hazard(clip_packed, window_packed, stride=16, up_index=2)
@@ -122,15 +124,18 @@ plt.show()
 # %%
 from pybvh_ml import speed_perturbation_arrays, dropout_arrays
 
-slow = speed_perturbation_arrays(root_pos=root_pos, joint_data=quats,
+quat_arrays = MotionArrays(root_pos=root_pos, joint_rot=quats)
+slow = speed_perturbation_arrays(quat_arrays,
                                  factor=0.75, representation="quat")
-fast = speed_perturbation_arrays(root_pos=root_pos, joint_data=quats,
+fast = speed_perturbation_arrays(quat_arrays,
                                  factor=1.25, representation="quat")
 gp.speed_comparison_gif(
-    [bvh, bvh.from_quat(*slow), bvh.from_quat(*fast)],
+    [bvh,
+     bvh.from_quat(slow.root_pos, slow.joint_rot),
+     bvh.from_quat(fast.root_pos, fast.joint_rot)],
     labels=[f"original ({bvh.frame_count}f)",
-            f"factor=0.75 — slower ({len(slow[0])}f)",
-            f"factor=1.25 — faster ({len(fast[0])}f)"])
+            f"factor=0.75 — slower ({slow.frame_count}f)",
+            f"factor=1.25 — faster ({fast.frame_count}f)"])
 
 # %% [markdown]
 # **`dropout_arrays`** — drops random frames (Bernoulli per frame, first and last always kept) and SLERP-re-interpolates across the gaps; the frame count is unchanged. On smooth mocap the re-interpolated curve hugs the original — most gaps are 1–2 frames — so the mechanism is drawn explicitly: markers on the frames that survived, a rug of the dropped indices, and an inset zooming on the longest gap, where the interpolation visibly cuts the corner. Dropped frames are found by exact comparison — kept frames pass through bit-identical.
@@ -148,9 +153,10 @@ def joint_height(b, n):
 
 
 drop_rate = 0.3
-drop_rp, drop_q = dropout_arrays(root_pos=root_pos, joint_data=quats,
-                                 drop_rate=drop_rate, representation="quat",
-                                 rng=np.random.default_rng(7))
+dropped = dropout_arrays(quat_arrays, drop_rate=drop_rate,
+                         representation="quat",
+                         rng=np.random.default_rng(7))
+drop_rp, drop_q = dropped.root_pos, dropped.joint_rot
 kept = (np.all(drop_q == quats, axis=(1, 2))
         & np.all(drop_rp == root_pos, axis=1))
 fig = gp.fig_dropout(f"{bvh.joint_names[lively]} height",
@@ -170,10 +176,9 @@ pipeline = AugmentationPipeline.standard(skel, representation="quat",
                                          up_axis=bvh.world_up)
 draws, drawn_params = [], []
 for i in range(3):
-    rp_i, q_i, steps = pipeline(root_pos=root_pos, joint_data=quats,
-                                rng=np.random.default_rng(i),
-                                return_params=True)
-    draws.append(bvh.from_quat(rp_i, q_i))
+    out_i, steps = pipeline(quat_arrays, rng=np.random.default_rng(i),
+                            return_params=True)
+    draws.append(bvh.from_quat(out_i.root_pos, out_i.joint_rot))
     drawn_params.append(steps)
 
 labels = [f"original ({bvh.frame_count}f)"] + \
@@ -202,7 +207,7 @@ plt.show()
 # %%
 from pybvh_ml.torch import MotionDataset
 
-clip = {"root_pos": root_pos, "joint_data": jd6}
+clip = {"root_pos": root_pos, "joint_rot": jd6}
 # speed perturbation changes the frame count, so disable it here to keep the
 # per-frame deviation against the raw clip well-defined
 pipeline6 = AugmentationPipeline.standard(skel, representation="6d",
@@ -263,7 +268,7 @@ plt.show()
 # ## 6 · Preprocessing
 
 # %% [markdown]
-# **`compute_normalization_stats` / `normalize_array`** — per-channel z-score over the flat `[root_pos, joint_data]` layout (the `Mean.npy` / `Std.npy` convention). How to read it: the raw matrix is saturated horizontal stripes — every channel at its own offset and scale, the "can't feed this to a model" state; after z-scoring, the shared ±3 scale reveals the temporal structure (the motion burst past frame ~50). Channels whose std is ~0 are guarded to 1 and flagged in the `constant_channels` mask — the dark rows of the vertical strip, normalized to exactly 0 rather than ~N(0, 1).
+# **`compute_normalization_stats` / `normalize_array`** — per-channel z-score over the flat `[root_pos, joint_rot]` layout (the `Mean.npy` / `Std.npy` convention). How to read it: the raw matrix is saturated horizontal stripes — every channel at its own offset and scale, the "can't feed this to a model" state; after z-scoring, the shared ±3 scale reveals the temporal structure (the motion burst past frame ~50). Channels whose std is ~0 are guarded to 1 and flagged in the `constant_channels` mask — the dark rows of the vertical strip, normalized to exactly 0 rather than ~N(0, 1).
 
 # %%
 from pybvh_ml import compute_normalization_stats, normalize_array
@@ -302,7 +307,7 @@ plt.show()
 from pybvh_ml.torch import collate_motion_batch
 
 lengths = [75, 60, 45, 30]
-clips = [{"root_pos": root_pos[:n], "joint_data": jd6[:n]} for n in lengths]
+clips = [{"root_pos": root_pos[:n], "joint_rot": jd6[:n]} for n in lengths]
 ds = MotionDataset(clips, center_root=True)
 batch = collate_motion_batch([ds[i] for i in range(len(ds))])
 print({k: tuple(v.shape) for k, v in batch.items()})

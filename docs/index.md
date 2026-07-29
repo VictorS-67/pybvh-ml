@@ -39,7 +39,7 @@ summary = pybvh_ml.preprocess_directory(
 # Load back: per-clip arrays, normalization stats, skeleton metadata.
 data = pybvh_ml.load_preprocessed("train.npz")
 root_pos = data["clips"][0]["root_pos"]      # (F, 3)
-joint_data = data["clips"][0]["joint_data"]  # (F, J, 6) for 6D
+joint_rot = data["clips"][0]["joint_rot"]    # (F, J, 6) for 6D
 mean, std = data["mean"], data["std"]        # for input normalization
 ```
 
