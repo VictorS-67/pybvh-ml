@@ -1,7 +1,11 @@
 prune bvh_data
+prune internal_data
 prune tutorials
 prune tests
 prune docs
+prune gallery
+prune scripts
+prune site
 exclude *.ipynb
 exclude *.gif
 exclude *.DS_Store
