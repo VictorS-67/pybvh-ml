@@ -20,7 +20,8 @@ The fastest route from "I want to…" to the exact call.
 | Mirror a clip left/right | `mirror(arrays, lr_joint_pairs=…, lateral_axis=…)` | [Augmentation](augmentation.md) |
 | Perturb speed / drop frames / add noise | `speed_perturbation_arrays(...)`, `dropout_arrays(...)`, `add_joint_rotation_noise(...)`, `add_root_position_noise(...)` | [Augmentation](augmentation.md) |
 | Compose augmentations with probabilities | `AugmentationPipeline([...])` / `AugmentationPipeline.standard(skel)` | [Pipeline](pipeline.md) |
-| Convert rotation representations on arrays | `convert_arrays(jd, "euler", "6d", euler_orders=…)` | [Conversion](convert.md) |
+| Convert a clip's rotation representation | `convert_arrays(arrays, "euler", "6d", euler_orders=…)` | [Conversion](convert.md) |
+| Convert a bare rotation array (no root stream) | `convert_rotations(jd, "euler", "6d", euler_orders=…)` | [Conversion](convert.md) |
 | Get graph edges / L/R pairs / body parts | `get_edge_list(bvh)`, `get_lr_pairs(bvh)`, `get_body_partitions(bvh)` | [Skeleton](skeleton.md) |
 | Get all skeleton metadata at once | `get_skeleton_info(bvh)` | [Skeleton](skeleton.md) |
 | Cut sliding windows | `sliding_window(data, window_size=64, stride=32)` | [Sequences](sequences.md) |
@@ -44,6 +45,6 @@ The fastest route from "I want to…" to the exact call.
 | `pybvh_ml.preprocessing` | directory → dataset file, harmonization, normalization stats | [Preprocessing](preprocessing.md) |
 | `pybvh_ml.sequences` | sliding windows, length standardization, temporal sampling | [Sequences](sequences.md) |
 | `pybvh_ml.skeleton` | graph metadata: edges, L/R pairs, partitions, `skeleton_info` | [Skeleton](skeleton.md) |
-| `pybvh_ml.convert` | `convert_arrays` — representation conversion on `(F, J, C)` arrays | [Conversion](convert.md) |
+| `pybvh_ml.convert` | `convert_arrays` (a whole clip) / `convert_rotations` (a bare `(F, J, C)` array) — representation conversion | [Conversion](convert.md) |
 | `pybvh_ml.metadata` | `FeatureDescriptor` / `describe_features` column maps | [Metadata](metadata.md) |
 | `pybvh_ml.torch` | optional: Dataset classes and the collate function | [PyTorch](torch.md) |

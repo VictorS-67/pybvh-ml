@@ -586,15 +586,19 @@ class MotionDataset(Dataset):
         here rather than in ``__getitem__``.
         """
         clip = self.clips[idx]
-        root_pos = clip["root_pos"].copy()
-        joint_data = _clip_joint_rot(clip).copy()
-        if self.center_root and root_pos.shape[0] > 0:
-            root_pos = root_pos - root_pos[0:1]
+        # No defensive copy of the cached arrays: the container's fields
+        # are read-only views, and augmentation and packing both allocate
+        # their outputs, so nothing downstream can write to the cache.
+        arrays = MotionArrays(root_pos=clip["root_pos"],
+                              joint_rot=_clip_joint_rot(clip))
+        if self.center_root and arrays.frame_count > 0:
+            arrays = arrays.replace(
+                root_pos=arrays.root_pos - arrays.root_pos[0:1])
         if self.target_repr is not None:
-            joint_data = convert_arrays(
-                joint_data, self.source_repr, self.target_repr,
+            arrays = convert_arrays(
+                arrays, self.source_repr, self.target_repr,
                 euler_orders=self.euler_orders)
-        return MotionArrays(root_pos=root_pos, joint_rot=joint_data)
+        return arrays
 
     def __getitem__(self, idx: int) -> dict:
         idx = _normalize_index(idx, len(self.clips), "MotionDataset")

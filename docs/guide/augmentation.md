@@ -23,9 +23,9 @@ arrays = MotionArrays.from_bvh(bvh, "quat")     # or build it yourself:
 arrays = MotionArrays(root_pos=root_pos, joint_rot=quats)
 ```
 
-It is frozen: derive a new one with `arrays.replace(joint_rot=...)`
-rather than assigning to a field.  That is what lets every function in
-the package rely on the frame counts having been checked once.
+It is frozen: derive a new one with `arrays.replace(joint_rot=...)` rather than assigning to a field. That is what lets every function in the package rely on the frame counts having been checked once. The fields are read-only *views* of the arrays you passed in — writing through them raises, so a container built over a Dataset's cached clips cannot rewrite the cache, but it does not copy either, so mutating your own array still changes what the container reads. Take `np.array(arrays.joint_rot)` when you need a writable working array.
+
+dtype is preserved rather than promoted: `float32` in, `float32` out, so holding a cached clip in a container doesn't double its memory. Non-floating input (an integer array) is promoted to `float64`. That is a storage guarantee, not a `float32` pipeline — pybvh's rotation math and the packers compute in `float64`, so augmentation returns `float64` regardless.
 
 ## The six functions
 
@@ -76,7 +76,7 @@ root_pos, quats = arrays.root_pos, arrays.joint_rot
 Representation-specific notes:
 
 - **`"euler"`** additionally requires `euler_orders=bvh.euler_orders` — per-joint orders are respected, including mixed-order L/R pairs under `mirror`.
-- **`"rotmat"`** is carried flat as `(F, J, 9)` — the layout [`convert_arrays`](../api/convert.md) documents and produces; the 3×3 reshape happens internally.
+- **`"rotmat"`** is carried flat as `(F, J, 9)` — the layout [`convert_rotations`](../api/convert.md) documents and produces; the 3×3 reshape happens internally.
 - **`"quat"` is the fast path**: every function works in quaternion space internally, so non-quat representations pay one conversion in and one out per call. The [pipeline](#composing-a-pipeline) eliminates the intermediate round trips.
 
 ## Composing a pipeline
@@ -139,7 +139,7 @@ With `cache_quats=True` (the default), the pipeline converts your `joint_rot` to
 Two guarantees, identical on both paths:
 
 - **Custom steps see your declared representation.** A step function the pipeline doesn't recognize receives `arrays.joint_rot` in the pipeline's current declared representation — never in whatever internal state a previous built-in step left behind. `cache_quats=True` and `cache_quats=False` are bit-identical.
-- **Outputs never alias inputs.** Even when no step fires, `pipeline(...)` returns freshly allocated arrays — safe to mutate without corrupting a Dataset's cached clips.
+- **Outputs never alias inputs.** Even when no step fires, `pipeline(...)` returns freshly allocated arrays, so nothing it hands back shares storage with a Dataset's cached clips. (The returned container's fields are read-only like any other, so a cache is safe from both directions.)
 
 ### Seeing what a call actually drew
 
@@ -167,17 +167,26 @@ Every random step takes the pipeline's `rng`. Pass a seeded `np.random.default_r
 
 ## Converting between representations
 
-The same conversion core is exposed standalone, for `(F, J, C)` arrays:
+Conversion sits at the same level as augmentation and packing, so it takes and returns a `MotionArrays` too — `root_pos` is carried through unchanged, since no rotation representation applies to a translation:
 
 ```python
 from pybvh_ml import convert_arrays
 
-rot6d = convert_arrays(euler_data, from_repr="euler", to_repr="6d",
-                       euler_orders=bvh.euler_orders)
-rotmat = convert_arrays(quats, from_repr="quat", to_repr="rotmat")
+arrays = MotionArrays.from_bvh(bvh, "euler")
+arrays = convert_arrays(arrays, "euler", "6d", euler_orders=bvh.euler_orders)
 ```
 
-Supported: `"euler"`, `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"` — any pair. Euler angles are radians, per-joint orders respected.
+When there is no root stream to carry — a model's rotation output, a cached quaternion array — use the rotation-level form:
+
+```python
+from pybvh_ml import convert_rotations
+
+rot6d = convert_rotations(euler_data, from_repr="euler", to_repr="6d",
+                          euler_orders=bvh.euler_orders)
+rotmat = convert_rotations(quats, from_repr="quat", to_repr="rotmat")
+```
+
+Supported by both: `"euler"`, `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"` — any pair. Euler angles are radians, per-joint orders respected.
 
 ## See also
 

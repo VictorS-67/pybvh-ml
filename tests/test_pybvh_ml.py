@@ -471,7 +471,7 @@ from pybvh_ml.augmentation import (
     add_root_position_noise,
 )
 from pybvh_ml.sequences import uniform_temporal_sample, sample_temporal
-from pybvh_ml.convert import convert_arrays
+from pybvh_ml.convert import convert_rotations
 from pybvh_ml.pipeline import AugmentationPipeline, AugmentationStep
 
 
@@ -843,44 +843,100 @@ class TestRot6dAugmentation:
 # Representation conversion
 # =============================================================================
 
-class TestConvertArrays:
-    """Tests for representation conversion."""
+class TestConvertArraysContainer:
+    """The container-level form: `MotionArrays` in, `MotionArrays` out.
+
+    Conversion is the natural neighbour of augment-and-pack, so it has to
+    compose with the container instead of making callers take it apart.
+    """
+
+    def test_container_in_container_out(self, bvh_example):
+        from pybvh_ml import convert_arrays
+        arrays = MotionArrays.from_bvh(bvh_example, "euler")
+        out = convert_arrays(arrays, "euler", "6d",
+                             euler_orders=bvh_example.euler_orders)
+        assert isinstance(out, MotionArrays)
+        assert out.joint_rot.shape[-1] == 6
+
+    def test_agrees_with_the_rotation_level_form(self, bvh_example):
+        from pybvh_ml import convert_arrays
+        orders = bvh_example.euler_orders
+        arrays = MotionArrays.from_bvh(bvh_example, "euler")
+        out = convert_arrays(arrays, "euler", "quat", euler_orders=orders)
+        expected = convert_rotations(arrays.joint_rot, "euler", "quat",
+                                     euler_orders=orders)
+        np.testing.assert_array_equal(out.joint_rot, expected)
+
+    def test_root_pos_is_carried_through_unchanged(self, bvh_example):
+        """A translation has no rotation representation, so the only field
+        that may differ from the input is `joint_rot`."""
+        from pybvh_ml import convert_arrays
+        arrays = MotionArrays.from_bvh(bvh_example, "6d")
+        out = convert_arrays(arrays, "6d", "quat")
+        np.testing.assert_array_equal(out.root_pos, arrays.root_pos)
+
+    def test_same_representation_still_allocates(self, bvh_example):
+        arrays = MotionArrays.from_bvh(bvh_example, "quat")
+        from pybvh_ml import convert_arrays
+        out = convert_arrays(arrays, "quat", "quat")
+        assert not np.shares_memory(out.joint_rot, arrays.joint_rot)
+
+    def test_bare_array_names_the_migration(self, bvh_example):
+        """The pre-0.5.0 call took a loose `joint_data` array; an
+        `AttributeError` on ndarray would not say what to do about it."""
+        from pybvh_ml import convert_arrays
+        _, quats = _get_quat_data(bvh_example)
+        with pytest.raises(TypeError, match="takes a MotionArrays"):
+            convert_arrays(quats, "quat", "6d")
+        with pytest.raises(TypeError, match="convert_rotations"):
+            convert_arrays(quats, "quat", "6d")
+
+    def test_missing_joint_rot_names_the_caller(self, bvh_example):
+        from pybvh_ml import convert_arrays
+        arrays = MotionArrays(root_pos=bvh_example.root_pos)
+        with pytest.raises(ValueError,
+                           match="convert_arrays needs joint rotations"):
+            convert_arrays(arrays, "quat", "6d")
+
+
+class TestConvertRotations:
+    """Representation conversion on a bare `(F, J, C)` rotation array."""
 
     def test_identity(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        result = convert_arrays(quats, "quat", "quat")
+        result = convert_rotations(quats, "quat", "quat")
         np.testing.assert_allclose(result, quats, atol=1e-12)
 
     def test_euler_to_quat_shape(self, bvh_example):
-        result = convert_arrays(
+        result = convert_rotations(
             bvh_example.joint_angles, "euler", "quat",
             euler_orders=bvh_example.euler_orders)
         assert result.shape == (bvh_example.frame_count, bvh_example.joint_count, 4)
 
     def test_euler_to_6d_shape(self, bvh_example):
-        result = convert_arrays(
+        result = convert_rotations(
             bvh_example.joint_angles, "euler", "6d",
             euler_orders=bvh_example.euler_orders)
         assert result.shape == (bvh_example.frame_count, bvh_example.joint_count, 6)
 
     def test_roundtrip_euler_quat(self, bvh_example):
         orders = bvh_example.euler_orders
-        q = convert_arrays(bvh_example.joint_angles, "euler", "quat",
+        q = convert_rotations(bvh_example.joint_angles, "euler", "quat",
                            euler_orders=orders)
-        back = convert_arrays(q, "quat", "euler", euler_orders=orders)
+        back = convert_rotations(q, "quat", "euler", euler_orders=orders)
         np.testing.assert_allclose(back, bvh_example.joint_angles, atol=1e-4)
 
     def test_roundtrip_euler_6d(self, bvh_example):
         orders = bvh_example.euler_orders
-        r6d = convert_arrays(bvh_example.joint_angles, "euler", "6d",
+        r6d = convert_rotations(bvh_example.joint_angles, "euler", "6d",
                              euler_orders=orders)
-        back = convert_arrays(r6d, "6d", "euler", euler_orders=orders)
+        back = convert_rotations(r6d, "6d", "euler", euler_orders=orders)
         np.testing.assert_allclose(back, bvh_example.joint_angles, atol=1e-4)
 
     def test_roundtrip_quat_6d(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        r6d = convert_arrays(quats, "quat", "6d")
-        back = convert_arrays(r6d, "6d", "quat")
+        r6d = convert_rotations(quats, "quat", "6d")
+        back = convert_rotations(r6d, "6d", "quat")
         # q and -q represent same rotation
         for f in range(quats.shape[0]):
             for j in range(quats.shape[1]):
@@ -890,8 +946,8 @@ class TestConvertArrays:
 
     def test_roundtrip_quat_axisangle(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        aa = convert_arrays(quats, "quat", "axisangle")
-        back = convert_arrays(aa, "axisangle", "quat")
+        aa = convert_rotations(quats, "quat", "axisangle")
+        back = convert_rotations(aa, "axisangle", "quat")
         for f in range(quats.shape[0]):
             for j in range(quats.shape[1]):
                 match = (np.allclose(back[f, j], quats[f, j], atol=1e-6)
@@ -900,38 +956,38 @@ class TestConvertArrays:
 
     def test_roundtrip_6d_rotmat(self, bvh_example):
         _, rot6d = _get_6d_data(bvh_example)
-        rm = convert_arrays(rot6d, "6d", "rotmat")
+        rm = convert_rotations(rot6d, "6d", "rotmat")
         assert rm.shape[-1] == 9
-        back = convert_arrays(rm, "rotmat", "6d")
+        back = convert_rotations(rm, "rotmat", "6d")
         np.testing.assert_allclose(back, rot6d, atol=1e-6)
 
     def test_rotmat_flat_shape(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
-        rm = convert_arrays(quats, "quat", "rotmat")
+        rm = convert_rotations(quats, "quat", "rotmat")
         F, J = quats.shape[:2]
         assert rm.shape == (F, J, 9)
 
     def test_euler_orders_required(self, bvh_example):
         with pytest.raises(ValueError, match="euler_orders is required"):
-            convert_arrays(bvh_example.joint_angles, "euler", "quat")
+            convert_rotations(bvh_example.joint_angles, "euler", "quat")
 
     def test_euler_orders_not_required_for_non_euler(self, bvh_example):
         _, quats = _get_quat_data(bvh_example)
         # Should not raise
-        convert_arrays(quats, "quat", "6d")
+        convert_rotations(quats, "quat", "6d")
 
     def test_unknown_repr(self):
         data = np.zeros((10, 5, 3))
         with pytest.raises(ValueError, match="Unknown"):
-            convert_arrays(data, "invalid", "quat")
+            convert_rotations(data, "invalid", "quat")
 
     def test_per_joint_mixed_orders(self, bvh_test3):
         """bvh_test3 has mixed Euler orders."""
         orders = bvh_test3.euler_orders
         assert len(set(orders)) >= 1  # may have mixed orders
-        q = convert_arrays(bvh_test3.joint_angles, "euler", "quat",
+        q = convert_rotations(bvh_test3.joint_angles, "euler", "quat",
                            euler_orders=orders)
-        back = convert_arrays(q, "quat", "euler", euler_orders=orders)
+        back = convert_rotations(q, "quat", "euler", euler_orders=orders)
         np.testing.assert_allclose(back, bvh_test3.joint_angles, atol=1e-4)
 
     @pytest.mark.parametrize("repr_name,expected_c", [
@@ -940,7 +996,7 @@ class TestConvertArrays:
     ])
     def test_convert_shapes(self, bvh_example, repr_name, expected_c):
         orders = bvh_example.euler_orders
-        q = convert_arrays(bvh_example.joint_angles, "euler", repr_name,
+        q = convert_rotations(bvh_example.joint_angles, "euler", repr_name,
                            euler_orders=orders)
         assert q.shape[-1] == expected_c
 
@@ -968,10 +1024,10 @@ class TestEulerRadians:
     """
 
     @pytest.mark.parametrize("fixture", ["bvh_example", "bvh_test3"])
-    def test_convert_arrays_matches_to_quat(self, request, fixture):
+    def test_convert_rotations_matches_to_quat(self, request, fixture):
         bvh = request.getfixturevalue(fixture)
         _, quats_gt = bvh.to_quat()
-        result = convert_arrays(bvh.joint_angles, "euler", "quat",
+        result = convert_rotations(bvh.joint_angles, "euler", "quat",
                                 euler_orders=bvh.euler_orders)
         np.testing.assert_allclose(
             _align_quat_signs(result, quats_gt), quats_gt, atol=1e-6)
@@ -987,8 +1043,8 @@ class TestEulerRadians:
             kw_quat["rng"] = np.random.default_rng(rng_seed)
         pos_e, jd_e = as_pair(fn(MotionArrays(root_pos=bvh.root_pos, joint_rot=bvh.joint_angles), **kw_euler))
         pos_qr, jd_q = as_pair(fn(MotionArrays(root_pos=pos_q, joint_rot=quats), **kw_quat))
-        R_e = convert_arrays(jd_e, "euler", "rotmat", euler_orders=orders)
-        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        R_e = convert_rotations(jd_e, "euler", "rotmat", euler_orders=orders)
+        R_q = convert_rotations(jd_q, "quat", "rotmat")
         return (pos_e, R_e), (pos_qr, R_q)
 
     def test_rotate_vertical_euler_matches_quat(self, bvh_example):
@@ -1037,12 +1093,12 @@ class TestEulerRadians:
         J = quats.shape[1]
         orders = ["ZYX"] * J
         orders[1] = "XYZ"  # pair (1, 2) deliberately mixes orders
-        euler = convert_arrays(quats, "quat", "euler", euler_orders=orders)
+        euler = convert_rotations(quats, "quat", "euler", euler_orders=orders)
         pairs = [(1, 2)]
         pos_e, jd_e = as_pair(mirror(MotionArrays(root_pos=pos, joint_rot=euler), lr_joint_pairs=pairs, lateral_axis="+x", representation="euler", euler_orders=orders))
         pos_q, jd_q = as_pair(mirror(MotionArrays(root_pos=pos, joint_rot=quats), lr_joint_pairs=pairs, lateral_axis="+x", representation="quat"))
-        R_e = convert_arrays(jd_e, "euler", "rotmat", euler_orders=orders)
-        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        R_e = convert_rotations(jd_e, "euler", "rotmat", euler_orders=orders)
+        R_q = convert_rotations(jd_q, "quat", "rotmat")
         np.testing.assert_allclose(pos_e, pos_q, atol=1e-10)
         np.testing.assert_allclose(R_e, R_q, atol=1e-6)
 
@@ -1051,7 +1107,7 @@ class TestEulerRadians:
         J = quats.shape[1]
         orders = ["ZYX"] * J
         orders[1] = "XYZ"
-        euler = convert_arrays(quats, "quat", "euler", euler_orders=orders)
+        euler = convert_rotations(quats, "quat", "euler", euler_orders=orders)
         steps = [(mirror, 1.0,
                   {"lr_joint_pairs": [(1, 2)], "lateral_axis": "+x",
                    "representation": "euler", "euler_orders": orders})]
@@ -1078,8 +1134,8 @@ class TestEulerRadians:
 
         pos_e, jd_e = as_pair(build("euler", euler_orders=orders)(MotionArrays(root_pos=bvh_example.root_pos, joint_rot=bvh_example.joint_angles), rng=np.random.default_rng(42)))
         pos_qr, jd_q = as_pair(build("quat")(MotionArrays(root_pos=pos_q, joint_rot=quats), rng=np.random.default_rng(42)))
-        R_e = convert_arrays(jd_e, "euler", "rotmat", euler_orders=orders)
-        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        R_e = convert_rotations(jd_e, "euler", "rotmat", euler_orders=orders)
+        R_q = convert_rotations(jd_q, "quat", "rotmat")
         np.testing.assert_allclose(pos_e, pos_qr, atol=1e-10)
         np.testing.assert_allclose(R_e, R_q, atol=1e-6)
 
@@ -1099,7 +1155,7 @@ class TestRotmatAugmentation:
     def _rotmat_vs_quat(self, bvh, fn, kwargs, rng_seed=None):
         """Run fn on rotmat and quat inputs; return positions + rotmats."""
         pos, quats = bvh.to_quat()
-        rm = convert_arrays(quats, "quat", "rotmat")
+        rm = convert_rotations(quats, "quat", "rotmat")
         kw_rm = dict(kwargs, representation="rotmat")
         kw_quat = dict(kwargs, representation="quat")
         if rng_seed is not None:
@@ -1108,7 +1164,7 @@ class TestRotmatAugmentation:
         pos_r, jd_r = as_pair(fn(MotionArrays(root_pos=pos, joint_rot=rm), **kw_rm))
         pos_q, jd_q = as_pair(fn(MotionArrays(root_pos=pos, joint_rot=quats), **kw_quat))
         assert jd_r.shape[-1] == 9
-        R_q = convert_arrays(jd_q, "quat", "rotmat")
+        R_q = convert_rotations(jd_q, "quat", "rotmat")
         return (pos_r, jd_r), (pos_q, R_q)
 
     def test_rotate_vertical_rotmat_matches_quat(self, bvh_example):
@@ -1150,7 +1206,7 @@ class TestRotmatAugmentation:
     def test_pipeline_rotmat(self, bvh_example, cache_quats):
         """A rotmat pipeline runs on both dispatch paths and they agree."""
         pos, quats = bvh_example.to_quat()
-        rm = convert_arrays(quats, "quat", "rotmat")
+        rm = convert_rotations(quats, "quat", "rotmat")
         pipeline = AugmentationPipeline([
             (rotate_vertical, 1.0,
              {"angle": np.radians(30.0), "up_axis": "+y",
@@ -1163,7 +1219,7 @@ class TestRotmatAugmentation:
 
     def test_pipeline_rotmat_staged_matches_direct(self, bvh_example):
         pos, quats = bvh_example.to_quat()
-        rm = convert_arrays(quats, "quat", "rotmat")
+        rm = convert_rotations(quats, "quat", "rotmat")
         steps = [
             (rotate_vertical, 1.0,
              {"angle": np.radians(30.0), "up_axis": "+y",
@@ -3969,7 +4025,7 @@ class TestRotmatLayoutGuard:
         rng = np.random.default_rng(0)
         quats = rng.normal(size=(F, J, 4))
         quats /= np.linalg.norm(quats, axis=-1, keepdims=True)
-        flat = convert_arrays(quats, "quat", "rotmat")
+        flat = convert_rotations(quats, "quat", "rotmat")
         return rng.normal(size=(F, 3)), flat
 
     def test_nested_rotmat_raises(self):
@@ -4057,13 +4113,6 @@ class TestMotionArrays:
         np.testing.assert_array_equal(b.joint_rot, jr)
         np.testing.assert_array_equal(b.root_pos, rp * 2.0)
 
-    def test_not_unpackable(self):
-        """The whole reason it is not a tuple: a later stream must not turn
-        every call site into a 'too many values' error."""
-        rp, jr = self._arrays()
-        with pytest.raises(TypeError):
-            _a, _b = MotionArrays(root_pos=rp, joint_rot=jr)
-
     def test_repr_shows_shapes_not_values(self):
         rp, jr = self._arrays()
         r = repr(MotionArrays(root_pos=rp, joint_rot=jr))
@@ -4092,6 +4141,88 @@ class TestMotionArrays:
         with pytest.raises(ValueError, match="rotate_vertical needs joint rotations"):
             rotate_vertical(MotionArrays(root_pos=rp), angle=0.1,
                             up_axis="+y", representation="6d")
+
+    def test_float32_stays_float32(self):
+        """A per-sample container that silently doubled a cached clip's
+        memory would make float32 storage pointless."""
+        rp, jr = self._arrays()
+        a = MotionArrays(root_pos=rp.astype(np.float32),
+                         joint_rot=jr.astype(np.float32))
+        assert a.root_pos.dtype == np.float32
+        assert a.joint_rot.dtype == np.float32
+
+    def test_streams_keep_their_own_dtypes(self):
+        rp, jr = self._arrays()
+        a = MotionArrays(root_pos=rp, joint_rot=jr.astype(np.float32))
+        assert a.root_pos.dtype == np.float64
+        assert a.joint_rot.dtype == np.float32
+
+    def test_non_floating_is_promoted_to_float64(self):
+        """Integer rotations are never the intent; promote rather than
+        carry a dtype the rotation math cannot use."""
+        a = MotionArrays(root_pos=np.zeros((4, 3), dtype=np.int32),
+                         joint_rot=[[[1, 0, 0, 0]]] * 4)
+        assert a.root_pos.dtype == np.float64
+        assert a.joint_rot.dtype == np.float64
+
+    def test_fields_are_read_only(self):
+        """Frozen has to cover the buffers too, or a container built over a
+        Dataset's cache could rewrite the cache through the field."""
+        rp, jr = self._arrays()
+        a = MotionArrays(root_pos=rp, joint_rot=jr)
+        with pytest.raises(ValueError, match="read-only"):
+            a.root_pos[0, 0] = 1.0
+        with pytest.raises(ValueError, match="read-only"):
+            a.joint_rot[0, 0, 0] = 1.0
+
+    def test_fields_are_views_and_leave_the_source_writable(self):
+        """Read-only views, not copies: the container costs no allocation,
+        and `setflags` on the view must not reach the caller's array."""
+        rp, jr = self._arrays()
+        a = MotionArrays(root_pos=rp, joint_rot=jr)
+        assert np.shares_memory(a.root_pos, rp)
+        assert np.shares_memory(a.joint_rot, jr)
+        rp[0, 0] = 42.0            # the source stayed writable...
+        assert a.root_pos[0, 0] == 42.0   # ...and the container sees the write
+
+    def test_replace_keeps_the_carried_field_read_only(self):
+        rp, jr = self._arrays()
+        b = MotionArrays(root_pos=rp, joint_rot=jr).replace(root_pos=rp * 2.0)
+        with pytest.raises(ValueError, match="read-only"):
+            b.joint_rot[0, 0, 0] = 1.0
+
+    def test_deepcopy_detaches_the_storage(self):
+        """The one thing read-only views cannot express, and the natural
+        reach for it — so the frozen guard must not break `copy`."""
+        import copy
+        rp, jr = self._arrays()
+        a = MotionArrays(root_pos=rp, joint_rot=jr)
+        b = copy.deepcopy(a)
+        assert b == a
+        assert not np.shares_memory(b.root_pos, rp)
+        assert not np.shares_memory(b.joint_rot, jr)
+
+    def test_pickles_through_the_constructor(self):
+        """A DataLoader boundary pickles whatever crosses it; the frozen
+        `__setattr__` would otherwise fire on unpickling."""
+        import pickle
+        rp, jr = self._arrays()
+        a = MotionArrays(root_pos=rp.astype(np.float32), joint_rot=jr)
+        b = pickle.loads(pickle.dumps(a))
+        assert b == a
+        assert b.root_pos.dtype == np.float32          # dtype survives
+        assert not b.root_pos.flags.writeable          # so does read-only
+        assert pickle.loads(pickle.dumps(
+            MotionArrays(root_pos=rp))).joint_rot is None
+
+    def test_unpacking_names_the_migration(self):
+        """`rp, jd = pipeline(...)` was every downstream's shape; a stock
+        'cannot unpack non-iterable' would not say what to read instead."""
+        rp, jr = self._arrays()
+        with pytest.raises(TypeError, match="not iterable"):
+            _rp, _jr = MotionArrays(root_pos=rp, joint_rot=jr)
+        with pytest.raises(TypeError, match=r"out\.root_pos"):
+            list(MotionArrays(root_pos=rp, joint_rot=jr))
 
 
 class TestNoiseSplit:
@@ -4272,6 +4403,18 @@ class TestLegacyStepContract:
         with pytest.raises(TypeError, match="expected MotionArrays"):
             pipe(MotionArrays(root_pos=pos, joint_rot=quats),
                  rng=np.random.default_rng(0))
+
+    def test_unpacking_the_pipeline_result_names_the_migration(self, bvh_example):
+        """`rp, jd = pipeline(...)` is the most common downstream shape, so it
+        earns the same migration message as the other two halves — not a bare
+        'cannot unpack non-iterable MotionArrays object'."""
+        pos, quats = _get_quat_data(bvh_example)
+        pipe = AugmentationPipeline(
+            [(add_joint_rotation_noise, 1.0, {"sigma": 0.1})],
+            representation="quat")
+        with pytest.raises(TypeError, match="not iterable"):
+            _rp, _jd = pipe(MotionArrays(root_pos=pos, joint_rot=quats),
+                            rng=np.random.default_rng(0))
 
     def test_uninspectable_step_does_not_break_kwarg_filling(self, bvh_example):
         """`inspect.signature` raises on some callables; the pipeline must

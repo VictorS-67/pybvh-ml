@@ -104,7 +104,9 @@ pybvh-ml/
 - `MotionArrays(root_pos=(F,3), joint_rot=(F,J,C) | None)` — keyword-only, frozen, validates shapes and the shared frame count once at construction
 - `MotionArrays.from_bvh(bvh, representation, center_root=False)` — the producer edge, so extract → augment → pack never hand-assembles the container
 - `.replace(**fields)` — the only mutation path, revalidating
-- Deliberately **not** a tuple and not unpackable: the 0.6.0 position streams must be additive, and a 2-field tuple could not grow
+- Deliberately **not** a tuple and not unpackable: the 0.6.0 position streams must be additive, and a 2-field tuple could not grow. `__iter__` exists only to raise the migration message for `rp, jd = ...`
+- Fields are **read-only views**, not copies: writes through a field raise (so a container over a Dataset cache cannot rewrite the cache), while construction and `replace` stay allocation-free — the alternative, copying in the constructor, would copy every clip on every pipeline step
+- **dtype preserved, not promoted**: floating input keeps its dtype (`float32` stays `float32` — the container is what a per-sample Dataset holds), non-floating is promoted to `float64`. Not a `float32` pipeline: pybvh's rotation math and the packers compute in `float64`
 
 **`packing.py`** — Tensor layout conversion
 - `pack_to_ctv(arrays, center_root=True)` → `(C, T, V)` ndarray
@@ -120,8 +122,9 @@ pybvh-ml/
 - Fast paths: `rotate_vertical` and `mirror` skip the quaternion round-trip when `representation="6d"` (direct rotation of the two column vectors / analytic sign mask)
 - Quat-internal ops (`add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert to/from quaternion space once; `AugmentationPipeline(cache_quats=True)` amortizes the conversion across consecutive steps
 
-**`convert.py`** — Representation conversion
-- `convert_arrays(joint_data, from_repr, to_repr, euler_orders)` — unified representation conversion dispatch for `(F, J, C)` arrays, wrapping pybvh's rotation functions
+**`convert.py`** — Representation conversion, at both levels
+- `convert_arrays(arrays, from_repr, to_repr, euler_orders)` → `MotionArrays` — the container-level form, so conversion composes with augmentation and packing instead of making callers take the container apart. `root_pos` is carried through unchanged
+- `convert_rotations(joint_rot, from_repr, to_repr, euler_orders)` → ndarray — the rotation-level primitive for data with no root stream (a model's rotation output, a cached quat array); wraps pybvh's rotation functions and owns the flat-`(F,J,9)`-rotmat adaptation
 
 **`pipeline.py`** — Composable augmentation pipeline
 - `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection). `__call__` takes a `MotionArrays` positionally; `rng=` / `return_params=` stay keyword-only.
@@ -217,8 +220,8 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 - **Uniform** (`num_frames >= 2*clip_length`): integer segment boundaries (`i * num_frames // clip_length`), discrete random offset per segment.
 
 ### 5.8 Implementation-level conventions
-1. **All augmentation functions take and return a `MotionArrays`** — one clip's `root_pos` plus `joint_rot`, passed positionally (it is a distinct type, so a swap is not expressible) with every other parameter keyword-only. The container is frozen and validates frame counts once at construction, which is why no function re-checks them. It exists so a later stream — per-joint positions in 0.6.0 — is additive rather than an arity break at every call site. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
-2. **`convert_arrays` routes through rotation matrices** as intermediate. Per-joint Euler orders are handled by grouping joints by unique order and batch-converting each group.
+1. **Every array-level function takes and returns a `MotionArrays`** — augmentation, the pipeline, the packers, and `convert_arrays` — one clip's `root_pos` plus `joint_rot`, passed positionally (it is a distinct type, so a swap is not expressible) with every other parameter keyword-only. The container is frozen and validates frame counts once at construction, which is why no function re-checks them. It exists so a later stream — per-joint positions in 0.6.0 — is additive rather than an arity break at every call site. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
+2. **`convert_rotations` routes through rotation matrices** as intermediate (and `convert_arrays` is a thin container-level wrapper over it). Per-joint Euler orders are handled by grouping joints by unique order and batch-converting each group.
 3. **Packing zero-pads root only** — root has 3 channels (position), joints have C_joint channels. In CTV/TVC layouts, `C = max(3, C_joint)`. Since C_joint >= 3 for all real representations, joint data is never padded.
 4. **Mirror math**: quaternion mirror negates the two imaginary components NOT at the lateral axis. 6D mirror uses `R'[i,j] = s_i * s_j * R[i,j]` where `s[lateral] = -1`. Both derived from `R' = S @ R @ S`.
 5. **Quaternion multiplication comes from pybvh** — `pybvh.rotations.quat_multiply` (public since pybvh 0.8.0; Hamilton convention, wxyz scalar-first order). pybvh-ml carried a private bit-identical copy in `augmentation.py` until 0.5.0.

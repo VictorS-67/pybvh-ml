@@ -51,7 +51,7 @@ def extract_repr(
     bvh: Bvh,
     representation: str,
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-    """Extract ``(root_pos, joint_data)`` for the given representation.
+    """Extract ``(root_pos, joint_rot)`` for the given representation.
 
     Thin dispatcher over pybvh's ``to_*`` methods; exposed publicly so
     the PyTorch datasets can reuse the same mapping without reaching
@@ -63,13 +63,13 @@ def extract_repr(
     representation : {"euler", "quat", "6d", "axisangle"}
         ``"euler"`` returns ``bvh.joint_angles`` — radians, matching
         pybvh.  ``"rotmat"`` is not part of the extraction surface
-        (use :func:`~pybvh_ml.convert.convert_arrays` to derive it
+        (use :func:`~pybvh_ml.convert_rotations` to derive it
         from any extracted representation).
 
     Returns
     -------
     root_pos : ndarray, shape (F, 3)
-    joint_data : ndarray, shape (F, J, C_repr)
+    joint_rot : ndarray, shape (F, J, C_repr)
     """
     _validate_representation(representation)
     if representation == "euler":

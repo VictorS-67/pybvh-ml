@@ -16,7 +16,7 @@ from pybvh_ml.torch import (
     EpochState, MotionDataset, OnTheFlyDataset, collate_motion_batch, rng_for,
 )
 from pybvh_ml.augmentation import rotate_vertical, add_joint_rotation_noise
-from pybvh_ml.convert import convert_arrays
+from pybvh_ml.convert import convert_rotations
 from pybvh_ml.pipeline import AugmentationPipeline
 from pybvh_ml import MotionArrays
 from helpers import as_pair, as_triple
@@ -164,11 +164,11 @@ class TestTorchDatasets:
         from pybvh_ml.augmentation import add_joint_rotation_noise
         from pybvh_ml.pipeline import AugmentationPipeline
         # Build a fresh quat-primary dataset so noise aug can run in place.
-        from pybvh_ml.convert import convert_arrays
+        from pybvh_ml.convert import convert_rotations
         quat_clips = []
         for c in sample_clips:
             rot6d = c["joint_rot"]
-            quats = convert_arrays(rot6d, from_repr="6d", to_repr="quat")
+            quats = convert_rotations(rot6d, from_repr="6d", to_repr="quat")
             quat_clips.append({"root_pos": c["root_pos"].copy(),
                                "joint_rot": quats})
         pipeline = AugmentationPipeline([
@@ -198,10 +198,10 @@ class TestTorchDatasets:
         """With seed=None, repeated __getitem__ uses fresh entropy."""
         from pybvh_ml.augmentation import add_joint_rotation_noise
         from pybvh_ml.pipeline import AugmentationPipeline
-        from pybvh_ml.convert import convert_arrays
+        from pybvh_ml.convert import convert_rotations
         quat_clips = [
             {"root_pos": c["root_pos"].copy(),
-             "joint_rot": convert_arrays(
+             "joint_rot": convert_rotations(
                  c["joint_rot"], from_repr="6d", to_repr="quat")}
             for c in sample_clips
         ]
@@ -238,10 +238,10 @@ class TestTorchDatasets:
         """seed=None means fresh entropy per call — no epoch contract needed."""
         from pybvh_ml.augmentation import add_joint_rotation_noise
         from pybvh_ml.pipeline import AugmentationPipeline
-        from pybvh_ml.convert import convert_arrays
+        from pybvh_ml.convert import convert_rotations
         quat_clips = [
             {"root_pos": c["root_pos"].copy(),
-             "joint_rot": convert_arrays(
+             "joint_rot": convert_rotations(
                  c["joint_rot"], from_repr="6d", to_repr="quat")}
             for c in sample_clips
         ]
@@ -808,7 +808,7 @@ class TestDatasetRepresentationConversion:
         orders = list(bvh_example.euler_orders)
         ds = MotionDataset(euler_clips, source_repr="euler",
                            target_repr="6d", euler_orders=orders)
-        expected = convert_arrays(euler_clips[0]["joint_rot"], "euler", "6d",
+        expected = convert_rotations(euler_clips[0]["joint_rot"], "euler", "6d",
                                   euler_orders=orders)
         J = bvh_example.joint_count
         assert ds[0]["data"].shape == (20, 3 + J * 6)

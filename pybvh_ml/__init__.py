@@ -36,7 +36,7 @@ from .augmentation import (
     speed_perturbation_arrays,
     dropout_arrays,
 )
-from .convert import convert_arrays
+from .convert import convert_arrays, convert_rotations
 from .pipeline import AugmentationPipeline, AugmentationStep
 from .preprocessing import (
     preprocess_directory,
@@ -81,6 +81,7 @@ __all__ = [
     "speed_perturbation_arrays",
     "dropout_arrays",
     "convert_arrays",
+    "convert_rotations",
     "AugmentationPipeline",
     "AugmentationStep",
     # preprocessing

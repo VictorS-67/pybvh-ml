@@ -431,7 +431,7 @@ class AugmentationPipeline:
         Returns
         -------
         MotionArrays
-            Always freshly allocated — the outputs never alias the input arrays, even when no augmentation fires.
+            Always freshly allocated — the outputs never share storage with the input arrays, even when no augmentation fires. (The container's fields are read-only either way; take ``np.array(out.joint_rot)`` for a writable working array.)
         params : list of dict
             Only when ``return_params=True``.  One record per configured
             step, in pipeline order (index-aligned with the
@@ -472,7 +472,8 @@ class AugmentationPipeline:
 
         # When no step fires (and, staged, no representation change runs)
         # both paths would hand the inputs straight through; copy on that
-        # fall-through so callers can always mutate the outputs safely.
+        # fall-through so the result never shares storage with the input,
+        # whatever the probability draws did.
         if new_root_pos is root_pos:
             new_root_pos = root_pos.copy()
         if new_joint_data is joint_data:

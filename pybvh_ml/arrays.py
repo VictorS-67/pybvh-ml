@@ -41,6 +41,10 @@ class MotionArrays:
     mismatch with nothing left to catch it.  Use :meth:`replace`, which
     revalidates.
 
+    Frozen covers the arrays too, but only in one direction, and the distinction matters when the source is a cache. The fields are **read-only views**: writing through them (``arrays.root_pos[0] = ...``) raises, so nothing — this package included — can modify a clip through the container. They are views, not copies: the constructor does not duplicate the caller's arrays, so the storage is shared, and mutating the *original* array still changes what the container reads. A container built over a Dataset's cached arrays therefore needs no defensive copy to protect the cache from the pipeline (pipeline outputs never alias their inputs), but it is not insulated from code that writes to that cache directly — pass ``np.array(...)`` copies in if anything does. The alternative, copying in the constructor, was rejected because :meth:`replace` runs once per augmentation step and would copy every clip on every step.
+
+    Consequently a field is not a writable working array: take ``np.array(arrays.joint_rot)`` (or ``.copy()``) when you need one, and prefer ``torch.tensor(...)`` over ``torch.from_numpy(...)``, which warns on read-only input. For a whole container detached from the caller's storage, :func:`copy.deepcopy` is the one operation the read-only views cannot express, and it works — instances rebuild through the constructor, so they are also picklable.
+
     Parameters
     ----------
     root_pos : ndarray, shape (F, 3)
@@ -57,6 +61,12 @@ class MotionArrays:
     ----------
     root_pos, joint_rot
         As above.
+
+    Notes
+    -----
+    **dtype is preserved, not promoted.** A floating-point input keeps its dtype — ``float32`` in, ``float32`` out — because the container is what a per-sample Dataset holds, and silently doubling a cached clip's memory and bandwidth is not a decision to make on the caller's behalf. Non-floating input (an integer array, a nested list of ints) is promoted to ``float64``, the package's compute dtype, since rotation math on integers is never what was meant. ``root_pos`` and ``joint_rot`` are converted independently and may differ.
+
+    What this does *not* promise is a ``float32`` pipeline: pybvh's rotation math computes in ``float64``, and the packers cast to it explicitly, so a ``float32`` container survives storage and :meth:`replace` but comes back out of augmentation as ``float64``. Cast at the boundary that cares — the PyTorch datasets already emit ``torch.float32`` tensors.
 
     Raises
     ------
@@ -88,9 +98,8 @@ class MotionArrays:
         root_pos: npt.ArrayLike,
         joint_rot: npt.ArrayLike | None = None,
     ) -> None:
-        root_arr = np.asarray(root_pos, dtype=np.float64)
-        rot_arr = (None if joint_rot is None
-                   else np.asarray(joint_rot, dtype=np.float64))
+        root_arr = _as_readonly_float(root_pos)
+        rot_arr = None if joint_rot is None else _as_readonly_float(joint_rot)
         _validate(root_arr, rot_arr)
         # Bypass the frozen __setattr__ during construction only.
         object.__setattr__(self, "root_pos", root_arr)
@@ -107,6 +116,21 @@ class MotionArrays:
 
     def __delattr__(self, name: str) -> None:
         raise AttributeError("MotionArrays is frozen; cannot delete fields")
+
+    # -- not a tuple -----------------------------------------------------
+
+    def __iter__(self):
+        """Refuse iteration, naming the pre-0.5.0 unpack it comes from.
+
+        Defined only to raise: ``root_pos, joint_data = pipeline(...)`` was the shape every downstream had, and without this it fails as a bare "cannot unpack non-iterable" with nothing pointing at the container's two fields.
+        """
+        raise TypeError(
+            "MotionArrays is not iterable, so 'root_pos, joint_rot = ...' "
+            "does not unpack it — that was the pre-0.5.0 return shape. Read "
+            "the fields instead: out.root_pos / out.joint_rot. The container "
+            "is deliberately not a tuple because it is expected to grow (a "
+            "joint_pos stream in 0.6.0), and a fixed-arity unpack would "
+            "either break or silently drop a stream.")
 
     # -- construction / derivation ---------------------------------------
 
@@ -178,6 +202,13 @@ class MotionArrays:
         return (f"MotionArrays(root_pos={self.root_pos.shape}, "
                 f"joint_rot={rot})")
 
+    def __reduce__(self):
+        """Rebuild through the constructor, for ``pickle`` and ``copy``.
+
+        Both would otherwise go through ``setattr`` on a blank instance and hit the frozen guard. Rebuilding also means :func:`copy.deepcopy` returns a container whose storage is detached from this one's — the one operation the read-only fields cannot express.
+        """
+        return (_rebuild, (self.root_pos, self.joint_rot))
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MotionArrays):
             return NotImplemented
@@ -191,9 +222,33 @@ class MotionArrays:
     __hash__ = None  # type: ignore[assignment]
 
 
+def _rebuild(
+    root_pos: npt.ArrayLike,
+    joint_rot: npt.ArrayLike | None,
+) -> MotionArrays:
+    """Module-level constructor call, for :meth:`MotionArrays.__reduce__`.
+
+    Needed because construction is keyword-only and ``__reduce__`` passes its arguments positionally.
+    """
+    return MotionArrays(root_pos=root_pos, joint_rot=joint_rot)
+
+
+def _as_readonly_float(value: npt.ArrayLike) -> npt.NDArray[np.floating]:
+    """Coerce to a floating array and return a read-only view of it.
+
+    The view is what makes the container's fields unwritable without copying: ``setflags`` on a fresh view leaves the caller's own array object writable, while a write through the field raises.
+    """
+    arr = np.asarray(value)
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr = arr.astype(np.float64)
+    readonly = arr.view()
+    readonly.setflags(write=False)
+    return readonly
+
+
 def _validate(
-    root_pos: npt.NDArray[np.float64],
-    joint_rot: npt.NDArray[np.float64] | None,
+    root_pos: npt.NDArray[np.floating],
+    joint_rot: npt.NDArray[np.floating] | None,
 ) -> None:
     """Shape and frame-count checks, run once per instance."""
     if root_pos.ndim != 2 or root_pos.shape[1] != 3:
@@ -216,7 +271,7 @@ def _validate(
 def require_joint_rot(
     arrays: MotionArrays,
     caller: str,
-) -> npt.NDArray[np.float64]:
+) -> npt.NDArray[np.floating]:
     """Return ``arrays.joint_rot``, raising a named error when absent.
 
     Shared by every step that cannot do its job without rotations, so the
