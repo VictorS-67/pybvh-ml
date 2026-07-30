@@ -4,7 +4,7 @@ from __future__ import annotations
 import multiprocessing
 import warnings
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 import torch
@@ -251,6 +251,26 @@ _LAYOUT_PACKERS = {
 _TEMPORAL_MODES = ("pad", "crop", "resample", "resample_deterministic")
 
 
+def _validate_per_clip(
+    values: Sequence | np.ndarray | None,
+    num_clips: int,
+    name: str,
+) -> None:
+    """Reject a per-clip sequence that doesn't cover every clip.
+
+    A short one raises ``IndexError`` from inside ``__getitem__`` on some
+    later sample; a long one is worse — every clip silently gets the
+    wrong entry, which for ``names`` means correctly shaped output rows
+    attributed to the wrong file.
+    """
+    if values is None:
+        return
+    if len(values) != num_clips:
+        raise ValueError(
+            f"{name} has {len(values)} entries but the dataset has "
+            f"{num_clips} clips; every clip needs exactly one")
+
+
 def _validate_layout_and_temporal(
     layout: str, temporal: str, target_length: int | None, cls_name: str,
 ) -> None:
@@ -358,10 +378,30 @@ class MotionDataset(Dataset):
     Parameters
     ----------
     clips : list of dict
-        Each dict must have ``root_pos`` (F, 3) and ``joint_data``
-        (F, J, C).
+        Each dict must have ``root_pos`` (F, 3) and ``joint_rot``
+        (F, J, C).  The pre-0.5.0 key ``joint_data`` is still read, so
+        clip dicts carried over from that era work unchanged.
     labels : array-like or None
-        Per-clip integer labels.
+        Per-clip integer labels.  Must cover every clip when given.
+    names : sequence of str or None
+        Per-clip identity, surfaced as ``item["name"]`` and collated
+        into ``batch["names"]``.  Anything doing per-clip work rather
+        than reporting a dataset-level mean needs it: writing
+        per-prediction rows, routing a clip to the fold whose model
+        never saw its performer, keying saved activations.
+        :meth:`from_preprocessed` fills it from the stored
+        ``filenames``, which is where it should come from.
+
+        The convention is the **filename stem** — what
+        :func:`~pybvh_ml.preprocessing.preprocess_directory` records and
+        what :class:`OnTheFlyDataset` reports — not the full path, so
+        the same clip carries the same name whether it is read from a
+        preprocessed file or straight from BVH.  The cost is that two
+        identically named files from different directories collide;
+        pass your own disambiguated strings if a corpus does that.
+        ``None`` (default) omits the key entirely rather than
+        substituting indices, so a downstream can tell "no identity was
+        provided" from a real name.
     target_length : int or None
         If given, standardize all clips to this length using
         ``temporal``.  The ``length`` reported by ``__getitem__`` is the
@@ -458,9 +498,12 @@ class MotionDataset(Dataset):
         source_repr: str | None = None,
         target_repr: str | None = None,
         euler_orders: list[str] | None = None,
+        names: Sequence[str] | None = None,
     ) -> None:
         _validate_layout_and_temporal(
             layout, temporal, target_length, "MotionDataset")
+        _validate_per_clip(labels, len(clips), "labels")
+        _validate_per_clip(names, len(clips), "names")
         if target_repr is not None and source_repr is None:
             raise ValueError(
                 "target_repr requires source_repr — conversion needs to "
@@ -470,6 +513,7 @@ class MotionDataset(Dataset):
                 "which reads it from the dataset metadata.")
         self.clips = clips
         self.labels = labels
+        self.names = names
         self.target_length = target_length
         self.temporal = temporal
         self.layout = layout
@@ -486,9 +530,10 @@ class MotionDataset(Dataset):
         """Build a dataset from a :func:`~pybvh_ml.preprocessing.load_preprocessed` result.
 
         Wires the metadata that would otherwise be restated by hand at
-        the call site: the clips and labels, the stored
-        ``representation`` (as ``source_repr``, which ``target_repr``
-        conversion needs), and ``skeleton_info["euler_orders"]``.
+        the call site: the clips, labels and ``filenames`` (as
+        ``names``), the stored ``representation`` (as ``source_repr``,
+        which ``target_repr`` conversion needs), and
+        ``skeleton_info["euler_orders"]``.
         ``center_root`` defaults to ``False`` because the stored arrays
         already reflect the choice made at preprocessing time — centering
         again here would be a second, unrecorded transform.
@@ -512,6 +557,7 @@ class MotionDataset(Dataset):
         skeleton_info = loaded.get("skeleton_info") or {}
         defaults = {
             "labels": loaded.get("labels"),
+            "names": loaded.get("filenames"),
             "source_repr": loaded.get("representation"),
             "euler_orders": skeleton_info.get("euler_orders"),
             "center_root": False,
@@ -625,6 +671,8 @@ class MotionDataset(Dataset):
         result: dict = {"data": tensor, "length": length}
         if self.labels is not None:
             result["label"] = int(self.labels[idx])
+        if self.names is not None:
+            result["name"] = str(self.names[idx])
         return result
 
 
@@ -658,6 +706,15 @@ class OnTheFlyDataset(Dataset):
         position after extraction.
     label_fn : callable or None
         ``label_fn(filename_stem) -> int``.
+
+    Notes
+    -----
+    Every item carries ``name`` — the source file's stem — with no
+    parameter to enable it, because unlike :class:`MotionDataset` this
+    class *has* the paths and identity is never a guess.  The stem
+    rather than the full path is what makes it the same identity a
+    preprocessed dataset reports (``filenames``), so a clip keeps its
+    name across both paths; it is also what ``label_fn`` receives.
     world_up : str
         Forwarded to :func:`pybvh.read_bvh_file` per clip.  ``"auto"``
         (default) auto-detects; pass ``"+y"`` etc. to override — same
@@ -789,7 +846,8 @@ class OnTheFlyDataset(Dataset):
             temporal=self.temporal, target_length=self.target_length,
             rng=rng)
 
-        result: dict = {"data": tensor, "length": length}
+        result: dict = {"data": tensor, "length": length,
+                        "name": self.bvh_paths[idx].stem}
         if self.label_fn is not None:
-            result["label"] = self.label_fn(self.bvh_paths[idx].stem)
+            result["label"] = self.label_fn(result["name"])
         return result

@@ -87,6 +87,7 @@ pybvh-ml/
 │   ├── test_pybvh_ml.py         # numpy-core unit tests (38 test classes)
 │   ├── test_torch_datasets.py   # torch Dataset/collate tests (skips without torch)
 │   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
+│   ├── test_no_global_state_mutation.py  # guards principle 6: no process-wide mutation
 │   ├── test_docs_api_coverage.py     # docs/api pages ↔ modules two-way sync; __all__ resolution
 │   └── integration/             # real-data sweeps, seeding determinism, staging parity
 ├── tutorials/                   # 3 runnable notebooks (executed in CI via pytest --nbmake)
@@ -106,7 +107,8 @@ pybvh-ml/
 - `.replace(**fields)` — the only mutation path, revalidating
 - Deliberately **not** a tuple and not unpackable: the 0.6.0 position streams must be additive, and a 2-field tuple could not grow. `__iter__` exists only to raise the migration message for `rp, jd = ...`
 - Fields are **read-only views**, not copies: writes through a field raise (so a container over a Dataset cache cannot rewrite the cache), while construction and `replace` stay allocation-free — the alternative, copying in the constructor, would copy every clip on every pipeline step
-- **dtype preserved, not promoted**: floating input keeps its dtype (`float32` stays `float32` — the container is what a per-sample Dataset holds), non-floating is promoted to `float64`. Not a `float32` pipeline: pybvh's rotation math and the packers compute in `float64`
+- **dtype preserved, not promoted**: floating input keeps its dtype (`float32` stays `float32` — the container is what a per-sample Dataset holds), non-floating is promoted to `float64`, and each stream follows its own input
+- **Augmentation computes in `float64` and returns the caller's dtype** (`_result` in `augmentation.py`, `_finish` in `pipeline.py`). Not letting the input dtype flow through the math is load-bearing twice over: otherwise a probabilistic pipeline's output dtype depends on which steps fired for that sample, and `cache_quats=True`/`False` stop being bit-identical for `float32` input (the staged 6d fast path writes into a copy of its input, so that step would run in single precision). Preservation stops at the packers and `standardize_length(resample_linear)`, which are `float64` by contract
 
 **`packing.py`** — Tensor layout conversion
 - `pack_to_ctv(arrays, center_root=True)` → `(C, T, V)` ndarray
@@ -161,10 +163,11 @@ pybvh-ml/
 - `MotionDataset(Dataset)` — loads preprocessed data from disk, returns tensors
 - `OnTheFlyDataset(Dataset)` — loads raw arrays, applies augmentation each epoch
 - Both support variable-length sequences with configurable padding/cropping
+- **Per-clip identity**: items carry `name` (the filename stem) — `MotionDataset` when built with `names=` (which `from_preprocessed` fills from the stored `filenames`), `OnTheFlyDataset` always, since it holds the paths. Omitted rather than index-substituted when unavailable, so "no identity provided" is distinguishable from a real name. `labels` / `names` are length-validated against the clip count: a long sequence would otherwise attribute every clip to the wrong entry
 
 **`torch/collate.py`** — Collate functions
 - `collate_motion_batch(batch)` — handles variable-length sequences with padding and mask generation
-- Returns a dict: `data` `(B, T_max, D)` zero-padded, `lengths` `(B,)` valid-frame counts, `mask` `(B, T_max)` bool (True = valid frame), plus `labels` `(B,)` when labels are present. Since 0.5.0 each item's `length` means valid frames in the returned tensor — cropped clips report `target_length`, not the original clip length.
+- Returns a dict: `data` `(B, T_max, D)` zero-padded, `lengths` `(B,)` valid-frame counts, `mask` `(B, T_max)` bool (True = valid frame), plus `labels` `(B,)` and `names` (a plain list of `B` strings, matching what `default_collate` does with strings) when those are present; both are all-or-none across the batch. Since 0.5.0 each item's `length` means valid frames in the returned tensor — cropped clips report `target_length`, not the original clip length.
 
 ---
 
@@ -227,7 +230,8 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 5. **Quaternion multiplication comes from pybvh** — `pybvh.rotations.quat_multiply` (public since pybvh 0.8.0; Hamilton convention, wxyz scalar-first order). pybvh-ml carried a private bit-identical copy in `augmentation.py` until 0.5.0.
 6. **`torch/` subpackage fails hard on import if torch is missing** — `pybvh_ml.torch` raises ImportError (via `importlib.util.find_spec`, so a *broken* torch installation surfaces its real traceback instead of a misleading "install torch"). But `import pybvh_ml` (the top-level) works fine without torch.
 7. **The Dataset epoch lives in shared memory** — `EpochState` wraps a `multiprocessing.Value("i", -1)` (−1 = never-set sentinel) so `set_epoch()` in the main process reaches DataLoader workers, including `persistent_workers=True` (workers are created once and never re-receive the dataset — a plain attribute is structurally frozen there). The Value comes from an explicit **spawn** context, not the process default: a fork-context lock is an anonymous unlinked semaphore whose handle unpickles into a spawn-started worker and then segfaults it, and Linux defaults to fork — so `multiprocessing_context="spawn"` was broken until 0.5.0. A spawn-context lock is named and survives both start methods. Deliberately no `__getstate__`/`__setstate__`: swapping the Value during pickling would silently break sharing under spawn. Consequences: dataset instances aren't `deepcopy`/`torch.save`-able (sharing only travels via process inheritance, which is exactly how the DataLoader passes the dataset to workers), and under a spawn loader the whole dataset must be picklable — so pipeline kwargs need module-level callables rather than lambdas. Public alongside `rng_for(seed, epoch, idx)` since 0.5.0: a Dataset that isn't a `MotionDataset` subclass needs both to honor the same contract.
-8. **The two stochastic `__getitem__` stages share one per-sample generator** — augmentation draws first, then `temporal="resample"` continues on the same stream. That order is what keeps `explain_augmentation` exact (it replays only the augmentation, from the head of an identical stream). `temporal="resample_deterministic"` deliberately gets `rng=None` instead: `uniform_temporal_sample` honors a supplied rng in test mode too, so passing the advanced stream would make "deterministic" drift with the epoch.
+8. **Freshly-allocated output is the pipeline's guarantee, not each function's** — `AugmentationPipeline.__call__` never returns arrays sharing storage with its input (it copies on the no-step-fired fall-through), while an individual augmentation may pass an untouched stream through by reference (`add_root_position_noise` returns the input's `joint_rot`; the only one today). Read-only `MotionArrays` fields are what makes the looser function-level contract safe, and copying every untouched stream would allocate a full clip per step for nothing.
+9. **The two stochastic `__getitem__` stages share one per-sample generator** — augmentation draws first, then `temporal="resample"` continues on the same stream. That order is what keeps `explain_augmentation` exact (it replays only the augmentation, from the head of an identical stream). `temporal="resample_deterministic"` deliberately gets `rng=None` instead: `uniform_temporal_sample` honors a supplied rng in test mode too, so passing the advanced stream would make "deterministic" drift with the epoch.
 
 ---
 
@@ -239,6 +243,7 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 4. **Docstrings**: Every public function documents input/output shapes explicitly (e.g., `(F, J, 4)`)
 5. **No pybvh internals**: Only use pybvh's public API. Never import private functions or access private attributes
 6. **Tests**: pytest, same conventions as pybvh. Test with and without optional dependencies installed
+7. **No global state, no import-time side effects**: never touch `torch`'s precision / determinism / threading / seeding knobs or anything under `torch.backends`, `np.seterr` / `np.random.seed` / print options, `os.environ`, `warnings.filters`, or logging config. Those are the *application's* policy, and a data library setting them makes `import pybvh_ml` change a model's numbers with nothing at any call site to show it. Randomness is always passed in (`rng=` / `seed=`), never installed. `tests/test_no_global_state_mutation.py` enforces it (AST scan + fresh-interpreter import diff), so the rule survives a well-meant "let's just enable TF32" patch
 
 ---
 

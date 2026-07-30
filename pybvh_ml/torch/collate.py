@@ -13,7 +13,7 @@ def collate_motion_batch(
     ----------
     batch : list of dict
         Each dict must have ``data`` — a 2-D ``(T, D)`` tensor, the flat layout — and ``length`` (int), the number of valid frames in ``data``, i.e. ``length <= data.shape[0]`` with any frames beyond it being padding (the contract :class:`~pybvh_ml.torch.MotionDataset` and :class:`~pybvh_ml.torch.OnTheFlyDataset` provide under their default ``layout="flat"``).
-        Optionally ``label`` (int).
+        Optionally ``label`` (int) and ``name`` (str).
 
     Returns
     -------
@@ -22,6 +22,7 @@ def collate_motion_batch(
         ``lengths`` : ``(B,)`` long tensor of valid frame counts.
         ``mask`` : ``(B, T_max)`` bool tensor (True = valid frame).
         ``labels`` : ``(B,)`` long tensor (if labels present).
+        ``names`` : ``list`` of ``B`` strings, in batch order (if names present).  A list rather than a tensor — strings have no tensor form — which is what :func:`torch.utils.data.default_collate` also does with them, so a batch means the same thing under either collate.
 
     Raises
     ------
@@ -43,14 +44,8 @@ def collate_motion_batch(
                 f"need no padding; collate them with "
                 f"torch.utils.data.default_collate.")
 
-    labeled = [i for i, item in enumerate(batch) if "label" in item]
-    if labeled and len(labeled) != len(batch):
-        missing = next(i for i in range(len(batch)) if i not in labeled)
-        raise ValueError(
-            f"'label' present in some batch items but not all (first "
-            f"missing at batch index {missing}) — check that labels / "
-            f"label_fn cover every clip in the dataset")
-    has_labels = bool(labeled)
+    has_labels = _all_or_none(batch, "label", "labels / label_fn")
+    has_names = _all_or_none(batch, "name", "names")
     D = batch[0]["data"].shape[-1]
     lengths = [item["length"] for item in batch]
     T_max = max(item["data"].shape[0] for item in batch)
@@ -72,5 +67,25 @@ def collate_motion_batch(
     if has_labels:
         result["labels"] = torch.tensor(
             [item["label"] for item in batch], dtype=torch.long)
+    if has_names:
+        result["names"] = [item["name"] for item in batch]
 
     return result
+
+
+def _all_or_none(batch: list[dict], key: str, source: str) -> bool:
+    """Whether *key* is present, rejecting a batch where only some have it.
+
+    A per-sample optional field that covers part of a dataset is always a
+    configuration error, and a silent one: the batch would simply lose
+    the field, so predictions come back unlabelled or unattributed
+    instead of failing.
+    """
+    present = [i for i, item in enumerate(batch) if key in item]
+    if present and len(present) != len(batch):
+        missing = next(i for i in range(len(batch)) if i not in present)
+        raise ValueError(
+            f"{key!r} present in some batch items but not all (first "
+            f"missing at batch index {missing}) — check that {source} "
+            f"cover every clip in the dataset")
+    return bool(present)

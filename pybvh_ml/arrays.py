@@ -66,7 +66,9 @@ class MotionArrays:
     -----
     **dtype is preserved, not promoted.** A floating-point input keeps its dtype — ``float32`` in, ``float32`` out — because the container is what a per-sample Dataset holds, and silently doubling a cached clip's memory and bandwidth is not a decision to make on the caller's behalf. Non-floating input (an integer array, a nested list of ints) is promoted to ``float64``, the package's compute dtype, since rotation math on integers is never what was meant. ``root_pos`` and ``joint_rot`` are converted independently and may differ.
 
-    What this does *not* promise is a ``float32`` pipeline: pybvh's rotation math computes in ``float64``, and the packers cast to it explicitly, so a ``float32`` container survives storage and :meth:`replace` but comes back out of augmentation as ``float64``. Cast at the boundary that cares — the PyTorch datasets already emit ``torch.float32`` tensors.
+    Augmentation preserves it too, without computing in it: every augmentation function and :class:`~pybvh_ml.AugmentationPipeline` runs the math in ``float64`` — pybvh's dtype, and the only one its conversions are exact in — then returns each stream in the dtype it arrived as. So a ``float32`` clip stays ``float32`` end to end through augmentation while the arithmetic is still done in double, and the result never depends on which probabilistic steps happened to fire.
+
+    Where it stops: the packers (:func:`~pybvh_ml.pack_to_ctv` and friends) and ``standardize_length(method="resample_linear")`` produce ``float64`` regardless, so the array handed to a model is ``float64`` either way — the PyTorch datasets then emit ``torch.float32`` tensors. The preservation is about what the container costs to hold and pass around, not a single-precision compute path.
 
     Raises
     ------

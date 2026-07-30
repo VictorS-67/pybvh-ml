@@ -68,6 +68,23 @@ def _coerce_step(step: object, index: int) -> AugmentationStep:
     return AugmentationStep(fn, prob, kwargs)
 
 
+def _finish(
+    result: npt.NDArray[np.float64],
+    entry: npt.NDArray[np.float64],
+    dtype: np.dtype,
+) -> npt.NDArray:
+    """Return *result* in *dtype*, never sharing storage with the input.
+
+    Both properties in one place because they interact: a cast allocates,
+    so it doubles as the defensive copy, and an explicit one is needed
+    only when there is nothing to cast *and* a call path handed its own
+    input straight back — which is what happens when no step fires.
+    """
+    if result.dtype != dtype:
+        return result.astype(dtype)
+    return result.copy() if result is entry else result
+
+
 def _step_name(fn: Callable) -> str:
     """Readable name for a step function, for records and ``repr``.
 
@@ -431,7 +448,7 @@ class AugmentationPipeline:
         Returns
         -------
         MotionArrays
-            Always freshly allocated — the outputs never share storage with the input arrays, even when no augmentation fires. (The container's fields are read-only either way; take ``np.array(out.joint_rot)`` for a writable working array.)
+            Always freshly allocated — the outputs never share storage with the input arrays, even when no augmentation fires. (The container's fields are read-only either way; take ``np.array(out.joint_rot)`` for a writable working array.) Each stream comes back in the dtype it went in as, with the math done in ``float64`` regardless: the dtype must not depend on which steps this sample's probability draws happened to fire, and both call paths have to agree bit for bit.
         params : list of dict
             Only when ``return_params=True``.  One record per configured
             step, in pipeline order (index-aligned with the
@@ -464,21 +481,26 @@ class AugmentationPipeline:
                 f"keyword form was replaced in 0.5.0: build the container "
                 f"once with MotionArrays(root_pos=..., joint_rot=...) and "
                 f"read out.root_pos / out.joint_rot from the result.")
-        root_pos = arrays.root_pos
-        joint_data = require_joint_rot(arrays, "AugmentationPipeline")
+        # Run the whole pipeline in float64 whatever came in, and restore
+        # the caller's dtypes once, at the end.  Two things depend on it:
+        # the result's dtype must not depend on which steps a probability
+        # draw happened to fire, and the two call paths must stay
+        # bit-identical — the staged 6d fast path writes rotated columns
+        # into a copy of its input, so a float32 clip would otherwise
+        # have that step computed in single precision there and in double
+        # on the direct path.
+        root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
+        joint_data = np.asarray(
+            require_joint_rot(arrays, "AugmentationPipeline"),
+            dtype=np.float64)
 
         call = self._call_staged if self.cache_quats else self._call_direct
         new_root_pos, new_joint_data, params = call(root_pos, joint_data, rng)
 
-        # When no step fires (and, staged, no representation change runs)
-        # both paths would hand the inputs straight through; copy on that
-        # fall-through so the result never shares storage with the input,
-        # whatever the probability draws did.
-        if new_root_pos is root_pos:
-            new_root_pos = root_pos.copy()
-        if new_joint_data is joint_data:
-            new_joint_data = joint_data.copy()
-        out = MotionArrays(root_pos=new_root_pos, joint_rot=new_joint_data)
+        out = MotionArrays(
+            root_pos=_finish(new_root_pos, root_pos, arrays.root_pos.dtype),
+            joint_rot=_finish(new_joint_data, joint_data,
+                              arrays.joint_rot.dtype))
         if return_params:
             return out, params
         return out

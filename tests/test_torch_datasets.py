@@ -55,6 +55,33 @@ class TestTorchDatasets:
         item = ds[0]
         assert item["data"].dtype == torch.float32
 
+    def test_motion_dataset_names(self, sample_clips):
+        ds = MotionDataset(sample_clips, names=["walk", "run", "jump"])
+        assert [ds[i]["name"] for i in range(3)] == ["walk", "run", "jump"]
+
+    def test_motion_dataset_omits_name_without_names(self, sample_clips):
+        """Absent rather than an index stand-in, so a downstream can tell
+        'no identity provided' from a real name."""
+        assert "name" not in MotionDataset(sample_clips)[0]
+
+    def test_names_must_cover_every_clip(self, sample_clips):
+        """A too-long list silently attributes every clip to the wrong file —
+        the failure mode that makes per-clip output worse than none."""
+        with pytest.raises(ValueError, match="names has 2 entries"):
+            MotionDataset(sample_clips, names=["a", "b"])
+        with pytest.raises(ValueError, match="names has 4 entries"):
+            MotionDataset(sample_clips, names=["a", "b", "c", "d"])
+
+    def test_labels_must_cover_every_clip(self, sample_clips):
+        with pytest.raises(ValueError, match="labels has 2 entries"):
+            MotionDataset(sample_clips, labels=np.array([0, 1]))
+
+    def test_onthefly_always_reports_the_file_stem(self, bvh_example):
+        bvh_dir = Path(__file__).parent.parent / "bvh_data"
+        paths = sorted(bvh_dir.glob("bvh_test1.bvh"))
+        ds = OnTheFlyDataset(paths, representation="6d")
+        assert ds[0]["name"] == "bvh_test1"
+
     def test_motion_dataset_with_labels(self, sample_clips):
         labels = np.array([0, 1, 2])
         ds = MotionDataset(sample_clips, labels=labels)
@@ -147,6 +174,33 @@ class TestTorchDatasets:
         collated = collate_motion_batch(batch)
         assert "labels" in collated
         assert collated["labels"].tolist() == [5, 3, 7]
+
+    def test_collate_names_stay_a_list_in_batch_order(self, sample_clips):
+        """Per-clip output rows are attributed by this list, so its order has
+        to track the batch's, and it stays strings rather than a tensor."""
+        ds = MotionDataset(sample_clips, names=["a", "b", "c"])
+        collated = collate_motion_batch([ds[2], ds[0]])
+        assert collated["names"] == ["c", "a"]
+
+    def test_collate_rejects_partial_names(self, sample_clips):
+        ds = MotionDataset(sample_clips, names=["a", "b", "c"])
+        batch = [ds[0], ds[1]]
+        del batch[1]["name"]
+        with pytest.raises(ValueError, match="'name' present in some"):
+            collate_motion_batch(batch)
+
+    def test_collate_omits_names_when_absent(self, sample_clips):
+        ds = MotionDataset(sample_clips)
+        assert "names" not in collate_motion_batch([ds[0], ds[1]])
+
+    def test_default_collate_agrees_on_names(self, sample_clips):
+        """The graph layouts pair with default_collate, so identity has to
+        survive that path too — it lists strings the same way."""
+        from torch.utils.data import default_collate
+        ds = MotionDataset(sample_clips, names=["a", "b", "c"],
+                           target_length=16, layout="ctv",
+                           temporal="resample_deterministic")
+        assert default_collate([ds[1], ds[2]])["name"] == ["b", "c"]
 
     def test_collate_with_dataloader(self, sample_clips):
         from torch.utils.data import DataLoader
@@ -881,6 +935,15 @@ class TestFromPreprocessed:
         loaded = load_preprocessed(dataset_file)
         ds = MotionDataset.from_preprocessed(loaded, labels=None)
         assert "label" not in ds[0]
+
+    def test_wires_filenames_as_names(self, dataset_file):
+        """`filenames` sits in the loaded dict; dropping it is what forces a
+        downstream to hand-roll a Dataset just to keep clip identity."""
+        from pybvh_ml import load_preprocessed
+        loaded = load_preprocessed(dataset_file)
+        ds = MotionDataset.from_preprocessed(loaded)
+        assert list(ds.names) == list(loaded["filenames"])
+        assert ds[0]["name"] == loaded["filenames"][0] == "bvh_test1"
 
 
 class TestTemporalAndAugmentationInteraction:

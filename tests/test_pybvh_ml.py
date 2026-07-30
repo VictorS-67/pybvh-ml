@@ -4017,6 +4017,131 @@ class TestStandardizeLengthDtype:
             assert standardize_length(data, 7, method=method).dtype == np.float64
 
 
+class TestAugmentationDtype:
+    """Compute in float64, return the caller's dtype — on every path.
+
+    The dtype must not depend on which steps a probability draw fired,
+    which is what a plain "preserve the input dtype" rule would produce
+    once any step is stochastic.
+    """
+
+    @staticmethod
+    def _arrays(bvh, dtype, rot_dtype=None):
+        rp, jd = bvh.to_6d()
+        return MotionArrays(root_pos=rp.astype(dtype),
+                            joint_rot=jd.astype(rot_dtype or dtype))
+
+    def _steps(self, bvh):
+        """Each step with the kwargs it actually accepts — only the three
+        stochastic ones take an ``rng``."""
+        pairs = get_lr_pairs(bvh)
+        rng = np.random.default_rng(0)
+        return {
+            "rotate_vertical": (rotate_vertical,
+                                {"angle": 0.3, "up_axis": "+y"}),
+            "mirror": (mirror, {"lr_joint_pairs": pairs,
+                                "lateral_axis": "+x"}),
+            "joint_noise": (add_joint_rotation_noise,
+                            {"sigma": 0.01, "rng": rng}),
+            "root_noise": (add_root_position_noise,
+                           {"sigma": 0.1, "rng": rng}),
+            "speed": (speed_perturbation_arrays, {"factor": 1.2}),
+            "dropout": (dropout_arrays, {"drop_rate": 0.1, "rng": rng}),
+        }
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float16])
+    @pytest.mark.parametrize("step", ["rotate_vertical", "mirror",
+                                      "joint_noise", "root_noise",
+                                      "speed", "dropout"])
+    def test_every_function_returns_the_input_dtype(self, bvh_example,
+                                                    step, dtype):
+        arrays = self._arrays(bvh_example, dtype)
+        fn, kwargs = self._steps(bvh_example)[step]
+        if fn is not add_root_position_noise:
+            kwargs = {**kwargs, "representation": "6d"}
+        out = fn(arrays, **kwargs)
+        assert out.root_pos.dtype == dtype
+        assert out.joint_rot.dtype == dtype
+
+    def test_streams_keep_their_own_dtypes(self, bvh_example):
+        arrays = self._arrays(bvh_example, np.float32, rot_dtype=np.float64)
+        out = rotate_vertical(arrays, angle=0.3, up_axis="+y",
+                              representation="6d")
+        assert out.root_pos.dtype == np.float32
+        assert out.joint_rot.dtype == np.float64
+
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_pipeline_dtype_does_not_depend_on_the_draw(self, bvh_example,
+                                                       cache_quats):
+        """The reported wart: with `p < 1`, dtype varied sample to sample."""
+        arrays = self._arrays(bvh_example, np.float32)
+        seen = set()
+        for prob in (0.0, 1.0):
+            pipe = AugmentationPipeline(
+                [(rotate_vertical, prob, {"angle": 0.3, "up_axis": "+y"})],
+                cache_quats=cache_quats, representation="6d")
+            out = pipe(arrays, rng=np.random.default_rng(0))
+            seen.add((out.root_pos.dtype, out.joint_rot.dtype))
+        assert seen == {(np.dtype(np.float32), np.dtype(np.float32))}
+
+    @pytest.mark.parametrize("cache_quats", [True, False])
+    def test_math_runs_in_float64_whatever_came_in(self, bvh_example,
+                                                   cache_quats):
+        """float32 → float64 is lossless, so a double-precision pipeline
+        gives *exactly* the float64 result cast down. Computing in single
+        would not."""
+        f32 = self._arrays(bvh_example, np.float32)
+        # The float64 reference must hold the *same values*: it is the
+        # float32 clip widened back, not the original doubles, since the
+        # narrowing itself loses bits.
+        f64 = MotionArrays(root_pos=f32.root_pos.astype(np.float64),
+                           joint_rot=f32.joint_rot.astype(np.float64))
+        pairs = get_lr_pairs(bvh_example)
+        def build():
+            return AugmentationPipeline(
+                [(rotate_vertical, 1.0, {"angle": 0.3, "up_axis": "+y"}),
+                 (mirror, 1.0, {"lr_joint_pairs": pairs,
+                                "lateral_axis": "+x"})],
+                cache_quats=cache_quats, representation="6d")
+        out64 = build()(f64, rng=np.random.default_rng(0))
+        out32 = build()(f32, rng=np.random.default_rng(0))
+        np.testing.assert_array_equal(
+            out32.joint_rot, out64.joint_rot.astype(np.float32))
+        np.testing.assert_array_equal(
+            out32.root_pos, out64.root_pos.astype(np.float32))
+
+    def test_both_paths_agree_on_a_float32_clip(self, bvh_example):
+        """The staged 6d fast path writes into a copy of its input, so a
+        float32 clip used to have that step computed in single precision
+        there and in double on the direct path."""
+        arrays = self._arrays(bvh_example, np.float32)
+        pairs = get_lr_pairs(bvh_example)
+        results = []
+        for cache_quats in (True, False):
+            pipe = AugmentationPipeline(
+                [(rotate_vertical, 1.0, {"angle": 0.3, "up_axis": "+y"}),
+                 (mirror, 1.0, {"lr_joint_pairs": pairs,
+                                "lateral_axis": "+x"})],
+                cache_quats=cache_quats, representation="6d")
+            results.append(pipe(arrays, rng=np.random.default_rng(0)))
+        np.testing.assert_array_equal(results[0].joint_rot,
+                                      results[1].joint_rot)
+        np.testing.assert_array_equal(results[0].root_pos,
+                                      results[1].root_pos)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    @pytest.mark.parametrize("prob", [0.0, 1.0])
+    def test_no_alias_survives_the_dtype_restore(self, bvh_example,
+                                                 dtype, prob):
+        arrays = self._arrays(bvh_example, dtype)
+        pipe = AugmentationPipeline(
+            [(rotate_vertical, prob, {"angle": 0.3, "up_axis": "+y"})],
+            representation="6d")
+        out = pipe(arrays, rng=np.random.default_rng(0))
+        assert not np.shares_memory(out.root_pos, arrays.root_pos)
+        assert not np.shares_memory(out.joint_rot, arrays.joint_rot)
+
+
 class TestRotmatLayoutGuard:
     """rotmat joint data is flat (F, J, 9); the 4-D form must fail loud."""
 
@@ -4241,6 +4366,23 @@ class TestNoiseSplit:
             MotionArrays(root_pos=pos, joint_rot=quats), sigma=0.5,
             rng=np.random.default_rng(0))
         np.testing.assert_array_equal(out.joint_rot, quats)
+
+    def test_untouched_stream_may_share_storage(self, bvh_example):
+        """Documented, and the reason it is safe: an untouched stream is
+        passed through by reference, and read-only fields mean nothing can
+        write through it. The freshly-allocated guarantee is the
+        pipeline's, not the individual functions'."""
+        pos, quats = _get_quat_data(bvh_example)
+        arrays = MotionArrays(root_pos=pos, joint_rot=quats)
+        out = add_root_position_noise(
+            arrays, sigma=0.5, rng=np.random.default_rng(0))
+        assert np.shares_memory(out.joint_rot, arrays.joint_rot)
+        assert not out.joint_rot.flags.writeable
+        pipe = AugmentationPipeline(
+            [(add_root_position_noise, 1.0, {"sigma": 0.5})],
+            representation="quat")
+        piped = pipe(arrays, rng=np.random.default_rng(0))
+        assert not np.shares_memory(piped.joint_rot, arrays.joint_rot)
 
     def test_position_noise_needs_no_representation(self, bvh_example):
         """Its sigma is a length, so it has no rotation-format opinion —

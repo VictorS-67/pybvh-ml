@@ -16,6 +16,10 @@ ndarrays a swapped call would have silently corrupted.  Call with
 Angles are in **radians** by default, matching pybvh's convention.  The
 functions that take one accept ``degrees=True`` to interpret it in
 degrees instead, mirroring pybvh's own opt-in flag.
+
+**Output dtype.** Every function here computes in ``float64`` — pybvh's dtype, and the only one its conversions are exact in — and returns each stream in the dtype it was given, per stream, so a ``float32`` clip comes back ``float32`` without the arithmetic having been done in single precision. :class:`~pybvh_ml.AugmentationPipeline` does the same across a whole run, which is what keeps a result's dtype independent of which probabilistic steps fired for that sample. Widening is lossless, so the ``float32`` result is exactly the ``float64`` result narrowed.
+
+**Output storage.** A function's result may share storage with its input for a stream it does not touch — :func:`add_root_position_noise` returns the input's ``joint_rot`` by reference, and it is the only one that does today. This is safe rather than sloppy: :class:`~pybvh_ml.MotionArrays` fields are read-only views, so no caller (this package included) can write through the shared buffer, and the alternative — copying every untouched stream — would allocate a full clip per step for nothing. The stronger guarantee, freshly allocated arrays regardless of what ran, belongs to :class:`~pybvh_ml.AugmentationPipeline`, which is the surface a data loader calls; reach for it (or ``np.array(...)``) if you need storage you own.
 """
 from __future__ import annotations
 
@@ -30,6 +34,35 @@ from .arrays import MotionArrays, require_joint_rot
 # =========================================================================
 # Private helpers
 # =========================================================================
+
+def _result(
+    source: MotionArrays,
+    root_pos: npt.ArrayLike,
+    joint_rot: npt.ArrayLike | None = None,
+) -> MotionArrays:
+    """Build a result carrying *source*'s per-stream dtypes.
+
+    Rotation math runs in ``float64`` — pybvh's dtype, and the only one
+    the conversions are exact in — so every function here computes in
+    double whatever it was given.  Casting back at the return keeps that
+    an implementation detail instead of a visible dtype change, and
+    keeps it out of the one place it would be worst: a probabilistic
+    pipeline, where the dtype would otherwise depend on which steps
+    happened to fire for that sample.
+
+    Each stream follows its own input, since a container may legitimately
+    carry ``float32`` positions next to ``float64`` rotations.
+    ``np.asarray`` is a no-op when the dtypes already match, so the
+    ``float64`` path costs nothing.
+    """
+    rot_dtype = (None if source.joint_rot is None
+                 else source.joint_rot.dtype)
+    return MotionArrays(
+        root_pos=np.asarray(root_pos, dtype=source.root_pos.dtype),
+        joint_rot=(None if joint_rot is None
+                   else np.asarray(joint_rot, dtype=rot_dtype)),
+    )
+
 
 def _validate_sigma(sigma: float, name: str = "sigma") -> None:
     """Reject a negative noise standard deviation."""
@@ -234,16 +267,16 @@ def rotate_vertical(
         col1 = joint_data[:, 0, 3:]
         new_data[:, 0, :3] = (R_vert @ col0.T).T
         new_data[:, 0, 3:] = (R_vert @ col1.T).T
-        return MotionArrays(root_pos=new_root_pos, joint_rot=new_data)
+        return _result(arrays, new_root_pos, new_data)
 
     # All other representations: work through quaternion space.
     quats = _to_quats(joint_data, representation, euler_orders)
     q_rot = _build_rotation_quat(signed_angle, up_idx)
     new_quats = quats.copy()
     new_quats[:, 0] = rotations.quat_multiply(q_rot, quats[:, 0])
-    return MotionArrays(
-        root_pos=new_root_pos,
-        joint_rot=_from_quats(new_quats, representation, euler_orders))
+    return _result(
+        arrays, new_root_pos,
+        _from_quats(new_quats, representation, euler_orders))
 
 
 def mirror(
@@ -329,12 +362,12 @@ def mirror(
     if representation == "6d":
         _swap_lr_pairs(new_data, lr_joint_pairs)
         new_data *= _mirror_sign_rot6d(lateral_idx)
-        return MotionArrays(root_pos=new_root_pos, joint_rot=new_data)
+        return _result(arrays, new_root_pos, new_data)
 
     if representation == "quat":
         _swap_lr_pairs(new_data, lr_joint_pairs)
         new_data *= _mirror_sign_quat(lateral_idx)
-        return MotionArrays(root_pos=new_root_pos, joint_rot=new_data)
+        return _result(arrays, new_root_pos, new_data)
 
     # All other representations: convert to quaternions first, swap in
     # quat space, mask, convert back.  Converting before the swap keeps
@@ -346,9 +379,9 @@ def mirror(
     quats = _to_quats(new_data, representation, euler_orders)
     _swap_lr_pairs(quats, lr_joint_pairs)
     quats *= _mirror_sign_quat(lateral_idx)
-    return MotionArrays(
-        root_pos=new_root_pos,
-        joint_rot=_from_quats(quats, representation, euler_orders))
+    return _result(
+        arrays, new_root_pos,
+        _from_quats(quats, representation, euler_orders))
 
 
 def add_joint_rotation_noise(
@@ -445,9 +478,9 @@ def add_joint_rotation_noise(
             "quaternion does not represent a rotation")
     noisy_quats /= norms
 
-    return MotionArrays(
-        root_pos=arrays.root_pos.copy(),
-        joint_rot=_from_quats(noisy_quats, representation, euler_orders))
+    return _result(
+        arrays, arrays.root_pos.copy(),
+        _from_quats(noisy_quats, representation, euler_orders))
 
 
 def add_root_position_noise(
@@ -498,7 +531,7 @@ def add_root_position_noise(
 
     root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
     noise = rng.normal(0, sigma, root_pos.shape) if sigma > 0 else 0.0
-    return arrays.replace(root_pos=root_pos + noise)
+    return _result(arrays, root_pos + noise, arrays.joint_rot)
 
 
 def speed_perturbation_arrays(
@@ -563,8 +596,7 @@ def speed_perturbation_arrays(
 
     F = root_pos.shape[0]
     if F < 2:
-        return MotionArrays(root_pos=root_pos.copy(),
-                            joint_rot=joint_data.copy())
+        return _result(arrays, root_pos.copy(), joint_data.copy())
 
     F_new = max(2, round(F / factor))
     t_orig = np.linspace(0.0, 1.0, F)
@@ -594,9 +626,9 @@ def speed_perturbation_arrays(
     alpha_jt = np.broadcast_to(alpha[:, np.newaxis], (F_new, J))
     new_quats = rotations.quat_slerp(q_left, q_right, alpha_jt)
 
-    return MotionArrays(
-        root_pos=new_root_pos,
-        joint_rot=_from_quats(new_quats, representation, euler_orders))
+    return _result(
+        arrays, new_root_pos,
+        _from_quats(new_quats, representation, euler_orders))
 
 
 def dropout_arrays(
@@ -655,8 +687,7 @@ def dropout_arrays(
     root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
 
     F = root_pos.shape[0]
-    unchanged = MotionArrays(root_pos=root_pos.copy(),
-                             joint_rot=joint_data.copy())
+    unchanged = _result(arrays, root_pos.copy(), joint_data.copy())
     if F < 2 or drop_rate == 0:
         return unchanged
 
@@ -694,6 +725,6 @@ def dropout_arrays(
     new_quats = quats.copy()
     new_quats[dropped] = rotations.quat_slerp(q_left, q_right, alpha_jt)
 
-    return MotionArrays(
-        root_pos=new_root_pos,
-        joint_rot=_from_quats(new_quats, representation, euler_orders))
+    return _result(
+        arrays, new_root_pos,
+        _from_quats(new_quats, representation, euler_orders))

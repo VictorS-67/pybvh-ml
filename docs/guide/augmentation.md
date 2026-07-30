@@ -25,7 +25,11 @@ arrays = MotionArrays(root_pos=root_pos, joint_rot=quats)
 
 It is frozen: derive a new one with `arrays.replace(joint_rot=...)` rather than assigning to a field. That is what lets every function in the package rely on the frame counts having been checked once. The fields are read-only *views* of the arrays you passed in — writing through them raises, so a container built over a Dataset's cached clips cannot rewrite the cache, but it does not copy either, so mutating your own array still changes what the container reads. Take `np.array(arrays.joint_rot)` when you need a writable working array.
 
-dtype is preserved rather than promoted: `float32` in, `float32` out, so holding a cached clip in a container doesn't double its memory. Non-floating input (an integer array) is promoted to `float64`. That is a storage guarantee, not a `float32` pipeline — pybvh's rotation math and the packers compute in `float64`, so augmentation returns `float64` regardless.
+dtype is preserved rather than promoted: `float32` in, `float32` out, so holding a cached clip in a container doesn't double its memory. Non-floating input (an integer array) is promoted to `float64`. Each stream follows its own input, so `float32` positions next to `float64` rotations is legal.
+
+**Augmentation preserves the dtype without computing in it.** Every function and the pipeline run the math in `float64` — pybvh's dtype, and the only one its conversions are exact in — then return each stream as it arrived. Widening is lossless, so the `float32` result is exactly the `float64` result narrowed. Two things depend on doing it this way rather than simply letting the input dtype flow through: a probabilistic pipeline's output dtype must not depend on which steps happened to fire for that sample, and `cache_quats=True` / `False` have to stay bit-identical (the staged `6d` fast path writes into a copy of its input, so a `float32` clip would otherwise have that step computed in single precision on one path and double on the other).
+
+Where preservation stops: the packers and `standardize_length(method="resample_linear")` produce `float64` regardless, so the array a model receives is `float64` either way — the PyTorch datasets then emit `torch.float32`. This is about what a clip costs to hold and pass through augmentation, not an end-to-end single-precision path.
 
 ## The six functions
 
@@ -139,7 +143,7 @@ With `cache_quats=True` (the default), the pipeline converts your `joint_rot` to
 Two guarantees, identical on both paths:
 
 - **Custom steps see your declared representation.** A step function the pipeline doesn't recognize receives `arrays.joint_rot` in the pipeline's current declared representation — never in whatever internal state a previous built-in step left behind. `cache_quats=True` and `cache_quats=False` are bit-identical.
-- **Outputs never alias inputs.** Even when no step fires, `pipeline(...)` returns freshly allocated arrays, so nothing it hands back shares storage with a Dataset's cached clips. (The returned container's fields are read-only like any other, so a cache is safe from both directions.)
+- **Outputs never alias inputs.** Even when no step fires, `pipeline(...)` returns freshly allocated arrays, so nothing it hands back shares storage with a Dataset's cached clips. (The returned container's fields are read-only like any other, so a cache is safe from both directions.) This is the *pipeline's* guarantee: a single augmentation function may return a stream it never touched by reference — `add_root_position_noise` passes `joint_rot` through, and it is the only one that does — which read-only fields make safe, since nothing can write through the shared view.
 
 ### Seeing what a call actually drew
 
