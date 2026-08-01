@@ -22,6 +22,15 @@ from pybvh_ml import MotionArrays
 from helpers import as_pair, as_triple
 
 
+def _report_is_set(state, conn):
+    """Child-process body: report what the inherited EpochState reads.
+
+    Module level so it survives pickling under any start method.
+    """
+    conn.send((state.is_set, state.current))
+    conn.close()
+
+
 class TestTorchDatasets:
     """Tests for PyTorch Dataset classes and collate function."""
 
@@ -683,6 +692,77 @@ class TestSeedingPrimitives:
     def test_epoch_state_rejects_negative(self):
         with pytest.raises(ValueError, match="epoch must be >= 0"):
             EpochState().set(-1)
+
+    @pytest.mark.parametrize("build", ["motion", "onthefly"])
+    def test_datasets_expose_the_epoch_publicly(self, build, bvh_example,
+                                                bvh_paths):
+        """A framework hook claiming epoch 0 must not have to reach into
+        `ds._epoch_state`, which only moves the private read up a level."""
+        if build == "motion":
+            root_pos, rot6d = bvh_example.to_6d()
+            ds = MotionDataset([{"root_pos": root_pos[:20].copy(),
+                                 "joint_rot": rot6d[:20].copy()}])
+        else:
+            ds = OnTheFlyDataset(bvh_paths, representation="6d")
+        assert ds.epoch_is_set is False
+        assert ds.epoch == 0
+        ds.set_epoch(0)
+        assert ds.epoch_is_set is True
+        assert ds.epoch == 0
+        ds.set_epoch(4)
+        assert ds.epoch == 4
+
+    def test_is_set_distinguishes_never_set_from_epoch_zero(self):
+        """`current` answers both with 0 on purpose; the two are still
+        different facts, and reading them apart must not need `_raw()`."""
+        state = EpochState()
+        assert state.is_set is False
+        assert state.current == 0
+        state.set(0)
+        assert state.is_set is True
+        assert state.current == 0
+
+    @pytest.fixture
+    def clips(self, bvh_example):
+        root_pos, rot6d = bvh_example.to_6d()
+        return [{"root_pos": root_pos[:20].copy(),
+                 "joint_rot": rot6d[:20].copy()}]
+
+    def test_is_set_costs_no_warning_budget(self, clips):
+        """A diagnostic read must not mask the real warning later — the
+        same rule `current` follows."""
+        import warnings as _warnings
+        ds = MotionDataset(clips, seed=0,
+                           augmentation=self._noise_pipeline())
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            assert ds._epoch_state.is_set is False
+            ds[0]
+        assert any("set_epoch() was never called" in str(c.message)
+                   for c in caught)
+
+    def test_is_set_is_visible_across_a_worker_process(self):
+        """The whole point of the shared sentinel: a plain bool set in
+        the parent reads False in a forked worker, which is what a
+        downstream's shadow flag did."""
+        import multiprocessing
+        state = EpochState()
+        state.set(3)
+        ctx = multiprocessing.get_context("fork")
+        parent_conn, child_conn = ctx.Pipe()
+        proc = ctx.Process(target=_report_is_set, args=(state, child_conn))
+        proc.start()
+        observed = parent_conn.recv()
+        proc.join()
+        assert observed == (True, 3)
+
+    @staticmethod
+    def _noise_pipeline():
+        from pybvh_ml.augmentation import add_joint_rotation_noise
+        from pybvh_ml.pipeline import AugmentationPipeline
+        return AugmentationPipeline(
+            [(add_joint_rotation_noise, 1.0, {"sigma": 0.01})],
+            representation="6d")
 
     def test_downstream_dataset_pattern(self, bvh_example):
         """The documented usage: hold an EpochState, seed with rng_for.

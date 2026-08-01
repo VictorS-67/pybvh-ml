@@ -101,6 +101,21 @@ Call `dataset.set_epoch(epoch)` at the top of each epoch — the same contract a
 
 With `seed=None`, every call uses fresh OS entropy — simplest, no reproducibility.
 
+!!! warning "Under a training framework, set the epoch *before* the DataLoader starts its workers"
+    Many trainers prefetch the first batches as soon as the loader is built, which is often **before** the hook you would naturally put `set_epoch` in — PyTorch Lightning's `on_train_start` is one such hook. Workers forked in that window carry the never-set state into their first batches, and each one emits its own "set_epoch() was never called" warning (the warn-once budget is per process, so `num_workers=6` means six warnings).
+
+    Nothing is silently wrong when that happens: the unset state reads as epoch 0, which is what the hook sets a moment later, and the shared counter means workers observe every subsequent `set_epoch`. But a warning that fires on every run is a warning nobody reads, which is exactly how a real occurrence goes unnoticed. Claim the epoch in the earliest hook that runs *before* dataloaders are constructed — for Lightning, a `Callback.setup`.
+
+    `dataset.epoch_is_set` tells the two states apart, so an earlier hook can claim epoch 0 only if nothing else has (`dataset.epoch` reports the epoch itself, `0` when unset):
+
+    ```python
+    def setup(self, trainer, pl_module, stage):     # runs before dataloaders
+        if stage == "fit" and not dataset.epoch_is_set:
+            dataset.set_epoch(0)
+    ```
+
+    Both read the shared counter, so the answer is the same in every worker. A custom Dataset holding its own `EpochState` asks it directly — `state.is_set`. What does *not* work is a plain `self._epoch_was_set = True` flag beside the shared counter: it lives in whichever process wrote it and reads `False` in every forked worker.
+
 ![Per-frame deviation curves for three epochs from two independently constructed datasets sharing a seed: each epoch's two curves coincide exactly, and the three epochs differ](../gallery/img/epoch-determinism.png)
 
 *The contract, drawn: run B (dashed) lies exactly on run A (solid) for every epoch; each epoch is a fresh draw.*

@@ -175,7 +175,9 @@ class EpochState:
     mismatch is reachable with a plain
     ``DataLoader(..., multiprocessing_context="spawn")``.
 
-    ``-1`` is the never-set sentinel (replaces a separate boolean).
+    ``-1`` is the never-set sentinel (replaces a separate boolean — one
+    would live in whichever process wrote it and read ``False`` in every
+    forked worker; :attr:`is_set` reads the shared sentinel instead).
     Deliberately no ``__getstate__``/``__setstate__``: swapping the
     Value for a plain int during pickling would silently break sharing
     under spawn (worker creation uses the same pickle machinery).  The
@@ -218,6 +220,27 @@ class EpochState:
         spend it and mask the real warning later.
         """
         return max(self._raw(), 0)
+
+    @property
+    def is_set(self) -> bool:
+        """Whether :meth:`set` has been called yet.
+
+        :attr:`current` answers "which epoch do I augment as", and for
+        that question "never set" and "epoch 0" are the same answer,
+        deliberately.  They are not the same *fact*, though, and code
+        that needs the fact — a trainer hook claiming epoch 0 only if
+        nothing has claimed it, a test asserting the hook ran — was left
+        reaching for the private ``_raw()``.
+
+        Reads the shared value, so it is worker-visible like everything
+        else here, and costs no warn-once budget.  It is **not** atomic
+        with :meth:`set`: ``if not state.is_set: state.set(0)`` is a
+        check-then-act, so run it in the main process before the
+        DataLoader starts its workers — which is where an epoch-0 claim
+        has to happen anyway, since workers that fork beforehand carry
+        the unset state into their first batches.
+        """
+        return self._raw() >= 0
 
     def _effective(self, cls_name: str, seed: int | None,
                    draws_randomness: bool) -> int:
@@ -573,6 +596,25 @@ class MotionDataset(Dataset):
         """
         self._epoch_state.set(epoch)
 
+    @property
+    def epoch(self) -> int:
+        """Epoch this dataset augments as — ``0`` when none was set."""
+        return self._epoch_state.current
+
+    @property
+    def epoch_is_set(self) -> bool:
+        """Whether :meth:`set_epoch` has been called.
+
+        Distinct from ``epoch == 0``, which is also what an unset dataset
+        reports.  The question matters under a training framework that
+        builds its DataLoader — and forks its workers — before the hook
+        you put ``set_epoch`` in: ``if not ds.epoch_is_set:
+        ds.set_epoch(0)`` in an earlier hook claims the epoch before any
+        worker inherits the unset state.  Reads the shared counter, so
+        the answer is the same in every worker.
+        """
+        return self._epoch_state.is_set
+
     def __len__(self) -> int:
         return len(self.clips)
 
@@ -763,6 +805,25 @@ class OnTheFlyDataset(Dataset):
     def set_epoch(self, epoch: int) -> None:
         """Set the current epoch for reproducible per-epoch augmentation."""
         self._epoch_state.set(epoch)
+
+    @property
+    def epoch(self) -> int:
+        """Epoch this dataset augments as — ``0`` when none was set."""
+        return self._epoch_state.current
+
+    @property
+    def epoch_is_set(self) -> bool:
+        """Whether :meth:`set_epoch` has been called.
+
+        Distinct from ``epoch == 0``, which is also what an unset dataset
+        reports.  The question matters under a training framework that
+        builds its DataLoader — and forks its workers — before the hook
+        you put ``set_epoch`` in: ``if not ds.epoch_is_set:
+        ds.set_epoch(0)`` in an earlier hook claims the epoch before any
+        worker inherits the unset state.  Reads the shared counter, so
+        the answer is the same in every worker.
+        """
+        return self._epoch_state.is_set
 
     def __len__(self) -> int:
         return len(self.bvh_paths)
