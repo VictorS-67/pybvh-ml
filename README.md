@@ -14,10 +14,11 @@ ML bridge layer for [pybvh](https://github.com/VictorS-67/pybvh) — turn motion
 
 ## Features
 
-- **Tensor packing** to `(C, T, V)`, `(T, V, C)`, and flat `(T, D)` layouts with round-trip unpacking.
-- **Array-level augmentation** in quaternion, 6D, axis-angle, rotmat, and Euler — keyword-only, no `Bvh` round-trip, with composable pipelines and reproducible per-epoch seeding.
+- **Tensor packing** to `(C, T, V)`, `(T, V, C)`, and flat `(T, D)` layouts with round-trip unpacking, and a `streams=` that picks what goes in — `pack_to_ctv(arrays, streams=("joint_pos",))` is the `(3, T, J)` ST-GCN input.
+- **Rotations and positions together** — one clip carries `joint_rot`, `joint_pos` and `node_pos` (end sites included), with the frame convention recorded alongside them.
+- **Array-level augmentation** in quaternion, 6D, axis-angle, rotmat, and Euler — keyword-only, no `Bvh` round-trip, with composable pipelines and reproducible per-epoch seeding. Every step transforms every stream it is given, or refuses the sample.
 - **Preprocessing pipelines** — BVH directory → on-disk dataset (`.npz` / `.hdf5`) with skeleton-aware harmonization for heterogeneous corpora and dataset-wide z-score normalization.
-- **Skeleton-graph metadata** — edge lists, body-part partitions, L/R joint pairs for GCN and Transformer models.
+- **Skeleton-graph metadata** — edge lists, body-part partitions, L/R pairs in both joint and node space, and the forward-kinematics topology, for GCN and Transformer models.
 - **Optional PyTorch integration** — `MotionDataset` / `OnTheFlyDataset` / `collate_motion_batch` with variable-length padding.
 
 ## Philosophy
@@ -32,7 +33,7 @@ It replaces the ~150 lines of preprocessing, augmentation, and dataset-class boi
 pip install pybvh-ml
 ```
 
-This pulls in [pybvh](https://github.com/VictorS-67/pybvh) `>= 0.8.1, < 0.9` automatically — pybvh-ml 0.5 tracks pybvh 0.8's API (short representation tokens, radians-first parameters).
+This pulls in [pybvh](https://github.com/VictorS-67/pybvh) `>= 0.8.2, < 0.9` automatically — pybvh-ml 0.6 tracks pybvh 0.8's API (short representation tokens, radians-first parameters, array-signature forward kinematics).
 
 With optional dependencies:
 
@@ -80,7 +81,7 @@ Notebooks execute in CI via `pytest --nbmake tutorials/`, so they can't silently
 
 **pybvh-ml is in 0.x — expect breaking changes between minor versions.**
 
-We treat 0.x as design space: when a past choice turns out to be wrong, we fix it at the root rather than carry scar tissue forward. No deprecation cycles, no compatibility shims; each release ships a single clean migration path, documented in the [CHANGELOG](CHANGELOG.md). If you depend on pybvh-ml from production code, **pin to an exact version** (`pybvh-ml==0.5.0`) and read the upgrade notes before bumping.
+We treat 0.x as design space: when a past choice turns out to be wrong, we fix it at the root rather than carry scar tissue forward. No deprecation cycles, no compatibility shims; each release ships a single clean migration path, documented in the [CHANGELOG](CHANGELOG.md). If you depend on pybvh-ml from production code, **pin to an exact version** (`pybvh-ml==0.6.0`) and read the upgrade notes before bumping.
 
 This will change at **1.0**: from then on, pybvh-ml will commit to strict semver — no breaking changes within a major version, deprecation warnings (at least one minor release) before any future removal. Until 1.0, "make the library better" wins over "preserve the old behavior."
 

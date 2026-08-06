@@ -1,12 +1,27 @@
 """Skeleton graph metadata for GCN and graph-based models.
 
-Provides edge lists, left/right joint pairs, and unified skeleton
-descriptors — the topology data that GCN and Transformer models
-consume.  Only uses pybvh's public API.
+Provides edge lists, left/right pairs in both index spaces, forward-
+kinematics topology, and unified skeleton descriptors — the topology
+data that GCN and Transformer models consume.  Only uses pybvh's public
+API.
+
+**Two index spaces, and they are not interchangeable.** *Joint* space
+(``bvh.joint_angles`` order, ``J`` entries) excludes end sites; *node*
+space (``bvh.nodes`` order, ``N >= J`` entries) includes them.  Node
+indices diverge from joint indices as soon as any end site precedes a
+paired joint in file order, so an index list from one space silently
+addresses the wrong vertices in the other.  Every key here says which
+space it is in, and ``fk_topology["joint_idx"]`` is the map between
+them: ``joint_idx[n] >= 0`` marks node ``n`` as a joint and gives its
+joint column.
 """
 from __future__ import annotations
 
-from pybvh import Bvh
+from collections import Counter
+
+import numpy as np
+
+from pybvh import Bvh, FkTopology
 
 
 def get_edge_list(
@@ -29,6 +44,16 @@ def get_edge_list(
     Returns
     -------
     list of (int, int)
+
+    Notes
+    -----
+    **Which packing this indexes directly.** Joint-space edges index the
+    vertices of ``pack_to_*(streams=("joint_pos",))``, where ``V = J``,
+    one-to-one; node-space edges do the same for
+    ``streams=("node_pos",)``, where ``V = N``.  Any packing that
+    includes ``"root_pos"`` — the default ``("root_pos", "joint_rot")``
+    among them — puts the root at vertex 0 and shifts every joint by
+    one, so those edges need ``(child + 1, parent + 1)``.
     """
     return list(bvh.node_edges if include_end_sites else bvh.edges)
 
@@ -49,6 +74,157 @@ def get_lr_pairs(bvh: Bvh) -> list[tuple[int, int]]:
     return list(bvh.lr_pairs) if bvh.lr_pairs else []
 
 
+def get_node_lr_pairs(bvh: Bvh) -> list[tuple[int, int]]:
+    """Detect left/right **node** pairs as index tuples.
+
+    Node-space counterpart of :func:`get_lr_pairs`, covering joints and
+    their end sites — what :func:`~pybvh_ml.mirror` needs to swap every
+    paired vertex of a ``node_pos`` stream, fingertips and toe tips
+    included.
+
+    Returns
+    -------
+    list of (int, int)
+        ``[(left_idx, right_idx), ...]`` in ``bvh.nodes`` index space.
+        Empty if no pairs found.
+
+    Notes
+    -----
+    A joint pair whose two sides carry **different numbers of end sites**
+    is returned with its end sites dropped: pybvh has no well-defined tip
+    correspondence there, and its property filters rather than raises,
+    matching ``lr_pairs``.  That silently produces a half-swapped
+    skeleton at mirror time, which is why
+    :func:`get_skeleton_info` records the offending pairs under
+    ``mismatched_end_site_pairs`` while the ``Bvh`` is still open — see
+    :func:`find_mismatched_end_site_pairs`.
+    """
+    return list(bvh.node_lr_pairs) if bvh.node_lr_pairs else []
+
+
+def find_mismatched_end_site_pairs(bvh: Bvh) -> list[tuple[int, int]]:
+    """L/R joint pairs whose two sides carry different numbers of end sites.
+
+    Detected here, where the :class:`~pybvh.Bvh` is still open, because
+    the consequence lands far away: we persist ``node_lr_pairs`` and
+    mirror at *train* time, and pybvh's property drops the end sites of
+    such a pair rather than raising.  A dropped tip is exactly the
+    half-swapped skeleton :func:`pybvh.transforms.mirror` refuses to
+    emit — right policy for a property, wrong outcome for stored
+    metadata nobody re-checks.
+
+    Parameters
+    ----------
+    bvh : Bvh
+
+    Returns
+    -------
+    list of (int, int)
+        Offending pairs in **node** index space, empty when every paired
+        joint's two sides agree.  A non-empty list means a train-time
+        mirror over ``node_pos`` would swap the paired joints but leave
+        their end sites on the original side.
+
+    Notes
+    -----
+    **Both sides of the comparison are node-space, and that is
+    load-bearing.**  Mixing in joint-space ``lr_pairs`` does not fail
+    loudly: it indexes the end-site counter with the wrong keys and
+    returns arbitrary answers — not a uniform false negative, which
+    would at least be noticeable, but a wrong pair that looks like a
+    result.  The two spaces diverge as soon as any end site precedes a
+    paired joint in file order.
+    """
+    topology = bvh.fk_topology
+    parent_idx = topology.parent_idx
+    joint_idx = topology.joint_idx
+    # Keyed by NODE index — parent_idx values are node indices.
+    end_children = Counter(
+        int(p) for i, p in enumerate(parent_idx)
+        if p >= 0 and joint_idx[i] < 0)
+    return [
+        (left, right) for left, right in get_node_lr_pairs(bvh)
+        if joint_idx[left] >= 0 and joint_idx[right] >= 0
+        and end_children[left] != end_children[right]
+    ]
+
+
+def get_fk_topology_dict(bvh: Bvh) -> dict:
+    """The four :class:`pybvh.FkTopology` fields, JSON-serializable.
+
+    What makes the train-time FK refresh in
+    :func:`~pybvh_ml.add_joint_rotation_noise` possible: store these
+    with the dataset, rebuild an ``FkTopology`` once per dataset with
+    :func:`build_fk_topology`, and forward kinematics runs from arrays
+    alone with the source ``.bvh`` long closed.
+
+    Returns
+    -------
+    dict
+        ``offsets`` ``(N, 3)`` and ``parent_idx`` / ``joint_idx``
+        ``(N,)`` as nested lists, plus ``euler_orders`` (length ``J``,
+        indexed by **joint column**, not by node).
+
+    Notes
+    -----
+    Stored as lists rather than arrays because this dict is persisted as
+    JSON inside ``skeleton_info``; :func:`build_fk_topology` converts
+    back, and pybvh's constructor validates what it gets.
+    """
+    topology = bvh.fk_topology
+    return {
+        'offsets': topology.offsets.tolist(),
+        'parent_idx': [int(p) for p in topology.parent_idx],
+        'joint_idx': [int(j) for j in topology.joint_idx],
+        'euler_orders': list(topology.euler_orders),
+    }
+
+
+def build_fk_topology(skeleton_info: dict) -> FkTopology:
+    """Rebuild a :class:`pybvh.FkTopology` from stored metadata.
+
+    The train-time counterpart of :func:`get_fk_topology_dict`: call it
+    once per dataset (pybvh's constructor validates, which is not free)
+    and hand the result to
+    :func:`~pybvh_ml.add_joint_rotation_noise` as ``fk_topology=``.
+    :meth:`~pybvh_ml.AugmentationPipeline.standard` does exactly this.
+
+    Parameters
+    ----------
+    skeleton_info : dict
+        From :func:`get_skeleton_info` or the ``skeleton_info`` key of
+        :func:`~pybvh_ml.load_preprocessed`.  Must carry
+        ``fk_topology``.
+
+    Returns
+    -------
+    pybvh.FkTopology
+
+    Raises
+    ------
+    ValueError
+        If ``skeleton_info`` has no ``fk_topology`` — datasets written
+        before pybvh-ml 0.6.0 do not record it, and it cannot be
+        reconstructed from the other keys (bone offsets are not stored
+        anywhere else).
+    """
+    topology = skeleton_info.get("fk_topology")
+    if not topology:
+        raise ValueError(
+            "skeleton_info carries no 'fk_topology', so forward kinematics "
+            "cannot be run from it. Datasets written before pybvh-ml 0.6.0 "
+            "do not record it and it is not recoverable from the other keys "
+            "(the bone offsets are stored nowhere else) — re-run "
+            "preprocess_directory, or build the topology from an open Bvh "
+            "with bvh.fk_topology.")
+    return FkTopology(
+        offsets=np.asarray(topology["offsets"], dtype=np.float64),
+        parent_idx=np.asarray(topology["parent_idx"], dtype=np.int64),
+        joint_idx=np.asarray(topology["joint_idx"], dtype=np.int64),
+        euler_orders=list(topology["euler_orders"]),
+    )
+
+
 def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
     """Get unified skeleton metadata dict.
 
@@ -64,9 +240,14 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
     Returns
     -------
     dict
-        Keys: ``num_joints``, ``joint_names``, ``edges``,
-        ``euler_orders``, ``lr_pairs``, ``lr_mapping``, ``world_up``,
-        ``rest_forward``, ``rest_up``.  Optionally ``body_partitions``.
+        Joint-space keys: ``num_joints``, ``joint_names``, ``edges``,
+        ``euler_orders``, ``lr_pairs``, ``lr_mapping``.  Node-space
+        keys: ``num_nodes``, ``node_names``, ``node_edges``,
+        ``node_lr_pairs``, ``end_site_indices``.  Plus ``fk_topology``,
+        the axis strings ``world_up`` / ``rest_forward`` / ``rest_up``,
+        and ``mismatched_end_site_pairs``.  Optionally
+        ``body_partitions``.
+
         ``lr_mapping`` is the name-keyed dict from ``bvh.lr_mapping``
         (``None`` when no pairs detected).  The three axis strings feed
         runtime augmentation without reopening the source BVH —
@@ -74,7 +255,28 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
         :func:`~pybvh_ml.augmentation.rotate_vertical` and
         :meth:`AugmentationPipeline.standard`; ``rest_up`` is ``None``
         for degenerate rigs.
+
+    Notes
+    -----
+    **Which key pairs with which stream.** A ``joint_pos`` stream (and
+    ``joint_rot``) indexes with ``edges`` / ``lr_pairs`` /
+    ``joint_names``; a ``node_pos`` stream indexes with ``node_edges`` /
+    ``node_lr_pairs`` / ``node_names``.  Mixing them addresses the wrong
+    vertices without any shape error.  Note also that the rotation
+    layouts put the root at vertex 0, so ``edges`` needs the documented
+    off-by-one shift there — ``pack_to_ctv(streams=("joint_pos",))``
+    (``V = J``) and ``streams=("node_pos",)`` (``V = N``) are the two
+    packings where the edge lists index packed vertices directly.
+
+    ``mismatched_end_site_pairs`` is empty on a well-formed rig; a
+    non-empty list means a train-time node-space mirror would leave
+    those pairs' end sites unswapped.  See
+    :func:`find_mismatched_end_site_pairs`.
+
+    Everything here is JSON-serializable, because
+    :func:`~pybvh_ml.preprocess_directory` persists the whole dict.
     """
+    topology = bvh.fk_topology
     info = {
         'num_joints': bvh.joint_count,
         'joint_names': list(bvh.joint_names),
@@ -82,6 +284,14 @@ def get_skeleton_info(bvh: Bvh, include_partitions: bool = False) -> dict:
         'euler_orders': list(bvh.euler_orders),
         'lr_pairs': get_lr_pairs(bvh),
         'lr_mapping': dict(bvh.lr_mapping) if bvh.lr_mapping else None,
+        'num_nodes': len(bvh.nodes),
+        'node_names': [node.name for node in bvh.nodes],
+        'node_edges': list(bvh.node_edges),
+        'node_lr_pairs': get_node_lr_pairs(bvh),
+        'end_site_indices': [i for i, j in enumerate(topology.joint_idx)
+                             if j < 0],
+        'fk_topology': get_fk_topology_dict(bvh),
+        'mismatched_end_site_pairs': find_mismatched_end_site_pairs(bvh),
         'world_up': bvh.world_up,
         'rest_forward': bvh.rest_forward,
         'rest_up': bvh.rest_up,

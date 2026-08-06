@@ -219,7 +219,9 @@ class TestSkeleton:
         assert set(info.keys()) == {
             'num_joints', 'joint_names', 'edges', 'euler_orders',
             'lr_pairs', 'lr_mapping', 'world_up', 'rest_forward',
-            'rest_up'}
+            'rest_up', 'num_nodes', 'node_names', 'node_edges',
+            'node_lr_pairs', 'end_site_indices', 'fk_topology',
+            'mismatched_end_site_pairs'}
 
     def test_skeleton_info_values(self, bvh_example):
         info = get_skeleton_info(bvh_example)
@@ -1452,20 +1454,22 @@ class TestAugmentationParamValidation:
     def test_negative_sigma_raises_staged(self, bvh_example):
         from pybvh_ml._staged import _StagingState, _add_joint_rotation_noise_staged
         pos, quats = _get_quat_data(bvh_example)
-        state = _StagingState(quats, "quat", None)
+        state = _StagingState(
+            MotionArrays(root_pos=pos, joint_rot=quats), "quat", None)
         with pytest.raises(ValueError, match="sigma must be"):
             _add_joint_rotation_noise_staged(
-                pos, state, sigma=-0.1, representation="quat",
+                state, sigma=-0.1, representation="quat",
                 rng=np.random.default_rng(0))
 
     @pytest.mark.parametrize("drop_rate", [-0.1, 1.0])
     def test_drop_rate_out_of_range_raises_staged(self, bvh_example, drop_rate):
         from pybvh_ml._staged import _StagingState, _dropout_staged
         pos, quats = _get_quat_data(bvh_example)
-        state = _StagingState(quats, "quat", None)
+        state = _StagingState(
+            MotionArrays(root_pos=pos, joint_rot=quats), "quat", None)
         with pytest.raises(ValueError, match=r"drop_rate must be in \[0, 1\)"):
             _dropout_staged(
-                pos, state, drop_rate=drop_rate, representation="quat",
+                state, drop_rate=drop_rate, representation="quat",
                 rng=np.random.default_rng(0))
 
     @pytest.mark.parametrize("fn,kwargs", [
@@ -2812,13 +2816,14 @@ class TestJointNoise:
         """Regression: the staged variant used to return the caller's own root_pos when sigma_pos=0, so later in-place edits could mutate the input."""
         from pybvh_ml._staged import _StagingState, _add_joint_rotation_noise_staged
         pos, quats = _get_quat_data(bvh_example)
-        state = _StagingState(quats, "quat", None)
-        new_p = _add_joint_rotation_noise_staged(
-            pos, state, sigma=np.radians(1.0), representation="quat",
+        state = _StagingState(
+            MotionArrays(root_pos=pos, joint_rot=quats), "quat", None)
+        _add_joint_rotation_noise_staged(
+            state, sigma=np.radians(1.0), representation="quat",
             rng=np.random.default_rng(42))
-        assert not np.shares_memory(new_p, pos)
+        assert not np.shares_memory(state.root_pos, pos)
         # sigma_pos=0 leaves the values themselves unchanged.
-        np.testing.assert_array_equal(new_p, pos)
+        np.testing.assert_array_equal(state.root_pos, pos)
 
 
 # =============================================================================
@@ -4263,9 +4268,22 @@ class TestMotionArrays:
 
     def test_missing_joint_rot_names_the_caller(self):
         rp, _ = self._arrays()
-        with pytest.raises(ValueError, match="rotate_vertical needs joint rotations"):
-            rotate_vertical(MotionArrays(root_pos=rp), angle=0.1,
-                            up_axis="+y", representation="6d")
+        with pytest.raises(
+                ValueError,
+                match="add_joint_rotation_noise has nothing to noise"):
+            add_joint_rotation_noise(MotionArrays(root_pos=rp), sigma=0.1,
+                                     representation="6d")
+
+    def test_geometric_steps_accept_a_trajectory_only_clip(self):
+        """A root-only container is the degenerate positions-free case:
+        rotate_vertical handles every stream, so there is nothing missing
+        to complain about.  The step that genuinely needs rotations says
+        so (see above)."""
+        rp, _ = self._arrays()
+        out = rotate_vertical(MotionArrays(root_pos=rp), angle=0.1,
+                              up_axis="+y")
+        assert out.joint_rot is None
+        assert not np.allclose(out.root_pos, rp)
 
     def test_float32_stays_float32(self):
         """A per-sample container that silently doubled a cached clip's
@@ -4432,9 +4450,10 @@ class TestNoiseSplit:
         from pybvh_ml._staged import (_StagingState,
                                       _add_root_position_noise_staged)
         pos, rot6d = bvh_example.to_6d()
-        state = _StagingState(rot6d, "6d", None)
+        state = _StagingState(
+            MotionArrays(root_pos=pos, joint_rot=rot6d), "6d", None)
         _add_root_position_noise_staged(
-            pos, state, sigma=0.1, rng=np.random.default_rng(0))
+            state, sigma=0.1, rng=np.random.default_rng(0))
         assert state.quats is None
 
     @pytest.mark.parametrize("cache_quats", [True, False])

@@ -18,11 +18,15 @@ import numpy.typing as npt
 from pybvh import Bvh, parse_axis, read_bvh_file
 from pybvh import harmonize as pybvh_harmonize
 from pybvh import rotations
+from pybvh_ml.arrays import POSITION_CENTERINGS
 from pybvh_ml.skeleton import get_skeleton_info
 
 
 _SUPPORTED_REPRESENTATIONS = ("euler", "quat", "6d", "axisangle")
 _KNOWN_SUFFIXES = (".npz", ".hdf5", ".h5")
+
+# Which MotionArrays field a stored position stream fills, by space.
+_POSITION_STREAM_KEYS = {"joint": "joint_pos", "node": "node_pos"}
 
 
 def _validate_representation(representation: str) -> None:
@@ -31,6 +35,45 @@ def _validate_representation(representation: str) -> None:
         raise ValueError(
             f"Unknown representation '{representation}'. "
             f"Choose from {list(_SUPPORTED_REPRESENTATIONS)}")
+
+
+def _validate_position_settings(
+    position_space: str,
+    position_centering: str,
+    center_root: bool,
+) -> None:
+    """Reject position settings that would write incoherent arrays.
+
+    ``center_root=True`` with ``position_centering="first"`` is the one
+    combination refused outright.  ``center_root`` subtracts all three
+    components of the first frame's root (pybvh-ml's convention) while
+    ``"first"`` is pybvh's ground-plane centering, which subtracts only
+    the two non-up ones — so the positions are in a frame offset from
+    ``root_pos``, and stay offset by exactly that amount however the
+    root is centered.  That is tolerable in a transient container (the
+    packers apply the shift to both and preserve the relationship), but
+    not in a *written* dataset, where the recorded ``center_root=True``
+    would suggest a coherence between the two streams that ground-plane
+    centering never established, and nothing downstream could tell.
+    """
+    if position_space not in _POSITION_STREAM_KEYS:
+        raise ValueError(
+            f"position_space must be one of "
+            f"{list(_POSITION_STREAM_KEYS)}, got {position_space!r}")
+    if position_centering not in POSITION_CENTERINGS:
+        raise ValueError(
+            f"position_centering must be one of "
+            f"{list(POSITION_CENTERINGS)}, got {position_centering!r}")
+    if center_root and position_centering == "first":
+        raise ValueError(
+            "center_root=True cannot be combined with "
+            "position_centering='first': center_root subtracts all three "
+            "components of the first frame's root position (pybvh-ml's "
+            "convention) while 'first' is pybvh's ground-plane centering, "
+            "which leaves the up axis untouched — the two streams would be "
+            "centered differently in that axis. Use "
+            "position_centering='world' (the root shift is then applied to "
+            "the positions too), or 'skeleton', or center_root=False.")
 
 
 def _validate_output_suffix(path: Path) -> None:
@@ -886,6 +929,9 @@ def preprocess_directory(
     output_path: str | Path,
     representation: str = "6d",
     center_root: bool = True,
+    include_positions: bool = False,
+    position_space: str = "joint",
+    position_centering: str = "world",
     include_quaternions: bool = False,
     include_velocities: bool = False,
     include_foot_contacts: bool = False,
@@ -920,6 +966,59 @@ def preprocess_directory(
     center_root : bool
         If True, subtract first frame's root position per clip.
         The flag is recorded in the saved dataset's metadata and surfaced by :func:`load_preprocessed`, so downstream packing knows the arrays are already centered — pass ``center_root=False`` to the ``pack_to_*`` functions when repacking such clips.  (Re-centering a whole already-centered clip is a harmless no-op; the real hazard is windowed sub-clips, where re-centering zeroes the window's first frame and destroys the clip-relative trajectory.)
+
+        With ``include_positions=True`` and ``position_centering="world"``
+        the same shift is applied to every position vertex, keeping the
+        two streams in one frame; with ``"skeleton"`` the positions are
+        already root-relative and are left alone; with ``"first"`` the
+        combination is **rejected** (see ``position_centering``).
+    include_positions : bool
+        If True, also store per-vertex 3-D positions — the stream
+        skeleton action-recognition models consume.  Derived from
+        :meth:`pybvh.Bvh.joint_positions` / :meth:`~pybvh.Bvh.node_positions`,
+        both backed by pybvh's cached world-frame FK, so requesting them
+        alongside a rotation representation costs one array derivation
+        rather than a second kinematics pass.
+
+        Unlike ``include_velocities`` and ``include_foot_contacts``,
+        these are **not** static features: augmentation transforms them
+        with the rest of the clip, and
+        :func:`~pybvh_ml.add_joint_rotation_noise` re-derives them by
+        forward kinematics.
+    position_space : {"joint", "node"}
+        Which index space to store.  ``"joint"`` (default) writes
+        ``joint_pos``, index-aligned with ``joint_rot`` and with
+        ``skeleton_info["edges"]``; ``"node"`` writes ``node_pos``,
+        which includes end sites (fingertips, toe tips, head top) and
+        pairs with ``node_edges`` / ``node_lr_pairs``.  One flag rather
+        than two ``include_*`` booleans, because the two spaces are
+        alternatives — ``node_pos`` already contains ``joint_pos``.
+
+        Recorded in ``skeleton_info``, not in the dataset metadata: it
+        is a topology fact — which index space, and therefore which
+        ``V``, which edge list, which L/R pair list — sitting beside
+        ``num_joints`` / ``num_nodes`` / ``edges``, exactly as
+        ``foot_joints`` does.
+    position_centering : {"world", "skeleton", "first"}
+        Which frame the stored positions are in, passed to pybvh's
+        ``centered=`` and recorded in the dataset metadata next to
+        ``center_root``, whose analogue it is: a statement about the
+        values rather than about the topology.
+
+        ``"world"`` (default) keeps positions in the same frame as
+        ``root_pos``, so :func:`~pybvh_ml.rotate_vertical` acts
+        identically on both and a joint position already contains the
+        root trajectory.  ``"skeleton"`` puts the root at the origin in
+        every frame — the form most NTU-style pipelines feed a model,
+        with the trajectory then carried only by ``root_pos``.
+        ``"first"`` is pybvh's ground-plane centering.  The three
+        coincide only for a clip whose root never moves.
+
+        Recording it is mandatory for anything this library writes: a
+        position array whose frame convention we failed to record is
+        exactly the case a caller cannot recover from.  (A
+        hand-assembled :class:`~pybvh_ml.MotionArrays` may honestly say
+        ``None``; a dataset we wrote may not.)
     include_quaternions : bool
         If True, also store pre-computed quaternion arrays per clip
         (useful for runtime speed perturbation / dropout).  When
@@ -1114,6 +1213,9 @@ def preprocess_directory(
     # extension used to surface only after the full directory load.
     _validate_representation(representation)
     _validate_output_suffix(output_path)
+    if include_positions:
+        _validate_position_settings(
+            position_space, position_centering, center_root)
 
     all_paths = sorted(bvh_dir.glob(file_pattern))
     if filter_fn is not None:
@@ -1198,6 +1300,7 @@ def preprocess_directory(
     all_joint_quats: list[npt.NDArray[np.float64]] = []
     all_velocities: list[npt.NDArray[np.float64]] = []
     all_foot_contacts: list[npt.NDArray[np.float64]] = []
+    all_positions: list[npt.NDArray[np.float64]] = []
 
     # Pin foot joints to one list (explicit, or auto-detected from the
     # first clip) so all clips produce contact arrays with the same shape.
@@ -1210,10 +1313,23 @@ def preprocess_directory(
     for bvh in clips:
         root_pos, joint_data, quats = _extract_primary_and_quats(
             bvh, representation, want_quaternions=want_quats)
+        positions = None
+        if include_positions:
+            positions = (
+                bvh.joint_positions(centered=position_centering)
+                if position_space == "joint"
+                else bvh.node_positions(centered=position_centering))
         if center_root and root_pos.shape[0] > 0:
-            root_pos = root_pos - root_pos[0:1]
+            shift = root_pos[0:1]
+            root_pos = root_pos - shift
+            # "skeleton"-centered positions are already root-relative and
+            # do not move; "first" is rejected up front.
+            if positions is not None and position_centering == "world":
+                positions = positions - shift[:, np.newaxis, :]
         all_root_pos.append(root_pos)
         all_joint_data.append(joint_data)
+        if positions is not None:
+            all_positions.append(positions)
 
         if want_quats:
             assert quats is not None
@@ -1230,6 +1346,8 @@ def preprocess_directory(
     skel_info = get_skeleton_info(clips[0])
     if include_foot_contacts:
         skel_info["foot_joints"] = list(foot_joints) if foot_joints else []
+    if include_positions:
+        skel_info["position_space"] = position_space
 
     # Normalization stats (computed on the primary representation only;
     # velocities / foot contacts have their own natural scales).  Shares
@@ -1238,6 +1356,16 @@ def preprocess_directory(
     # second extraction pass and a redundant compatibility check.
     stats = _normalization_stats_from_arrays(all_root_pos, all_joint_data)
 
+    # Positions get their own stats block rather than widening mean/std.
+    # The existing vector's D = 3 + J*C layout is a public contract that
+    # pack_to_flat, describe_features and the HumanML3D Mean.npy /
+    # Std.npy convention are all written against; changing D based on a
+    # preprocessing flag would make one file format mean two things.
+    position_stats = None
+    if include_positions:
+        position_stats = _normalization_stats_from_arrays(
+            all_root_pos, all_positions, include_root_pos=False)
+
     # Labels
     labels = None
     if label_fn is not None:
@@ -1245,16 +1373,16 @@ def preprocess_directory(
 
     # Save
     ext = output_path.suffix.lower()
-    if ext == ".hdf5" or ext == ".h5":
-        _save_hdf5(output_path, all_root_pos, all_joint_data,
-                   all_joint_quats, all_velocities, all_foot_contacts,
-                   labels, stats, skel_info, representation, center_root,
-                   stems, uniformity)
-    else:
-        _save_npz(output_path, all_root_pos, all_joint_data,
-                  all_joint_quats, all_velocities, all_foot_contacts,
-                  labels, stats, skel_info, representation, center_root,
-                  stems, uniformity)
+    saver = (_save_hdf5 if ext in (".hdf5", ".h5") else _save_npz)
+    saver(output_path, all_root_pos, all_joint_data,
+          all_joint_quats, all_velocities, all_foot_contacts,
+          labels, stats, skel_info, representation, center_root,
+          stems, uniformity,
+          positions_list=all_positions,
+          position_key=(_POSITION_STREAM_KEYS[position_space]
+                        if include_positions else None),
+          position_stats=position_stats,
+          position_centering=position_centering if include_positions else None)
 
     return {
         "num_clips": len(clips),
@@ -1279,6 +1407,11 @@ def _save_npz(
     center_root: bool,
     stems: list[str],
     uniformity: dict | None = None,
+    *,
+    positions_list: list | None = None,
+    position_key: str | None = None,
+    position_stats: dict | None = None,
+    position_centering: str | None = None,
 ) -> None:
     """Save to .npz format."""
     save_dict: dict[str, object] = {
@@ -1290,6 +1423,13 @@ def _save_npz(
         "std": stats["std"],
         "skeleton_info_json": np.array(json.dumps(skel_info)),
     }
+    if position_centering is not None:
+        save_dict["position_centering"] = np.array(position_centering)
+    if position_stats is not None:
+        save_dict["position_mean"] = position_stats["mean"]
+        save_dict["position_std"] = position_stats["std"]
+        save_dict["position_constant_channels"] = (
+            position_stats["constant_channels"])
     if uniformity is not None:
         save_dict["uniformity_json"] = np.array(json.dumps(uniformity))
     if "constant_channels" in stats:
@@ -1297,6 +1437,9 @@ def _save_npz(
     for i, (rp, jd) in enumerate(zip(root_pos_list, joint_data_list)):
         save_dict[f"clip_{i}_root_pos"] = rp
         save_dict[f"clip_{i}_joint_rot"] = jd
+    if positions_list:
+        for i, pos in enumerate(positions_list):
+            save_dict[f"clip_{i}_{position_key}"] = pos
     if joint_quats_list:
         for i, jq in enumerate(joint_quats_list):
             save_dict[f"clip_{i}_joint_quats"] = jq
@@ -1325,6 +1468,11 @@ def _save_hdf5(
     center_root: bool,
     stems: list[str],
     uniformity: dict | None = None,
+    *,
+    positions_list: list | None = None,
+    position_key: str | None = None,
+    position_stats: dict | None = None,
+    position_centering: str | None = None,
 ) -> None:
     """Save to HDF5 format."""
     try:
@@ -1338,6 +1486,8 @@ def _save_hdf5(
         f.attrs["representation"] = representation
         f.attrs["center_root"] = bool(center_root)
         f.attrs["skeleton_info_json"] = json.dumps(skel_info)
+        if position_centering is not None:
+            f.attrs["position_centering"] = position_centering
         if uniformity is not None:
             f.attrs["uniformity_json"] = json.dumps(uniformity)
 
@@ -1345,6 +1495,11 @@ def _save_hdf5(
         f.create_dataset("std", data=stats["std"])
         if "constant_channels" in stats:
             f.create_dataset("constant_channels", data=stats["constant_channels"])
+        if position_stats is not None:
+            f.create_dataset("position_mean", data=position_stats["mean"])
+            f.create_dataset("position_std", data=position_stats["std"])
+            f.create_dataset("position_constant_channels",
+                             data=position_stats["constant_channels"])
         # Variable-length UTF-8 strings — dtype="S" (fixed ASCII bytes)
         # crashes with UnicodeEncodeError on non-ASCII filename stems.
         f.create_dataset(
@@ -1359,6 +1514,8 @@ def _save_hdf5(
             grp.create_dataset("root_pos", data=rp)
             grp.create_dataset("joint_rot", data=jd)
             grp.attrs["filename"] = stems[i]
+            if positions_list:
+                grp.create_dataset(position_key, data=positions_list[i])
             if joint_quats_list:
                 grp.create_dataset("joint_quats", data=joint_quats_list[i])
             if velocities_list:
@@ -1382,11 +1539,28 @@ def load_preprocessed(path: str | Path) -> dict:
         ``joint_rot`` (named ``joint_data`` in datasets written before
         pybvh-ml 0.5.0; both keys load, the new name is what you read),
         optionally ``joint_quats`` / ``velocities`` /
-        ``foot_contacts``), ``labels``, ``mean``, ``std``,
-        ``skeleton_info``, ``representation``, ``filenames``,
-        ``center_root``, ``uniformity``.  Also includes
+        ``foot_contacts`` / ``joint_pos`` / ``node_pos``), ``labels``,
+        ``mean``, ``std``, ``skeleton_info``, ``representation``,
+        ``filenames``, ``center_root``, ``uniformity``,
+        ``position_centering``, ``position_stats``.  Also includes
         ``constant_channels`` when the file was written by
         pybvh-ml >= 0.3 (absent for older files).
+
+        ``position_centering`` is the frame the stored positions are in
+        (``None`` when the dataset carries none, and for every file
+        written before pybvh-ml 0.6.0).  It has to be threaded into every
+        :class:`~pybvh_ml.MotionArrays` built from these clips — the
+        steps that depend on it only ever see the container, not this
+        dict.  :meth:`~pybvh_ml.torch.MotionDataset.from_preprocessed`
+        does that for you.
+
+        ``position_stats`` is the positions' own
+        ``{"mean", "std", "constant_channels"}`` block over the
+        ``(F, V*3)`` flattening, or ``None``.  It is deliberately
+        separate from ``mean`` / ``std``, whose ``D = 3 + J*C`` layout is
+        a public contract.  Ignoring it is a legitimate choice: ST-GCN
+        pipelines more commonly root-center or normalize by bone length
+        than z-score raw coordinates.
 
         ``uniformity`` is the axis-uniformity audit recorded at
         preprocessing time: the pre-transform frame-rate / world-up /
@@ -1403,9 +1577,13 @@ def load_preprocessed(path: str | Path) -> dict:
         ``skeleton_info`` always carries every key
         :func:`~pybvh_ml.skeleton.get_skeleton_info` documents, whatever
         version wrote the file: keys an older dataset never recorded
-        (``world_up`` / ``rest_forward`` / ``rest_up`` before 0.5.0) read
-        back as ``None`` rather than being absent, so consumers can index
-        them directly.
+        (``world_up`` / ``rest_forward`` / ``rest_up`` before 0.5.0, the
+        node-space block and ``fk_topology`` before 0.6.0) read back as
+        ``None`` rather than being absent, so consumers can index them
+        directly.  ``position_space`` is the exception, and it follows
+        the ``foot_joints`` precedent: it is present only when the
+        dataset stores positions, so "not requested" stays
+        distinguishable from "requested and empty".
     """
     path = Path(path)
     _validate_output_suffix(path)
@@ -1422,15 +1600,23 @@ def load_preprocessed(path: str | Path) -> dict:
 _SKELETON_INFO_KEYS = (
     "num_joints", "joint_names", "edges", "euler_orders",
     "lr_pairs", "lr_mapping", "world_up", "rest_forward", "rest_up",
+    "num_nodes", "node_names", "node_edges", "node_lr_pairs",
+    "end_site_indices", "fk_topology", "mismatched_end_site_pairs",
 )
 
 # Per-clip arrays stored beside the mandatory root_pos / joint_rot pair,
 # each written only when its preprocessing flag was set.  Listed once
-# because both loaders iterate it, and they must stay in step.  All
-# three are *static* features: unlike joint_rot they are not refreshed
-# by augmentation, so they belong to evaluation and targets rather than
-# to augmentation-invariant training inputs.
-_OPTIONAL_CLIP_STREAMS = ("joint_quats", "velocities", "foot_contacts")
+# because both loaders iterate it, and they must stay in step.
+#
+# The first three are *static* features: unlike joint_rot they are not
+# refreshed by augmentation, so they belong to evaluation and targets
+# rather than to augmentation-invariant training inputs.  ``joint_pos``
+# and ``node_pos`` differ in kind — they are augmentable streams of
+# MotionArrays, transformed by every geometric step and re-derived by
+# add_joint_rotation_noise — and are listed here only because the
+# loaders read them the same way.
+_OPTIONAL_CLIP_STREAMS = (
+    "joint_quats", "velocities", "foot_contacts", "joint_pos", "node_pos")
 
 
 def _normalize_skeleton_info(skel_info: dict) -> dict:
@@ -1486,6 +1672,15 @@ def _load_npz(path: Path) -> dict:
         # Files written before pybvh-ml 0.5.0 don't record the audit.
         "uniformity": (json.loads(str(data["uniformity_json"]))
                        if "uniformity_json" in data.files else None),
+        # Only datasets written with include_positions=True have one.
+        "position_centering": (str(data["position_centering"])
+                               if "position_centering" in data.files
+                               else None),
+        "position_stats": (
+            {"mean": data["position_mean"],
+             "std": data["position_std"],
+             "constant_channels": data["position_constant_channels"]}
+            if "position_mean" in data.files else None),
     }
     if "constant_channels" in data.files:
         result["constant_channels"] = data["constant_channels"]
@@ -1542,6 +1737,15 @@ def _load_hdf5(path: Path) -> dict:
             # Files written before pybvh-ml 0.5.0 don't record the audit.
             "uniformity": (json.loads(str(f.attrs["uniformity_json"]))
                            if "uniformity_json" in f.attrs else None),
+            # Only datasets written with include_positions=True have one.
+            "position_centering": (str(f.attrs["position_centering"])
+                                   if "position_centering" in f.attrs
+                                   else None),
+            "position_stats": (
+                {"mean": f["position_mean"][()],
+                 "std": f["position_std"][()],
+                 "constant_channels": f["position_constant_channels"][()]}
+                if "position_mean" in f else None),
         }
         if "constant_channels" in f:
             result["constant_channels"] = f["constant_channels"][()]
