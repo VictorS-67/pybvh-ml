@@ -21,13 +21,18 @@
 # Skeleton renders use pybvh's `bvhplot`; for the plain per-function augmentation before/afters (mirror, rotation, noise on a single skeleton), see [pybvh's own gallery](https://victors-67.github.io/pybvh/gallery/) — this page draws only what pybvh can't.
 
 # %%
+# Pin the inline backend rather than relying on it being the kernel default:
+# a shell with MPLBACKEND set (Agg, the headless-CI habit) overrides that
+# default, and re-executing here would then capture no figures at all. The
+# magic wins over MPLBACKEND, so the notebook renders the same anywhere.
+# %matplotlib inline
 import warnings
 
 import matplotlib
 try:
     get_ipython  # defined inside an IPython / Jupyter kernel
 except NameError:
-    matplotlib.use("Agg")
+    matplotlib.use("Agg")  # running this file as a plain script
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path

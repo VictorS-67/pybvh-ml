@@ -31,11 +31,16 @@
 # ## Setup
 
 # %%
+# Pin the inline backend rather than relying on it being the kernel default:
+# a shell with MPLBACKEND set (Agg, the headless-CI habit) overrides that
+# default, and re-executing here would then capture no figures at all. The
+# magic wins over MPLBACKEND, so the notebook renders the same anywhere.
+# %matplotlib inline
 import matplotlib
 try:
     get_ipython  # defined inside an IPython / Jupyter kernel
 except NameError:
-    matplotlib.use("Agg")
+    matplotlib.use("Agg")  # running this file as a plain script
 import matplotlib.pyplot as plt
 
 from pathlib import Path
