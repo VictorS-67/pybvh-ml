@@ -12,7 +12,11 @@ import numpy as np
 import numpy.typing as npt
 
 from ._staged import STAGED_DISPATCH, _StagingState
-from .arrays import MotionArrays, require_joint_rot
+from .arrays import STREAM_NAMES, MotionArrays
+# _step_label is the shared "readable name for any callable step" —
+# records, repr and the precondition messages must all spell a step the
+# same way, so it lives with the checks that fire first.
+from .augmentation import _check_step_preconditions, _step_label as _step_name
 
 
 class AugmentationStep(NamedTuple):
@@ -78,28 +82,17 @@ def _finish(
     Both properties in one place because they interact: a cast allocates,
     so it doubles as the defensive copy, and an explicit one is needed
     only when there is nothing to cast *and* a call path handed its own
-    input straight back — which is what happens when no step fires.
+    input straight back — which is what happens when no step fires, and
+    also when a step passes an untouched stream through by reference.
+
+    The test is ``shares_memory`` rather than identity: the pipeline
+    wraps its ``float64`` entry arrays in a container, whose fields are
+    read-only *views*, so an untouched stream comes back as a different
+    object over the very same buffer.
     """
     if result.dtype != dtype:
         return result.astype(dtype)
-    return result.copy() if result is entry else result
-
-
-def _step_name(fn: Callable) -> str:
-    """Readable name for a step function, for records and ``repr``.
-
-    A step is any callable, and the two natural ways to write one with
-    baked-in configuration — :func:`functools.partial` and a callable
-    instance — carry no ``__name__``.  Unwrap to the underlying
-    function where there is one, and fall back to the class name.
-    """
-    name = getattr(fn, "__name__", None)
-    if name is not None:
-        return name
-    wrapped = getattr(fn, "func", None)      # functools.partial
-    if wrapped is not None:
-        return _step_name(wrapped)
-    return type(fn).__name__
+    return result.copy() if np.shares_memory(result, entry) else result
 
 
 def _call_step(
@@ -134,6 +127,16 @@ def _call_step(
             f"{type(out).__name__}, expected MotionArrays. Steps returning "
             f"a (root_pos, joint_data) tuple are the pre-0.5.0 contract; "
             f"return arrays.replace(joint_rot=...) instead.")
+    dropped = sorted(arrays.present_streams - out.present_streams)
+    added = sorted(out.present_streams - arrays.present_streams)
+    if dropped or added:
+        raise ValueError(
+            f"augmentation step {_step_name(fn)!r} changed which streams "
+            f"the sample carries (dropped {dropped}, added {added}). A step "
+            f"transforms the streams it is given; a pipeline never carries "
+            f"a stream a step left behind, and never gains one mid-run. "
+            f"Return arrays.replace(...) so the untouched streams travel "
+            f"with it.")
     return out
 
 
@@ -238,6 +241,25 @@ class AugmentationPipeline:
       second rotation-space step is fine, but a subsequent
       deterministic check (e.g. equality to the input) will naturally
       fail.
+    * **A re-derivation discards the position stream's own history.**
+      On a sample carrying positions, ``add_joint_rotation_noise``
+      *replaces* them with forward kinematics of the noised rotations
+      rather than transforming the incoming ones (see
+      :func:`~pybvh_ml.handles_streams`).  So on a rig with asymmetric
+      rest offsets, ``[mirror, add_joint_rotation_noise]`` ends with FK
+      of locally-mirrored rotations — throwing away the world-exact
+      reflection the position stream held — while
+      ``[add_joint_rotation_noise, mirror]`` keeps it.  Both are
+      defensible and neither is a bug, but the two do not produce the
+      same positions.
+
+    **Every step must handle every stream the sample carries.**  The
+    check runs once at ``__call__`` entry, for every configured step,
+    before any of them fires — a ``p=0.1`` step with the wrong stream
+    support or a missing ``fk_topology`` would otherwise raise on one
+    sample in ten.  A custom step that declares nothing is assumed to
+    handle ``{"root_pos", "joint_rot"}``; decorate it with
+    :func:`~pybvh_ml.handles_streams` once it transforms positions too.
 
     Examples
     --------
@@ -314,12 +336,14 @@ class AugmentationPipeline:
         cls,
         skeleton_info: dict,
         *,
-        representation: str = "6d",
+        representation: str | None = "6d",
         up_axis: str = "+y",
         lateral_axis: str = "+x",
         rotate_angle_range: tuple[float, float] | None = (-np.pi, np.pi),
         mirror_prob: float = 0.5,
         noise_sigma: float | None = np.radians(1.0),
+        position_noise_sigma: float | None = None,
+        position_space: str | None = None,
         speed_factor_range: tuple[float, float] | None = (0.8, 1.2),
         degrees: bool = False,
         cache_quats: bool = True,
@@ -341,13 +365,22 @@ class AugmentationPipeline:
         Parameters
         ----------
         skeleton_info : dict
-            Supplies ``lr_pairs`` (required for mirror) and
-            ``euler_orders`` (required when
-            ``representation="euler"``).
-        representation : str
+            Supplies ``lr_pairs`` / ``node_lr_pairs`` (required for
+            mirror), ``euler_orders`` (required when
+            ``representation="euler"``), and — for a positions-carrying
+            dataset — ``fk_topology``, ``world_up`` and
+            ``position_space``.
+        representation : str or None
             Rotation representation threaded through every step.
             One of ``"quat"``, ``"6d"``, ``"axisangle"``,
-            ``"rotmat"``, ``"euler"``.
+            ``"rotmat"``, ``"euler"``.  ``None`` builds a positions-only
+            pipeline and **skips the rotation-noise step**, which would
+            otherwise be configured by default and refuse every sample:
+            noising rotations is meaningless on a clip that has none.
+            (A *direct* :func:`~pybvh_ml.add_joint_rotation_noise` call
+            on such a sample still raises — a factory declining to
+            configure a meaningless step and a function refusing a
+            meaningless call are different questions.)
         up_axis, lateral_axis : str
             Signed-axis strings (e.g. ``"+y"``, ``"+x"``).  The
             defaults assume a ``+y``-up, ``+x``-lateral skeleton;
@@ -366,11 +399,29 @@ class AugmentationPipeline:
             step for that.
         mirror_prob : float
             Probability of left/right mirror.  ``0`` skips it.
-            Silently skipped when ``skeleton_info["lr_pairs"]`` is
-            empty (no pairs detected on this skeleton).
+            Silently skipped when the pair list this configuration needs
+            is empty (``skeleton_info["lr_pairs"]`` for the joint-space
+            streams, ``node_lr_pairs`` for ``node_pos``) — no pairs were
+            detected on this skeleton.
         noise_sigma : float or None
             Per-joint rotation noise standard deviation in radians
-            (default one degree); ``None`` skips noise.
+            (default one degree); ``None`` skips noise.  On a dataset
+            carrying positions this step also refreshes them by forward
+            kinematics, so the factory wires ``fk_topology`` and
+            ``world_up`` from *skeleton_info*.
+        position_noise_sigma : float or None
+            Per-vertex keypoint jitter, in the data's positional units;
+            ``None`` (default) skips it.  Joint-space and node-space
+            jitter are *different functions* with different stream
+            declarations, and the pipeline is built before any sample is
+            seen, so the index space is resolved here — from
+            ``position_space`` when given, else
+            ``skeleton_info["position_space"]``.  Wiring one
+            unconditionally would make the pipeline refuse every sample
+            of a dataset stored in the other space.
+        position_space : {"joint", "node"} or None
+            Explicit override for that resolution.  ``None`` (default)
+            reads ``skeleton_info["position_space"]``.
         speed_factor_range : (float, float) or None
             Random speed factor range; ``None`` skips speed
             perturbation.  Runs last because it changes ``F``.
@@ -380,14 +431,24 @@ class AugmentationPipeline:
         # Local import to keep the pipeline module free of a hard
         # dependency cycle with augmentation at import time.
         from .augmentation import (
+            add_joint_position_noise,
             add_joint_rotation_noise,
+            add_node_position_noise,
             mirror as mirror_fn,
             rotate_vertical,
             speed_perturbation_arrays,
         )
+        from .skeleton import build_fk_topology
 
         euler_orders = skeleton_info.get("euler_orders")
         lr_pairs = skeleton_info.get("lr_pairs") or []
+        node_lr_pairs = skeleton_info.get("node_lr_pairs") or []
+        space = (position_space if position_space is not None
+                 else skeleton_info.get("position_space"))
+        if space is not None and space not in ("joint", "node"):
+            raise ValueError(
+                f"position_space must be 'joint' or 'node', got {space!r} "
+                f"(from {'the position_space argument' if position_space else 'skeleton_info'})")
 
         # representation / euler_orders are pipeline-level here rather
         # than repeated on every step — the factory builds exactly the
@@ -402,17 +463,59 @@ class AugmentationPipeline:
                 "degrees": degrees,
             }))
 
-        if mirror_prob > 0 and lr_pairs:
+        # Which pair lists this configuration will actually need: the
+        # joint-space one for rotations and joint positions, the
+        # node-space one for node positions.  A missing list is the
+        # documented "no pairs detected" skip, not a hard error.
+        required_pairs = []
+        if representation is not None or space == "joint":
+            required_pairs.append(lr_pairs)
+        if space == "node":
+            required_pairs.append(node_lr_pairs)
+        if mirror_prob > 0 and required_pairs and all(required_pairs):
             steps.append((mirror_fn, mirror_prob, {
                 "lr_joint_pairs": lr_pairs,
+                "lr_node_pairs": node_lr_pairs or None,
                 "lateral_axis": lateral_axis,
             }))
 
-        if noise_sigma is not None:
-            steps.append((add_joint_rotation_noise, 1.0, {
-                "sigma": noise_sigma,
-                "degrees": degrees,
-            }))
+        if noise_sigma is not None and representation is not None:
+            noise_kwargs: dict = {"sigma": noise_sigma, "degrees": degrees}
+            if skeleton_info.get("fk_topology"):
+                # Wired whenever the metadata can supply it, not only
+                # when this factory expects positions: the step reads it
+                # solely to refresh a position stream, and whether a
+                # given *sample* carries one is not knowable here.  The
+                # topology is built once, per pipeline, and pybvh
+                # validates it in the constructor.
+                noise_kwargs["fk_topology"] = build_fk_topology(skeleton_info)
+                noise_kwargs["world_up"] = (
+                    skeleton_info.get("world_up") or up_axis)
+            steps.append((add_joint_rotation_noise, 1.0, noise_kwargs))
+
+        if position_noise_sigma is not None:
+            if representation is not None:
+                raise ValueError(
+                    "position_noise_sigma and representation cannot both be "
+                    "set: keypoint jitter declines rotation-carrying samples, "
+                    "because a jittered position cannot be pushed back into "
+                    "the rotations beside it (that would be inverse "
+                    "kinematics). Use noise_sigma for a dataset with "
+                    "rotations — it re-derives the positions by forward "
+                    "kinematics — or representation=None for a "
+                    "positions-only one.")
+            if space is None:
+                raise ValueError(
+                    "position_noise_sigma was given but the index space is "
+                    "unknown: joint-space and node-space keypoint jitter are "
+                    "different steps, and the pipeline is built before any "
+                    "sample is seen. Pass position_space='joint' or 'node', "
+                    "or use a skeleton_info that records it (preprocessing "
+                    "with include_positions=True does).")
+            steps.append((
+                add_joint_position_noise if space == "joint"
+                else add_node_position_noise,
+                1.0, {"sigma": position_noise_sigma}))
 
         if speed_factor_range is not None:
             lo, hi = speed_factor_range
@@ -481,6 +584,14 @@ class AugmentationPipeline:
                 f"keyword form was replaced in 0.5.0: build the container "
                 f"once with MotionArrays(root_pos=..., joint_rot=...) and "
                 f"read out.root_pos / out.joint_rot from the result.")
+
+        # Every precondition every configured step has, before any of
+        # them runs.  A p=0.1 step whose kwargs are wrong would otherwise
+        # raise on one sample in ten, which is a configuration error that
+        # reaches production.
+        for step in self.augmentations:
+            _check_step_preconditions(step.fn, arrays, step.kwargs)
+
         # Run the whole pipeline in float64 whatever came in, and restore
         # the caller's dtypes once, at the end.  Two things depend on it:
         # the result's dtype must not depend on which steps a probability
@@ -489,18 +600,23 @@ class AugmentationPipeline:
         # into a copy of its input, so a float32 clip would otherwise
         # have that step computed in single precision there and in double
         # on the direct path.
-        root_pos = np.asarray(arrays.root_pos, dtype=np.float64)
-        joint_data = np.asarray(
-            require_joint_rot(arrays, "AugmentationPipeline"),
-            dtype=np.float64)
+        entry = {
+            name: (None if getattr(arrays, name) is None
+                   else np.asarray(getattr(arrays, name), dtype=np.float64))
+            for name in STREAM_NAMES
+        }
+        work = MotionArrays(
+            **entry, position_centering=arrays.position_centering)
 
         call = self._call_staged if self.cache_quats else self._call_direct
-        new_root_pos, new_joint_data, params = call(root_pos, joint_data, rng)
+        result, params = call(work, rng)
 
         out = MotionArrays(
-            root_pos=_finish(new_root_pos, root_pos, arrays.root_pos.dtype),
-            joint_rot=_finish(new_joint_data, joint_data,
-                              arrays.joint_rot.dtype))
+            position_centering=arrays.position_centering,
+            **{name: (None if entry[name] is None
+                      else _finish(getattr(result, name), entry[name],
+                                   getattr(arrays, name).dtype))
+               for name in STREAM_NAMES})
         if return_params:
             return out, params
         return out
@@ -586,10 +702,9 @@ class AugmentationPipeline:
 
     def _call_direct(
         self,
-        root_pos: npt.NDArray[np.float64],
-        joint_data: npt.NDArray[np.float64],
+        arrays: MotionArrays,
         rng: np.random.Generator,
-    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], list[dict]]:
+    ) -> tuple[MotionArrays, list[dict]]:
         """Legacy path: each step converts to/from quat independently.
 
         Used when ``cache_quats=False`` or as a reference for tests
@@ -604,41 +719,38 @@ class AugmentationPipeline:
                 continue
             self._apply_defaults(fn, resolved)
             self._forward_rng(fn, resolved, rng)
-            out = _call_step(
-                fn, MotionArrays(root_pos=root_pos, joint_rot=joint_data),
-                resolved)
-            root_pos, joint_data = out.root_pos, out.joint_rot
+            arrays = _call_step(fn, arrays, resolved)
 
-        return root_pos, joint_data, records
+        return arrays, records
 
     def _call_staged(
         self,
-        root_pos: npt.NDArray[np.float64],
-        joint_data: npt.NDArray[np.float64],
+        arrays: MotionArrays,
         rng: np.random.Generator,
-    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], list[dict]]:
+    ) -> tuple[MotionArrays, list[dict]]:
         """Quat-caching path: share one quaternion view across compatible steps.
 
         Steps whose function is in :data:`pybvh_ml._staged.STAGED_DISPATCH`
-        operate on a shared :class:`_StagingState` that carries a quat
-        cache forward.  Unknown functions (e.g. user-defined) fall back
-        transparently — the cache is flushed, the function sees a fresh
-        ``joint_data`` in its declared representation (or, when it
-        declares none, in the pipeline's current declared representation
-        — the same array the direct path would pass), and staging
-        resumes cold after the call.
+        operate on a shared :class:`_StagingState` that carries every
+        stream plus a quat cache forward.  Unknown functions (e.g.
+        user-defined) fall back transparently — the cache is flushed, the
+        function sees a fresh ``joint_rot`` in its declared
+        representation (or, when it declares none, in the pipeline's
+        current declared representation — the same array the direct path
+        would pass), and staging resumes cold after the call.
         """
         if not self.augmentations:
-            return root_pos, joint_data, []
+            return arrays, []
 
         # Initial representation is whatever the first step declares
-        # (a pipeline with steps but no declared representation raises —
-        # staging cannot guess what joint_data is).  The representation
-        # we report back to the caller at the end comes from the *last*
-        # step that carries a "representation" kwarg.
-        initial_repr = self._initial_representation()
+        # (a rotation-carrying pipeline with steps but no declared
+        # representation raises — staging cannot guess what joint_rot
+        # is).  The representation we report back to the caller at the
+        # end comes from the *last* step that carries a "representation"
+        # kwarg.
+        initial_repr = self._initial_representation(arrays)
         euler_orders = self._first_euler_orders()
-        state = _StagingState(joint_data, initial_repr, euler_orders)
+        state = _StagingState(arrays, initial_repr, euler_orders)
 
         final_repr = initial_repr
         records: list[dict] = []
@@ -663,10 +775,10 @@ class AugmentationPipeline:
             staged_fn = STAGED_DISPATCH.get(fn)
             if staged_fn is not None:
                 self._forward_rng(staged_fn, resolved, rng)
-                root_pos = staged_fn(root_pos, state, **resolved)
+                staged_fn(state, **resolved)
             else:
                 # Fallback: flush the cache and hand the unknown step
-                # joint_data in the pipeline's current declared
+                # the streams in the pipeline's current declared
                 # representation (``final_repr`` — the step's own
                 # declaration when present, else the most recent one).
                 # This is exactly what the direct path would carry, so
@@ -674,32 +786,32 @@ class AugmentationPipeline:
                 # don't declare a representation.
                 state.ensure_repr(final_repr)
                 self._forward_rng(fn, resolved, rng)
-                out = _call_step(
-                    fn, MotionArrays(root_pos=root_pos, joint_rot=state.jd),
-                    resolved)
-                root_pos = out.root_pos
+                out = _call_step(fn, state.as_arrays(), resolved)
                 # We don't know what the unknown function did internally;
                 # treat the result as opaque data still in final_repr.
-                state.set_jd_invalidate_quats(out.joint_rot, final_repr)
+                state.adopt(out, final_repr)
 
-        # At the end, ensure joint_data is back in the representation
+        # At the end, ensure joint_rot is back in the representation
         # the user expects.
         state.ensure_repr(final_repr)
-        return root_pos, state.jd, records
+        return state.as_arrays(), records
 
-    def _initial_representation(self) -> str:
-        """Representation ``joint_data`` arrives in.
+    def _initial_representation(self, arrays: MotionArrays) -> str | None:
+        """Representation ``joint_rot`` arrives in.
 
         The pipeline-level default when set, otherwise the first step
-        that declares one.
+        that declares one.  ``None`` for a sample carrying no rotations:
+        there is nothing for the token to describe, and requiring one
+        would make every positions-only pipeline (the ST-GCN case)
+        declare a representation it does not have.
 
         Raises
         ------
         ValueError
-            If neither is declared.  The staged path needs to know what
-            representation ``joint_data`` is in to manage its quaternion
-            cache; guessing silently would corrupt data for non-quat
-            inputs.
+            If the sample carries ``joint_rot`` and neither is declared.
+            The staged path needs to know what representation it is in to
+            manage its quaternion cache; guessing silently would corrupt
+            data for non-quat inputs.
         """
         if self.representation is not None:
             return self.representation
@@ -707,10 +819,12 @@ class AugmentationPipeline:
             v = step.kwargs.get("representation")
             if isinstance(v, str):
                 return v
+        if arrays.joint_rot is None:
+            return None
         raise ValueError(
             "No representation declared. The quat-caching path "
             "(cache_quats=True) needs it to know what representation "
-            "joint_data is in — pass representation=... to "
+            "joint_rot is in — pass representation=... to "
             "AugmentationPipeline, declare it on at least one step, or "
             "build the pipeline with cache_quats=False.")
 

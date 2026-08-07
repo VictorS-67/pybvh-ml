@@ -78,6 +78,32 @@ ds = MotionDataset.from_preprocessed(   # source_repr comes from the file
     temporal="resample", target_length=64, seed=0)
 ```
 
+### Choosing the streams
+
+`streams=` picks what goes into the `data` tensor, with the same vocabulary and shape rules as [`pack_to_ctv`](tensor-layouts.md#choosing-what-gets-packed-streams). It defaults to `("root_pos", "joint_rot")`.
+
+```python
+ds = MotionDataset.from_preprocessed(
+    loaded, layout="ctv", streams=("joint_pos",),
+    temporal="resample", target_length=64, seed=0)
+
+ds[0]["data"].shape     # (3, 64, J) — straight into ST-GCN
+```
+
+Still **one** `data` tensor with explicit streams, not a second tensor beside it, so the batch contract does not change with a preprocessing flag. `from_preprocessed` also threads the stored `position_centering` onto every `MotionArrays` it mints — the steps that depend on it only ever see the container — and raises when a requested stream is absent from the clips, naming `include_positions=True`.
+
+`OnTheFlyDataset` needs its own extraction path, since it reads BVH files rather than preprocessed clips. It takes the same three settings directly:
+
+```python
+ds = OnTheFlyDataset(
+    paths, representation=None,          # positions only
+    include_positions=True, position_space="node",
+    position_centering="skeleton",
+    layout="ctv", streams=("node_pos",), target_length=64)
+```
+
+One FK pass per clip regardless of how many representations are requested — pybvh caches world-frame FK on the `Bvh` and invalidates it on motion writes.
+
 `collate_motion_batch` stacks variable-length items into `{"data", "mask", "lengths", "labels", "names"}` with zero-padding to the batch maximum and a bool validity mask. `names` is a plain list of `B` strings in batch order — strings have no tensor form, and `default_collate` does the same, so a batch means the same thing under either collate. Either every item in a batch carries a `label` / `name` or none does — mixed presence raises a `ValueError` naming the offending index rather than silently dropping the field.
 
 !!! warning "With `layout="flat"`, always pass `collate_fn=collate_motion_batch` — PyTorch's default is not equivalent"

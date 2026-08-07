@@ -84,7 +84,8 @@ pybvh-ml/
 ├── bvh_data/                    # Test BVH files (bvh_test1-3, standard_skeleton)
 ├── tests/
 │   ├── conftest.py              # shared fixtures (bvh_example, bvh_test3, rng)
-│   ├── test_pybvh_ml.py         # numpy-core unit tests (38 test classes)
+│   ├── test_pybvh_ml.py         # numpy-core unit tests (44 test classes)
+│   ├── test_position_streams.py # joint_pos / node_pos, end to end (0.6.0)
 │   ├── test_torch_datasets.py   # torch Dataset/collate tests (skips without torch)
 │   ├── test_no_pybvh_deprecation.py  # guards against deprecated pybvh API usage
 │   ├── test_no_global_state_mutation.py  # guards principle 6: no process-wide mutation
@@ -102,25 +103,31 @@ pybvh-ml/
 ### Module responsibilities
 
 **`arrays.py`** — The container every array-level surface speaks
-- `MotionArrays(root_pos=(F,3), joint_rot=(F,J,C) | None)` — keyword-only, frozen, validates shapes and the shared frame count once at construction
-- `MotionArrays.from_bvh(bvh, representation, center_root=False)` — the producer edge, so extract → augment → pack never hand-assembles the container
-- `.replace(**fields)` — the only mutation path, revalidating
-- Deliberately **not** a tuple and not unpackable: the 0.6.0 position streams must be additive, and a 2-field tuple could not grow. `__iter__` exists only to raise the migration message for `rp, jd = ...`
+- `MotionArrays(root_pos=(F,3), joint_rot=(F,J,C) | None, joint_pos=(F,J,3) | None, node_pos=(F,N,3) | None, position_centering=str | None)` — keyword-only, frozen, validates shapes, the shared frame count, shared `J` between `joint_rot`/`joint_pos` and `N >= J` once at construction. `present_streams` reports which streams a clip carries; `STREAM_NAMES` is the vocabulary
+- `MotionArrays.from_bvh(bvh, representation=None, center_root=False, include_positions=False, position_space="joint", position_centering="world")` — the producer edge, so extract → augment → pack never hand-assembles the container. `representation=None` is the positions-only (ST-GCN) journey
+- `.replace(**fields)` — the only mutation path, revalidating. Dropping the last position stream must clear `position_centering` in the same call
+- **`position_centering` travels with the arrays** (`"world"` / `"skeleton"` / `"first"` / `None`), not only with the dataset, because `add_root_position_noise`, the FK refresh in `add_joint_rotation_noise` and `pack_to_*(center_root=True)` are only correct given it. `None` is legal and fails at *use*: most of the surface is a rigid or temporal operation applied identically to both streams and does not care, and a guessed `"world"` from a caller who does not know is worse than an honest `None`. Anything pybvh-ml writes records it. `center_root_streams()` is the one shared implementation of "subtract the first frame's root from every stream it affects", used by `from_bvh`, the packers, preprocessing and `MotionDataset`
+- Deliberately **not** a tuple and not unpackable: the 0.6.0 position streams had to be additive, and a 2-field tuple could not have grown. `__iter__` exists only to raise the migration message for `rp, jd = ...`
 - Fields are **read-only views**, not copies: writes through a field raise (so a container over a Dataset cache cannot rewrite the cache), while construction and `replace` stay allocation-free — the alternative, copying in the constructor, would copy every clip on every pipeline step
 - **dtype preserved, not promoted**: floating input keeps its dtype (`float32` stays `float32` — the container is what a per-sample Dataset holds), non-floating is promoted to `float64`, and each stream follows its own input
 - **Augmentation computes in `float64` and returns the caller's dtype** (`_result` in `augmentation.py`, `_finish` in `pipeline.py`). Not letting the input dtype flow through the math is load-bearing twice over: otherwise a probabilistic pipeline's output dtype depends on which steps fired for that sample, and `cache_quats=True`/`False` stop being bit-identical for `float32` input (the staged 6d fast path writes into a copy of its input, so that step would run in single precision). Preservation stops at the packers and `standardize_length(resample_linear)`, which are `float64` by contract
 
 **`packing.py`** — Tensor layout conversion
-- `pack_to_ctv(arrays, center_root=True)` → `(C, T, V)` ndarray
-- `pack_to_tvc(arrays, center_root=True)` → `(T, V, C)` ndarray
-- `pack_to_flat(arrays, center_root=True)` → `(T, D)` ndarray
-- `unpack_from_ctv(data, root_channels=3)` → `MotionArrays`
-- `unpack_from_tvc(data, root_channels=3)` → `MotionArrays`
-- Root position is always vertex 0, zero-padded to C channels if `C > 3`
+- `pack_to_ctv(arrays, center_root=True, *, streams=("root_pos", "joint_rot"))` → `(C, T, V)` ndarray; `pack_to_tvc` / `pack_to_flat` take the same arguments
+- `unpack_from_ctv(data, root_channels=3)` → `MotionArrays`; likewise `unpack_from_tvc` / `unpack_from_flat`
+- `streams=` names what is packed and in what order — channel order in the graph layouts, column order in flat. `"root_pos"` contributes vertex 0 (`V = 1 + J`); omit it and `V = J`, which is what removes the off-by-one against `skeleton_info["edges"]`. `node_pos` cannot share a vertex axis with a joint-space stream (different `V`) and raises. Vocabulary is `STREAM_VOCABULARY`; `DEFAULT_STREAMS` is the 0.5.0 layout byte for byte
+- **Derived streams** (`DERIVED_STREAMS`): `joint_vel` / `joint_acc` / `node_vel` / `node_acc`, temporal differences of the matching position stream. Not `MotionArrays` fields — computed at materialization time, after every augmentation step, so `@handles_streams("joint_vel")` raises. Requesting one needs its base present, not packed. Raw per-frame differences (no `dt`), an order-`k` stream zeroes its first `k` frames, meaning follows `position_centering` (undeclared is refused), and `center_root` cannot change them since it is a shift constant in time
+- `_materialize_streams(arrays, streams, center_root, caller)` → `_MaterializedStreams` is the **only** place derivation happens, and it carries the resolved layout (`pack_root` / `num_vertices` / `channel_widths`) so resolution never runs twice. The public packers materialize then delegate; the private `_pack_{ctv,tvc,flat}_materialized` entries only consume. `torch.datasets._LAYOUT_PACKERS` points at the *private* entries — routing the Dataset tail through the public ones would derive a second time and turn a velocity into an acceleration
+- Root position is always vertex 0 when packed, zero-padded to C channels if `C > 3`
+- `center_root=True` shifts the position vertices too under `"world"` / `"first"`, leaves them alone under `"skeleton"`, and raises on `None` — centering only the root would move vertex 0 away from a body that stayed put
+- **The unpackers deliberately take no `streams=`** and invert only the default packing; a streams-aware form is additive whenever it lands
 
 **`augmentation.py`** — Array-level augmentation (operates on pre-extracted numpy arrays, no Bvh object needed)
-- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Plus `add_root_position_noise`, which takes none — its sigma is a length. Supported representations: `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`)
+- Unified functions that accept any representation via a `representation=` kwarg: `rotate_vertical`, `mirror`, `add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`. Plus `add_root_position_noise` and the two keypoint-jitter functions `add_joint_position_noise` / `add_node_position_noise`, which take none — their sigmas are lengths. Supported representations: `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"`, `"euler"` (Euler additionally requires `euler_orders=`); `representation` is required only when the sample carries `joint_rot`
 - Each takes a `MotionArrays` positionally and returns a new one; every other parameter is **keyword-only**. `rotate_vertical` and `add_joint_rotation_noise` accept `degrees=True` to read their angle in degrees (radians remain the default)
+- **Stream coherence**: `@handles_streams(...)` declares what a step handles and `stream_support(fn)` reads it back; undeclared steps default to `{"root_pos", "joint_rot"}` (the pre-0.6 capability). "Handles" means *left correct*, by transformation or by re-derivation — it does **not** mean positions stay exact FK partners of the rotations beside them, except right after a re-derivation. Two divergences are intrinsic and documented: mirror (world-space for positions, parent-local for rotations) and slerp-vs-lerp under speed perturbation and dropout
+- Only the two keypoint-jitter functions decline anything, and they decline `joint_rot` because rotation → position is FK while position → rotation is IK. That also makes the one destructive composition impossible: jitter and the FK refresh can never share a pipeline
+- `add_joint_rotation_noise` **re-derives** the position streams via `pybvh.frames_to_node_positions`, so it needs `fk_topology=` (and `world_up=` under `"first"` centering). It hands the quat cache straight to FK, so the conversion is one hop (quat → euler), not two
 - Fast paths: `rotate_vertical` and `mirror` skip the quaternion round-trip when `representation="6d"` (direct rotation of the two column vectors / analytic sign mask)
 - Quat-internal ops (`add_joint_rotation_noise`, `speed_perturbation_arrays`, `dropout_arrays`) convert to/from quaternion space once; `AugmentationPipeline(cache_quats=True)` amortizes the conversion across consecutive steps
 
@@ -130,7 +137,8 @@ pybvh-ml/
 
 **`pipeline.py`** — Composable augmentation pipeline
 - `AugmentationPipeline` — composable sequence with per-augmentation probabilities and seeded rng. Supports callable kwargs (`lambda rng: value`) for per-sample random parameter sampling. Automatically forwards `rng` to functions that accept it (via signature inspection). `__call__` takes a `MotionArrays` positionally; `rng=` / `return_params=` stay keyword-only.
-- `AugmentationPipeline.standard(skeleton_info, ...)` classmethod — opinionated factory that builds the canonical rotate + mirror + noise + speed pipeline from a `skeleton_info` dict. Each step is optional (pass `None` or `mirror_prob=0` to skip). For anything beyond the exposed kwargs, build the pipeline directly with the `(fn, prob, kwargs)` constructor.
+- Every configured step's preconditions — stream support, and `add_joint_rotation_noise`'s `fk_topology` / `joint_rot` / centering requirements — are checked **at `__call__` entry, before any step fires**, so a `p<1` step's misconfiguration cannot raise stochastically. A step that adds or drops a stream is also refused.
+- `AugmentationPipeline.standard(skeleton_info, ...)` classmethod — opinionated factory that builds the canonical rotate + mirror + noise + speed pipeline from a `skeleton_info` dict. Each step is optional (pass `None` or `mirror_prob=0` to skip). For anything beyond the exposed kwargs, build the pipeline directly with the `(fn, prob, kwargs)` constructor. Two resolutions happen at construction because the pipeline predates any sample: `representation=None` skips the rotation-noise step (meaningless on a rotation-free clip), and `position_noise_sigma=` picks joint- or node-space jitter from `position_space` / `skeleton_info` — they are different functions with different stream declarations.
 - `cache_quats=True` (default) shares one quaternion cache across consecutive staged steps via `_staged.py`'s `STAGED_DISPATCH` registry. User-defined augmentations are supported transparently (cache flushed, function called normally, staging resumed cold). Set `cache_quats=False` for historical bit-exact behavior.
 
 **`sequences.py`** — Sequence length utilities
@@ -139,16 +147,20 @@ pybvh-ml/
 - `uniform_temporal_sample(num_frames, clip_length, mode, rng)` → PySKL-style uniform segment sampling with three regimes (short/wrapping, dense/gap-insertion, uniform/segment-based)
 - `sample_temporal(data, clip_length, num_samples, mode, rng)` → convenience wrapper that applies sampled indices with wraparound
 
-**`skeleton.py`** — Skeleton graph metadata
+**`skeleton.py`** — Skeleton graph metadata, in two index spaces
 - `get_edge_list(bvh, include_end_sites=False)` → `list[(child_idx, parent_idx)]`
 - `get_body_partitions(bvh)` → `dict[str, list[int]]` mapping body part names to joint indices
-- `get_lr_pairs(bvh)` → `list[(left_idx, right_idx)]` (returns `list(bvh.lr_pairs)`, pybvh's cached index-space property)
-- `get_skeleton_info(bvh)` → unified dict with edges, partitions, L/R pairs, joint names, euler orders
+- `get_lr_pairs(bvh)` / `get_node_lr_pairs(bvh)` → `list[(left_idx, right_idx)]` in joint / node space (thin wrappers over pybvh's cached properties)
+- `get_fk_topology_dict(bvh)` → the four `FkTopology` fields as JSON-native lists; `build_fk_topology(skeleton_info)` rebuilds one at train time (raises for pre-0.6.0 datasets, whose bone offsets are stored nowhere else)
+- `find_mismatched_end_site_pairs(bvh)` → node-space L/R pairs whose two sides carry different numbers of end sites. **Both sides of that comparison must be node-space**: mixing in joint-space `lr_pairs` does not fail loudly, it indexes the end-site counter with the wrong keys and reports a wrong pair. `bvh.node_lr_pairs` *drops* such a pair's end sites (a property filters rather than raises), which is right upstream and wrong for us — we persist the list and mirror at train time, far from any `Bvh`
+- `get_skeleton_info(bvh)` → unified dict: joint-space keys, node-space keys, `fk_topology`, `mismatched_end_site_pairs`, and the axis strings. Everything JSON-serializable, because `preprocess_directory` persists the whole dict
 
 **`preprocessing.py`** — Batch preprocessing pipelines
 - `preprocess_directory(bvh_dir, output_path, representation, ...)` — BVH directory → on-disk dataset
 - Supports output formats: `.npz`, `.hdf5` (if h5py installed)
 - Stores arrays + skeleton metadata + normalization stats in a single file
+- The returned summary is a **report on the run**, not the dataset: `num_clips` / `representation` / `filenames` / `skeleton_info` / `center_root` / `position_centering` / `uniformity`, and deliberately no arrays — `mean`, `std`, `position_stats` and the clips come from `load_preprocessed`. `center_root` and `position_centering` are there because they are decisions; without them the summary described a positions dataset's topology (`skeleton_info["position_space"]`) while omitting the frame its values were in
+- `include_positions=True` stores `joint_pos` or `node_pos` (`position_space=`) in the frame `position_centering=` names. The two settings live apart deliberately: `position_space` is a topology fact and goes in `skeleton_info` (the `foot_joints` precedent), `position_centering` is a statement about the values and goes in dataset metadata beside `center_root`. `center_root=True` + `"first"` is rejected — ground-plane centering shifts positions only in the two non-up axes, so the recorded `center_root=True` would suggest a coherence with `root_pos` that was never established (a transient container tolerates the offset; a written dataset must not). Positions get their own `position_stats` block; widening `mean`/`std` would make one file format mean two things, since `D = 3 + J*C` is matched by `pack_to_flat`, `describe_features` and HumanML3D's `Mean.npy`/`Std.npy`
 - Optional label function `label_fn(filename) → int`
 - Optional filter function `filter_fn(filename_stem) → bool` — applied before loading, skipped files are never parsed
 - Rep-aware compatibility check: skeleton graph (`matches_hierarchy(match_offsets=False)`) must always agree; per-joint Euler orders must additionally agree for order-sensitive reps (`euler`, `axisangle`).  Bone-length variation across actors is accepted — `joint_data` is a function of rotations, not bone lengths.
@@ -156,13 +168,16 @@ pybvh-ml/
 
 **`metadata.py`** — Feature column descriptors
 - `FeatureDescriptor` — describes which columns correspond to which features in a packed array
-- `describe_features(num_joints, representation="6d", include_root_pos=True)` → `FeatureDescriptor`
+- `describe_features(num_joints, representation="6d", include_root_pos=True, *, streams=None, num_nodes=None)` → `FeatureDescriptor`, with blocks `root_pos` / `joint_rotations` / `joint_positions` / `node_positions` / `joint_velocities` / `joint_accelerations` / `node_velocities` / `node_accelerations`. `num_nodes=` is required by **index space**, not by name — `node_vel` needs it as much as `node_pos`, and a missed guard there would return a zero-width block instead of raising
+- `describe_graph_features(num_joints, representation="6d", *, streams=None, num_nodes=None)` → `GraphDescriptor` — the `(C, T, V)` counterpart: `num_channels` / `num_vertices` / `shape(F, layout)` / per-stream channel ranges / `first_vertex` (the edge-list offset). Shares `_validate_stream_list` / `_split_root` / `channel_count` with `packing._resolve_streams` rather than restating them, which is the whole point — it exists so a downstream config check does not hand-maintain the packer's rules. The three it encodes: `root_pos` adds a vertex not a channel block, `C` is the widths *floored* by the root's 3 (so `("root_pos", "joint_pos")` is `C = 3`), derived streams are always 3 wide
 - Enables programmatic access to feature slices without hardcoded column indices
 
 **`torch/datasets.py`** — PyTorch Dataset classes (optional, only if torch is installed)
 - `MotionDataset(Dataset)` — loads preprocessed data from disk, returns tensors
 - `OnTheFlyDataset(Dataset)` — loads raw arrays, applies augmentation each epoch
 - Both support variable-length sequences with configurable padding/cropping
+- `streams=` picks what the single `data` tensor carries (one tensor with explicit streams, not a second tensor, so the batch contract does not depend on preprocessing flags). `MotionDataset.from_preprocessed` threads the stored `position_centering` onto every container it mints — storage metadata alone is not enough, since the steps that depend on it only ever see the container — and raises when a requested stream is absent. `OnTheFlyDataset` has its own `include_positions` / `position_space` / `position_centering`, since it extracts per clip rather than reading preprocessed arrays
+- **Order in `_finalize` is load-bearing**: materialize → temporal standardization → pack. Derived streams are differences of *consecutive* frames, so they are computed before `_apply_temporal` and then subsampled with their base (the `GenSkeFeat`-before-`UniformSample` semantics). Differencing afterwards would spike at a pad boundary and, under `resample`, multiply every value by a random sampling gap — `uniform_temporal_sample` picks one frame per segment rather than interpolating. This ordering is unreachable from a `collate_fn`, which runs on `__getitem__` output
 - **Per-clip identity**: items carry `name` (the filename stem) — `MotionDataset` when built with `names=` (which `from_preprocessed` fills from the stored `filenames`), `OnTheFlyDataset` always, since it holds the paths. Omitted rather than index-substituted when unavailable, so "no identity provided" is distinguishable from a real name. `labels` / `names` are length-validated against the clip count: a long sequence would otherwise attribute every clip to the wrong entry
 
 **`torch/collate.py`** — Collate functions
@@ -197,7 +212,9 @@ pybvh-ml uses these pybvh entry points:
 - `bvh.matches_hierarchy(other, match_offsets=False)` and `bvh.matches_channels(other)` — skeleton compatibility predicates (pybvh 0.7.0)
 - `bvh.edges` — skeleton edge list as `(child_idx, parent_idx)` tuples
 - `bvh.nodes`, `bvh.node_index` — skeleton topology
-- `bvh.lr_pairs`, `bvh.lr_mapping` — cached L/R joint pair detection (index pairs / name-keyed dict)
+- `bvh.lr_pairs`, `bvh.lr_mapping`, `bvh.node_lr_pairs` — cached L/R pair detection in both index spaces (pybvh 0.8.2 for the node-space form)
+- `bvh.node_edges`, `bvh.joint_positions()`, `bvh.node_positions(centered=...)` — node-space topology and FK-derived positions (world-frame FK cached on the `Bvh`, invalidated on motion writes)
+- `bvh.fk_topology` + `pybvh.FkTopology` + `pybvh.frames_to_node_positions(...)` (pybvh 0.8.2) — array-signature forward kinematics, which is what makes pybvh-ml's train-time FK refresh possible with no `Bvh` in sight
 - `pybvh.rotations.*` — rotation conversion primitives, `quat_multiply`, `REPRESENTATION_CHANNELS`
 - `bvh.joint_velocities()`, `bvh.foot_contacts()` — motion analysis for the optional `include_velocities` / `include_foot_contacts` preprocessing outputs
 - `pybvh.harmonize(...)` + `HarmonizeReport` (pybvh 0.7.0) — dataset-level harmonization; pybvh-ml's `preprocess_directory(harmonize=True)` drives it with `return_report=True` and surfaces drops with the report's `dropped_sources` / `drop_reasons`. By default no `reference=` is passed (pure reorientation, per-actor bone lengths preserved; hierarchy mismatches surface in `_check_skeleton_compatibility` right after); `retarget=True` pins `clips[0]` as the reference, enabling pybvh's topology gate + bone-offset retargeting (offsets only — root translations keep each clip's scale)
@@ -223,7 +240,7 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 - **Uniform** (`num_frames >= 2*clip_length`): integer segment boundaries (`i * num_frames // clip_length`), discrete random offset per segment.
 
 ### 5.8 Implementation-level conventions
-1. **Every array-level function takes and returns a `MotionArrays`** — augmentation, the pipeline, the packers, and `convert_arrays` — one clip's `root_pos` plus `joint_rot`, passed positionally (it is a distinct type, so a swap is not expressible) with every other parameter keyword-only. The container is frozen and validates frame counts once at construction, which is why no function re-checks them. It exists so a later stream — per-joint positions in 0.6.0 — is additive rather than an arity break at every call site. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
+1. **Every array-level function takes and returns a `MotionArrays`** — augmentation, the pipeline, the packers, and `convert_arrays` — one clip's `root_pos` plus its rotation and position streams, passed positionally (it is a distinct type, so a swap is not expressible) with every other parameter keyword-only. The container is frozen and validates shapes and frame counts once at construction, which is why no function re-checks them. It exists so a later stream is additive rather than an arity break at every call site — 0.6.0's `joint_pos` / `node_pos` are what cashed that in, at zero call-site cost. All arguments are keyword-only to prevent silent-corruption swaps on shape-compatible ndarrays.
 2. **`convert_rotations` routes through rotation matrices** as intermediate (and `convert_arrays` is a thin container-level wrapper over it). Per-joint Euler orders are handled by grouping joints by unique order and batch-converting each group.
 3. **Packing zero-pads root only** — root has 3 channels (position), joints have C_joint channels. In CTV/TVC layouts, `C = max(3, C_joint)`. Since C_joint >= 3 for all real representations, joint data is never padded.
 4. **Mirror math**: quaternion mirror negates the two imaginary components NOT at the lateral axis. 6D mirror uses `R'[i,j] = s_i * s_j * R[i,j]` where `s[lateral] = -1`. Both derived from `R' = S @ R @ S`.
@@ -260,7 +277,7 @@ Both dispatch paths route their probability draw and kwarg resolution through on
 
 ## 8. Test Patterns
 
-Unit tests are in `tests/test_pybvh_ml.py` (42 test classes) plus `tests/test_torch_datasets.py` (10 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 543 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training) for 1095 with them. Test BVH files are in `bvh_data/` at the project root.
+Unit tests are in `tests/test_pybvh_ml.py` (44 test classes) plus `tests/test_position_streams.py` (12 classes — the 0.6.0 position streams end to end, with purpose-built rigs for the end-site-mismatch check, the asymmetric-rest-offset order dependence, and a name collision), `tests/test_torch_datasets.py` (10 classes, module-level `pytest.importorskip("torch")` so the suite collects without torch), `tests/test_no_pybvh_deprecation.py`, `tests/test_no_global_state_mutation.py`, `tests/test_docs_api_coverage.py` (the API reference stays two-way in sync with the modules; `__all__` names resolve), and `tests/test_gallery_notebook.py` (the gallery jupytext pair stays synced and its committed outputs fresh) — 675 tests total; `tests/integration/` adds real-data sweeps (representation parity, seeding determinism, pipeline staging, end-to-end MLP training) for 1227 with them. Test BVH files are in `bvh_data/` at the project root.
 
 **Fixtures** (shared ones live in `tests/conftest.py`):
 - `bvh_example` — loads `bvh_data/bvh_test1.bvh` (24 joints, ZYX)

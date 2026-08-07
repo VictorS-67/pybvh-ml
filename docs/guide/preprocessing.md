@@ -26,12 +26,13 @@ Supported representations: `"euler"`, `"quat"`, `"6d"`, `"axisangle"` (validated
 
 The dataset file is self-sufficient — everything needed at training time, no reopening source BVHs:
 
-- **Per-clip arrays**: `root_pos`, `joint_rot`, plus optional velocities, foot contacts, quaternions, and labels (below). Datasets written before 0.5.0 name the rotations `joint_data` on disk; both keys load, and `load_preprocessed` always hands back `joint_rot`.
+- **Per-clip arrays**: `root_pos`, `joint_rot`, plus optional positions (below), velocities, foot contacts, quaternions, and labels. Datasets written before 0.5.0 name the rotations `joint_data` on disk; both keys load, and `load_preprocessed` always hands back `joint_rot`.
 
-  The optional three are **static features**: unlike `joint_rot` they are not refreshed by augmentation, so use them for evaluation and targets rather than as augmentation-invariant training inputs.
-- **Skeleton metadata** (`skeleton_info`): joint names, edges, L/R pairs, Euler orders — and the `world_up` / `rest_forward` / `rest_up` axis strings, so runtime augmentation can be configured straight from the loaded dict. Every key is always present: a dataset written before a key existed loads it as `None` rather than omitting it, so there's no `.get()` dance.
-- **Normalization statistics**: per-channel `mean` / `std` over all frames, plus a `constant_channels` bool mask (columns whose raw std was below `1e-8`, guarded to `1.0`).
+  Velocities, foot contacts and quaternions are **static features**: unlike `joint_rot` they are not refreshed by augmentation, so use them for evaluation and targets rather than as augmentation-invariant training inputs. `joint_pos` / `node_pos` differ in kind — they are augmentable streams that every geometric step transforms and `add_joint_rotation_noise` re-derives.
+- **Skeleton metadata** (`skeleton_info`): joint names, edges, L/R pairs, Euler orders, the node-space equivalents, the FK topology — and the `world_up` / `rest_forward` / `rest_up` axis strings, so runtime augmentation can be configured straight from the loaded dict. Every key is always present: a dataset written before a key existed loads it as `None` rather than omitting it, so there's no `.get()` dance.
+- **Normalization statistics**: per-channel `mean` / `std` over all frames, plus a `constant_channels` bool mask (columns whose raw std was below `1e-8`, guarded to `1.0`). Positions get their **own** `position_stats` block rather than widening these — see below.
 - **The `center_root` flag**: whether the stored `root_pos` arrays were centered at preprocessing time (default `True`). Files from older versions load with `None` (unknown).
+- **The `position_centering` value**: which frame the stored positions are in, or `None` when the dataset carries none.
 - **The uniformity audit** (`uniformity`): per-axis and per-frame-rate value counts across the corpus — the *pre-transform* snapshot — plus a record of what was then applied to it: `harmonized_to` (resolved targets, the `retarget` choice, per-stage modification counts) when harmonizing, or `applied_targets` (the `target_*` kwargs this call applied directly) when not. The transformation trail is auditable from the file itself: a corpus resampled to 30 Hz records both the rates it came from and the rate it is now at. Rigs whose rest pose is too degenerate to measure appear under the `rest_up` key `"unknown"`.
 
 ## Richer outputs
@@ -54,6 +55,40 @@ Two notes:
 
 - Pass `foot_joints=` explicitly for footless or nonstandard rigs where auto-detection finds nothing.
 - For `representation="quat"`, `include_quaternions=True` stores nothing extra — the main `joint_rot` already *is* the quaternion array, and the loader aliases `clip["joint_quats"]` to it instead of duplicating storage.
+
+## Storing positions
+
+Skeleton action recognition consumes joint *positions* almost exclusively. `include_positions=True` stores them alongside (or instead of) the rotations:
+
+```python
+preprocess_directory(
+    "dataset/", "train.npz", representation="6d",
+    include_positions=True,
+    position_space="joint",          # or "node" — end sites included
+    position_centering="skeleton",   # or "world" / "first"
+    center_root=False,
+)
+```
+
+They come from `bvh.joint_positions()` / `bvh.node_positions()`, both backed by pybvh's cached world-frame FK, so requesting positions alongside a rotation representation costs one array derivation rather than a second kinematics pass.
+
+**The two settings live in different places, deliberately.** `position_space` goes into **`skeleton_info`**: it is a topology fact — which index space, and therefore which `V`, which edge list, which L/R pair list — sitting next to `num_joints` / `num_nodes` / `edges`, exactly as `foot_joints` does. `position_centering` goes into **dataset-level metadata**, next to `center_root`, which is its exact analogue: a statement about the values, not the topology.
+
+Pick the centering deliberately — the three coincide only for a clip whose root never moves:
+
+- **`"world"`** keeps positions in the same frame as `root_pos`, so `rotate_vertical` acts identically on both and a joint position already contains the root trajectory.
+- **`"skeleton"`** puts the root at the origin every frame — the form most NTU-style pipelines feed a model, with the trajectory then carried only by `root_pos`.
+- **`"first"`** is pybvh's ground-plane centering.
+
+`center_root=True` (the default) combines with `"world"` by applying the identical all-three-component shift to every position vertex, and with `"skeleton"` by leaving the positions alone (they are already root-relative). **`center_root=True` with `"first"` is rejected.** Ground-plane centering subtracts only the two non-up components, so those positions are in a frame offset from `root_pos` and stay offset however the root is centered. A transient container tolerates that — the packers shift both and preserve the relationship — but a *written* dataset must not, because the recorded `center_root=True` would suggest a coherence between the two streams that ground-plane centering never established.
+
+Recording the centering is mandatory for anything this library writes — a stored position array whose frame convention we failed to record is unrecoverable — and `load_preprocessed` surfaces it so it can be threaded onto every `MotionArrays` the Dataset classes mint.
+
+### Position normalization statistics
+
+`position_stats` is a separate `{"mean", "std", "constant_channels"}` block over the `(F, V*3)` flattening, **not** a widened `mean` / `std`. The existing vector's `D = 3 + J*C` layout is a documented public contract matched by `pack_to_flat`, `describe_features` and the HumanML3D `Mean.npy` / `Std.npy` convention; silently changing `D` based on a preprocessing flag would make one file format mean two things.
+
+Ignoring these stats entirely is a legitimate choice: ST-GCN pipelines more commonly root-center or normalize by bone length than z-score raw coordinates.
 
 ## Frame rate
 
