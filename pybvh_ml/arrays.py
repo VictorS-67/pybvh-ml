@@ -64,7 +64,9 @@ class MotionArrays:
     Parameters
     ----------
     root_pos : ndarray, shape (F, 3)
-        Root translation per frame.  Always present.
+        Root translation per frame.  Always present — see
+        **Keypoint-only clips** below if your source has no root
+        trajectory.
     joint_rot : ndarray, shape (F, J, C), optional
         Per-joint rotations in whatever representation the caller
         declares at the call site.  The container does not record which
@@ -95,6 +97,31 @@ class MotionArrays:
 
     Notes
     -----
+    **Keypoint-only clips: "positions-only" means rotation-free, not
+    root-free.** ``representation=None`` and a bare ``joint_pos`` is a
+    supported clip, but ``root_pos`` stays mandatory, so a source with
+    no root trajectory — pose-estimator keypoints, the usual ST-GCN
+    arrival path — has to supply something.  ``np.zeros((F, 3))`` is the
+    convention, and it is safe **only** if you then keep ``"root_pos"``
+    out of ``streams=``.  Two things go quietly wrong otherwise:
+    ``center_root=True`` becomes a no-op that looks like it worked (it
+    subtracts a zero first frame), and any packing that includes
+    ``"root_pos"`` puts a vertex of zeros at index 0, which the model
+    reads as a joint and which shifts every real joint one place out of
+    step with ``skeleton_info["edges"]``.  So pack
+    ``streams=("joint_pos",)`` — which is the canonical ST-GCN layout
+    anyway — and the fabricated array never reaches a tensor.  If the
+    keypoint set has a pelvis or hip, using it as ``root_pos`` is
+    strictly better than zeros: the trajectory becomes real and both
+    hazards disappear.
+
+    Why mandatory: ``root_pos`` is the container's frame count and the
+    reference point every centering convention is stated against, so
+    an optional root would make ``F`` and ``position_centering``
+    conditional on which streams happen to be present.  Making it
+    genuinely optional is a coherent change and a large one — it is
+    scoped for a later release, not an oversight here.
+
     **Pick one position space, not both.** ``joint_pos`` is a subset of
     ``node_pos`` — ``node_pos[:, joint_idx >= 0]`` is exactly
     ``joint_pos``, with ``joint_idx`` from

@@ -293,16 +293,28 @@ rotmat = convert_rotations(quats, from_repr="quat", to_repr="rotmat")
 
 Supported by both: `"euler"`, `"quat"`, `"6d"`, `"axisangle"`, `"rotmat"` — any pair. Euler angles are radians, per-joint orders respected.
 
-## What 0.6.0 does not ship
+## A HumanML3D-style frame vector, and what 0.6.0 does not ship
 
-HumanML3D's 263-dimensional frame vector (4 root + 63 joint positions + 126 rotations as 6D + 66 velocities + 4 foot contacts) is what motivates carrying rotations and positions together, but it is not fully served by this release: **velocities and foot contacts stay deferred**, and the ones `preprocess_directory` can store are static features that augmentation does not refresh.
-
-A velocity stream looks like another `(F, J, 3)` array and is not one: under `speed_perturbation_arrays` a velocity has to be *rescaled by the factor*, not merely resampled. The reliable recipe is to derive it after augmentation, by finite-differencing the augmented positions:
+The rotation and position halves now travel together, from one preprocessing run to one flat vector, augmented coherently:
 
 ```python
-out = pipeline(arrays, rng=rng)
-velocities = np.diff(out.joint_pos, axis=0, prepend=out.joint_pos[:1]) / dt
+preprocess_directory("dataset/", "train.npz", representation="6d", target_fps=20,
+                     include_positions=True, position_centering="skeleton")
+
+data = load_preprocessed("train.npz")
+ds = MotionDataset.from_preprocessed(
+    data, layout="flat",
+    streams=("root_pos", "joint_rot", "joint_pos", "joint_vel"),
+    augmentation=AugmentationPipeline.standard(data["skeleton_info"]),
+    temporal="crop", target_length=64)
+# D = 3 + J*6 + J*3 + J*3, with describe_features(J, "6d", streams=...) naming the blocks
 ```
+
+`position_centering="skeleton"` is what makes the position block root-relative, HumanML3D's `ric_data` convention; the trajectory then lives only in the `root_pos` columns.
+
+HumanML3D's full 263-dimensional frame vector (4 root + 63 joint positions + 126 rotations as 6D + 66 velocities + 4 foot contacts) is what motivates carrying rotations and positions together, but it is not fully served by this release: **foot contacts and the 4 root channels stay deferred.** `preprocess_directory` can store foot contacts, but as a static feature that augmentation does not refresh. The root channels differ in kind — HumanML3D stores root *velocities* (angular about the up axis, linear in the ground plane) plus root height, in a per-frame body-facing frame; `root_pos` is the raw trajectory, and the gap is a canonicalization rather than a derivative.
+
+**Velocities are served**, by [`joint_vel` / `joint_acc`](tensor-layouts.md#velocity-and-acceleration-joint_vel-joint_acc) — but as *derived* streams, not carried ones. A velocity array looks like another `(F, J, 3)` stream and is not one: under `speed_perturbation_arrays` a carried velocity would have to be *rescaled by the factor*, not merely resampled, and every geometric step would need its own rule. Differencing at packing time instead — after all augmentation, before temporal standardization — makes the rescale fall out of the arithmetic, and is what lets the library get the padding and resampling cases right that a hand-rolled `torch.diff` in a `collate_fn` cannot.
 
 ## See also
 

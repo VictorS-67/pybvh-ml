@@ -15,7 +15,7 @@ ML bridge layer for [pybvh](https://github.com/VictorS-67/pybvh) — turn motion
 ## Features
 
 - **Tensor packing** to `(C, T, V)`, `(T, V, C)`, and flat `(T, D)` layouts with round-trip unpacking, and a `streams=` that picks what goes in — `pack_to_ctv(arrays, streams=("joint_pos",))` is the `(3, T, J)` ST-GCN input.
-- **Rotations and positions together** — one clip carries `joint_rot`, `joint_pos` and `node_pos` (end sites included), with the frame convention recorded alongside them.
+- **Rotations and positions together** — one clip carries `joint_rot`, `joint_pos` and `node_pos` (end sites included), with the frame convention recorded alongside them, plus derived `joint_vel` / `joint_acc` streams differenced at the one point in the pipeline where they come out right.
 - **Array-level augmentation** in quaternion, 6D, axis-angle, rotmat, and Euler — keyword-only, no `Bvh` round-trip, with composable pipelines and reproducible per-epoch seeding. Every step transforms every stream it is given, or refuses the sample.
 - **Preprocessing pipelines** — BVH directory → on-disk dataset (`.npz` / `.hdf5`) with skeleton-aware harmonization for heterogeneous corpora and dataset-wide z-score normalization.
 - **Skeleton-graph metadata** — edge lists, body-part partitions, L/R pairs in both joint and node space, and the forward-kinematics topology, for GCN and Transformer models.

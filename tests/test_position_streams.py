@@ -23,7 +23,9 @@ from pybvh_ml import (
     add_node_position_noise,
     add_root_position_noise,
     build_fk_topology,
+    convert_rotations,
     describe_features,
+    describe_graph_features,
     dropout_arrays,
     find_mismatched_end_site_pairs,
     get_skeleton_info,
@@ -32,11 +34,13 @@ from pybvh_ml import (
     mirror,
     pack_to_ctv,
     pack_to_flat,
+    pack_to_tvc,
     preprocess_directory,
     rotate_vertical,
     speed_perturbation_arrays,
     stream_support,
 )
+from pybvh_ml.sequences import uniform_temporal_sample
 
 
 # =========================================================================
@@ -1050,3 +1054,756 @@ class TestPositionDtype:
             [(add_joint_position_noise, prob, {"sigma": 0.1})])
         out = pipe(arrays, rng=np.random.default_rng(0))
         assert not np.shares_memory(out.joint_pos, arrays.joint_pos)
+
+
+# =========================================================================
+# The motivating example, and the half of it that is deferred
+# =========================================================================
+
+class TestHumanML3DStyleVector:
+    """A HumanML3D-*style* frame vector, end to end, and its limits.
+
+    0.6.0 is what makes the rotation and position halves travel together
+    through one augmented pipeline into one flat vector, so that half is
+    asserted here as a whole rather than only per-component.  The
+    velocity and foot-contact components stay deferred, and the last two
+    tests pin that deferral: they are the guard against the docs' claim
+    quietly becoming false in either direction.
+    """
+
+    FPS = 20  # HumanML3D's rate; makes dt in the velocity recipe concrete.
+
+    @pytest.fixture
+    def loaded(self, tmp_path, bvh_dir):
+        d = tmp_path / "clips"
+        d.mkdir()
+        for name in ("one", "two"):
+            (d / f"{name}.bvh").write_text(
+                (bvh_dir / "bvh_test1.bvh").read_text())
+        out = tmp_path / "ds.npz"
+        preprocess_directory(
+            d, out, representation="6d", target_fps=self.FPS,
+            include_positions=True,
+            position_centering="skeleton",   # ric_data is root-relative
+            include_velocities=True, include_foot_contacts=True)
+        return load_preprocessed(out)
+
+    def test_frame_vector_carries_rotations_and_positions(self, loaded):
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        streams = ("root_pos", "joint_rot", "joint_pos")
+        J = loaded["skeleton_info"]["num_joints"]
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="flat", streams=streams,
+            augmentation=AugmentationPipeline.standard(
+                loaded["skeleton_info"]),
+            temporal="crop", target_length=64, seed=0)
+        ds.set_epoch(0)
+
+        sample = ds[0]["data"]
+        assert tuple(sample.shape) == (64, 3 + J * 6 + J * 3)
+
+        layout = describe_features(J, "6d", streams=streams)
+        assert layout.total_dim == sample.shape[1]
+        assert layout["root_pos"] == (0, 3)
+        assert layout["joint_rotations"] == (3, 3 + J * 6)
+        assert layout["joint_positions"] == (3 + J * 6, layout.total_dim)
+
+    def test_batch_reaches_a_model(self, loaded):
+        torch = pytest.importorskip("torch")
+        from torch.utils.data import DataLoader
+
+        from pybvh_ml.torch import MotionDataset, collate_motion_batch
+
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="flat",
+            streams=("root_pos", "joint_rot", "joint_pos"),
+            temporal="crop", target_length=32, seed=0)
+        batch = next(iter(DataLoader(ds, batch_size=2,
+                                     collate_fn=collate_motion_batch)))
+        model = torch.nn.Linear(batch["data"].shape[-1], 8)
+        model(batch["data"]).square().mean().backward()
+        assert torch.isfinite(model.weight.grad).all()
+
+    def test_stgcn_shaped_positions_come_from_the_same_file(self, loaded):
+        """One preprocessing run serves both consumers: the flat
+        generation vector and the (C, T, V) recognition tensor."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="ctv", streams=("joint_pos",),
+            temporal="resample", target_length=64, seed=0)
+        ds.set_epoch(0)
+        assert tuple(ds[0]["data"].shape) == (
+            3, 64, loaded["skeleton_info"]["num_joints"])
+
+    def test_velocity_is_derived_after_augmentation(self, loaded):
+        """The documented recipe, and the reason it is a recipe rather
+        than a stream: the stored array is a static feature whose frame
+        count no longer describes a temporally augmented clip."""
+        clip = loaded["clips"][0]
+        arrays = MotionArrays(
+            root_pos=clip["root_pos"], joint_rot=clip["joint_rot"],
+            joint_pos=clip["joint_pos"], position_centering="skeleton")
+        faster = speed_perturbation_arrays(arrays, factor=2.0,
+                                           representation="6d")
+
+        velocities = np.diff(faster.joint_pos, axis=0,
+                             prepend=faster.joint_pos[:1]) * self.FPS
+        assert velocities.shape == faster.joint_pos.shape
+        assert np.isfinite(velocities).all()
+        assert clip["velocities"].shape[0] != velocities.shape[0]
+
+    def test_velocities_and_contacts_are_not_streams(self, loaded):
+        """Deferred means deferred: they are stored per clip, but neither
+        the container nor the packers know the names."""
+        clip = loaded["clips"][0]
+        assert set(clip) >= {"velocities", "foot_contacts"}
+        arrays = MotionArrays(root_pos=clip["root_pos"],
+                              joint_rot=clip["joint_rot"])
+        for name in ("velocities", "foot_contacts"):
+            with pytest.raises(ValueError, match="unknown stream name"):
+                handles_streams("root_pos", name)
+            with pytest.raises(ValueError, match="unknown stream name"):
+                pack_to_flat(arrays, streams=("root_pos", name))
+            with pytest.raises(TypeError):
+                MotionArrays(root_pos=clip["root_pos"],
+                             **{name: clip[name]})
+
+
+# =========================================================================
+# Derived temporal streams
+# =========================================================================
+
+class TestDerivedStreams:
+    """Velocity and acceleration as pack-time streams.
+
+    The properties worth pinning are all about *when* the difference is
+    taken.  Derivation runs after augmentation and before temporal
+    standardization, which is the only placement where a padded clip
+    produces no boundary spike and a resampled one is subsampled rather
+    than differenced across random gaps.
+    """
+
+    @pytest.fixture
+    def arrays(self, bvh_example):
+        return MotionArrays.from_bvh(
+            bvh_example, "6d", include_positions=True,
+            position_centering="skeleton")
+
+    # -- shapes and layout -------------------------------------------
+
+    def test_shapes_and_describe_features_agree(self, arrays, bvh_example):
+        J = bvh_example.joint_count
+        streams = ("joint_pos", "joint_vel", "joint_acc")
+        packed = pack_to_ctv(arrays, center_root=False, streams=streams)
+        assert packed.shape == (9, bvh_example.frame_count, J)
+
+        flat = pack_to_flat(arrays, center_root=False, streams=streams)
+        layout = describe_features(J, streams=streams)
+        assert layout.total_dim == flat.shape[1] == J * 9
+        assert layout["joint_positions"] == (0, J * 3)
+        assert layout["joint_velocities"] == (J * 3, J * 6)
+        assert layout["joint_accelerations"] == (J * 6, J * 9)
+
+    def test_velocity_only_is_the_motion_stream(self, arrays, bvh_example):
+        """A derived stream needs its base present, not packed."""
+        packed = pack_to_ctv(arrays, center_root=False,
+                             streams=("joint_vel",))
+        assert packed.shape == (3, bvh_example.frame_count,
+                                bvh_example.joint_count)
+
+    def test_node_space_derived_streams(self, bvh_example):
+        arrays = MotionArrays.from_bvh(
+            bvh_example, None, include_positions=True,
+            position_space="node", position_centering="skeleton")
+        packed = pack_to_ctv(arrays, center_root=False,
+                             streams=("node_pos", "node_vel"))
+        assert packed.shape == (6, bvh_example.frame_count,
+                                len(bvh_example.nodes))
+
+    def test_flat_column_order_follows_streams(self, arrays, bvh_example):
+        J = bvh_example.joint_count
+        F = bvh_example.frame_count
+        flat = pack_to_flat(arrays, center_root=False,
+                            streams=("joint_vel", "joint_pos"))
+        layout = describe_features(J, streams=("joint_vel", "joint_pos"))
+        np.testing.assert_allclose(
+            flat[:, layout.slice("joint_positions")],
+            np.asarray(arrays.joint_pos).reshape(F, -1))
+
+    # -- the boundary rule -------------------------------------------
+
+    def test_first_k_frames_are_zero(self, arrays):
+        """An order-k stream zeroes its first k frames, so no channel
+        carries a lower-order difference in disguise."""
+        packed = pack_to_tvc(arrays, center_root=False,
+                             streams=("joint_vel", "joint_acc"))
+        vel, acc = packed[..., :3], packed[..., 3:]
+        np.testing.assert_allclose(vel[0], 0.0, atol=0)
+        np.testing.assert_allclose(acc[0], 0.0, atol=0)
+        np.testing.assert_allclose(acc[1], 0.0, atol=0)
+        # The artifact the rule removes: prepending twice would leave
+        # acc[1] == vel[1].
+        assert not np.allclose(acc[1], vel[1])
+        assert np.any(np.abs(vel[1]) > 0)
+
+    def test_a_window_past_the_clip_start_has_no_leading_zeros(
+            self, tmp_path, bvh_dir):
+        """The other half of the rule: the zeros sit at the true clip
+        start, so a center crop that begins later gets real
+        measurements at every frame."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        F = loaded["clips"][0]["joint_pos"].shape[0]
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="ctv", streams=("joint_acc",),
+            temporal="crop", target_length=F // 2)
+        packed = ds[0]["data"].numpy()
+        assert np.any(np.abs(packed[:, 0]) > 0)
+        assert np.any(np.abs(packed[:, 1]) > 0)
+
+    # -- the ordering, which is the whole point ----------------------
+
+    def test_padding_produces_no_boundary_spike(self, tmp_path, bvh_dir):
+        """Derivation before padding means the velocity stream is padded
+        with zeros like its base — the 3.9x phantom spike that a
+        difference of the padded positions produces cannot occur."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        F = loaded["clips"][0]["joint_pos"].shape[0]
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="ctv", streams=("joint_pos", "joint_vel"),
+            temporal="pad", target_length=F + 40)
+        item = ds[0]
+        length = int(item["length"])
+        assert length == F
+        vel = item["data"].numpy()[3:]
+        np.testing.assert_allclose(vel[:, length:], 0.0, atol=0)
+
+        # What the naive recipe would have produced at the same frame.
+        pos = item["data"].numpy()[:3]
+        recipe = np.diff(pos, axis=1, prepend=pos[:, :1])
+        assert (np.abs(recipe[:, length]).max()
+                > 3 * np.abs(vel[:, 1:length]).max())
+
+    def test_resample_subsamples_rather_than_differencing_gaps(
+            self, tmp_path, bvh_dir):
+        """The load-bearing property: under resample the derived stream
+        is the per-frame velocity of the augmented clip read at the
+        sampled indices — exactly, not to a tolerance."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="tvc", streams=("joint_pos", "joint_vel"),
+            temporal="resample_deterministic", target_length=32)
+        packed = ds[0]["data"].numpy()
+        sampled_pos, sampled_vel = packed[..., :3], packed[..., 3:]
+
+        full_pos = np.asarray(ds._clip_arrays(0).joint_pos, dtype=np.float64)
+        full_vel = np.diff(full_pos, axis=0, prepend=full_pos[:1])
+        full_vel[0] = 0.0
+        indices = uniform_temporal_sample(
+            full_pos.shape[0], 32, mode="test", rng=None) % full_pos.shape[0]
+        np.testing.assert_allclose(sampled_vel, full_vel[indices].astype(
+            np.float32), rtol=0, atol=1e-6)
+        np.testing.assert_allclose(sampled_pos, full_pos[indices].astype(
+            np.float32), rtol=0, atol=1e-6)
+
+    def test_random_resample_subsamples_too(self, tmp_path, bvh_dir):
+        """The same property in the mode that actually jitters.
+
+        Recovers the sampled indices by matching packed position frames
+        back to the full clip rather than replaying the sampler's rng —
+        an oracle technique from emo_mocap's downstream probe. It covers
+        ``mode="train"``, which replaying cannot, and it cannot be
+        satisfied by a magnitude coincidence: every frame must match the
+        full-clip derivative at its own recovered instant.
+        """
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="tvc", streams=("joint_pos", "joint_vel"),
+            temporal="resample", target_length=48, seed=7)
+        ds.set_epoch(3)
+        packed = ds[0]["data"].numpy().astype(np.float64)
+        sampled_pos, sampled_vel = packed[..., :3], packed[..., 3:]
+
+        full_pos = np.asarray(ds._clip_arrays(0).joint_pos, dtype=np.float64)
+        full_vel = np.diff(full_pos, axis=0, prepend=full_pos[:1])
+        full_vel[0] = 0.0
+
+        recovered = [
+            int(np.argmin(np.abs(full_pos - frame).sum(axis=(1, 2))))
+            for frame in sampled_pos]
+        np.testing.assert_allclose(sampled_vel, full_vel[recovered], atol=1e-5)
+        # The draw has to be non-uniform for the test to mean anything —
+        # a stride-1 sample would satisfy it trivially.
+        assert len(set(np.diff(recovered))) > 1
+
+    def test_wraparound_on_a_short_clip_has_no_seam_spike(
+            self, tmp_path, bvh_dir):
+        """A clip shorter than target_length wraps via % F. Wrapped
+        indices repeat real measurements; they never straddle the
+        clip-end -> clip-start seam, which a post-sampling difference
+        would have turned into a ~19x spike."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        full = np.asarray(loaded["clips"][0]["joint_pos"], dtype=np.float64)
+        largest_real = np.abs(np.diff(full, axis=0)).max()
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="ctv", streams=("joint_vel",),
+            temporal="resample", target_length=full.shape[0] * 2, seed=0)
+        ds.set_epoch(0)
+        assert np.abs(ds[0]["data"].numpy()).max() <= largest_real * 1.001
+
+    # -- the diff relationship, per order ----------------------------
+
+    @pytest.mark.parametrize("temporal", ["pad", "crop"])
+    def test_derived_equals_the_recipe_on_frames_k_onward(
+            self, tmp_path, bvh_dir, temporal):
+        """Under pad/crop an order-k stream matches the k-th difference
+        of the packed positions from frame k on. Not from frame 1: at
+        frame 1 the recipe's second difference is the *first*
+        difference, which is the artifact the zero rule removes."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="tvc",
+            streams=("joint_pos", "joint_vel", "joint_acc"),
+            temporal=temporal, target_length=40)
+        item = ds[0]
+        length = int(item["length"])
+        packed = item["data"].numpy().astype(np.float64)
+        pos, vel, acc = packed[..., :3], packed[..., 3:6], packed[..., 6:]
+
+        d1 = np.diff(pos, axis=0)
+        d2 = np.diff(d1, axis=0)
+        np.testing.assert_allclose(vel[1:length], d1[:length - 1], atol=1e-5)
+        np.testing.assert_allclose(acc[2:length], d2[:length - 2], atol=1e-5)
+
+    def test_resample_diverges_from_the_recipe_at_both_orders(
+            self, tmp_path, bvh_dir):
+        """The other half of the contract, and the reason it is
+        documented: under resample the packed derived streams are
+        deliberately NOT the differences of the packed positions. The
+        gap inflates the recipe linearly at order 1 and quadratically at
+        order 2."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="tvc",
+            streams=("joint_pos", "joint_vel", "joint_acc"),
+            temporal="resample_deterministic", target_length=16)
+        packed = ds[0]["data"].numpy().astype(np.float64)
+        pos, vel, acc = packed[..., :3], packed[..., 3:6], packed[..., 6:]
+
+        r1 = (np.abs(np.diff(pos, axis=0)).mean()
+              / np.abs(vel[1:]).mean())
+        r2 = (np.abs(np.diff(pos, axis=0, n=2)).mean()
+              / np.abs(acc[2:]).mean())
+        assert r1 > 2.0
+        assert r2 > r1  # quadratic in the gap, not linear
+
+    # -- no double derivation ----------------------------------------
+
+    def test_layout_packers_are_the_consuming_entries(self):
+        """The Dataset tail materializes once and packs what it holds.
+        Routing it through the public packers would derive a second
+        time and turn a velocity into an acceleration."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import datasets as _ds
+        from pybvh_ml import packing
+
+        assert set(_ds._LAYOUT_PACKERS.values()) == {
+            packing._pack_flat_materialized,
+            packing._pack_ctv_materialized,
+            packing._pack_tvc_materialized,
+        }
+
+    def test_dataset_velocity_is_a_first_difference_not_a_second(
+            self, tmp_path, bvh_dir):
+        """The value-level companion: catches any path that
+        re-materializes, including one added later."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        ds = MotionDataset.from_preprocessed(
+            loaded, layout="tvc", streams=("joint_vel",), temporal="pad")
+        packed = ds[0]["data"].numpy().astype(np.float64)
+
+        full = np.asarray(ds._clip_arrays(0).joint_pos, dtype=np.float64)
+        first = np.diff(full, axis=0, prepend=full[:1])
+        first[0] = 0.0
+        second = np.diff(first, axis=0, prepend=first[:1])
+        second[:2] = 0.0
+        np.testing.assert_allclose(packed, first, atol=1e-5)
+        assert not np.allclose(packed, second, atol=1e-5)
+
+    # -- invariants and refusals -------------------------------------
+
+    def test_center_root_cannot_change_a_derived_stream(self, bvh_example):
+        """Across a real center_root pair, not a hand-built offset: the
+        invariant holds because the shift is constant in time, and only
+        a per-frame shift would break it."""
+        arrays = MotionArrays.from_bvh(
+            bvh_example, None, include_positions=True,
+            position_centering="world")
+        centered = pack_to_ctv(arrays, center_root=True,
+                               streams=("joint_vel", "joint_acc"))
+        raw = pack_to_ctv(arrays, center_root=False,
+                          streams=("joint_vel", "joint_acc"))
+        np.testing.assert_allclose(centered, raw, atol=1e-12)
+
+    def test_undeclared_centering_is_refused(self, bvh_example):
+        """A difference of 'world' positions is world velocity; of
+        'skeleton' positions, velocity relative to the root. Same shape,
+        different quantity — so the frame is not guessed."""
+        source = MotionArrays.from_bvh(
+            bvh_example, None, include_positions=True)
+        arrays = MotionArrays(root_pos=source.root_pos,
+                              joint_pos=source.joint_pos)
+        assert arrays.position_centering is None
+        with pytest.raises(ValueError, match="position_centering is None"):
+            pack_to_ctv(arrays, center_root=False, streams=("joint_vel",))
+        # ... while the base stream alone is still fine.
+        pack_to_ctv(arrays, center_root=False, streams=("joint_pos",))
+
+    def test_undeclared_centering_is_refused_at_construction(
+            self, tmp_path, bvh_dir):
+        """Like every other stream problem, a misconfigured dataset says
+        so before a training run starts — not on the first sample."""
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset, OnTheFlyDataset
+
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        loaded["position_centering"] = None
+        with pytest.raises(ValueError, match="position_centering is None"):
+            MotionDataset.from_preprocessed(
+                loaded, layout="ctv", streams=("joint_vel",))
+
+        with pytest.raises(ValueError, match="position_centering is None"):
+            OnTheFlyDataset(
+                [bvh_dir / "bvh_test1.bvh"], representation=None,
+                layout="ctv", streams=("joint_vel",),
+                include_positions=True, position_space="joint",
+                position_centering=None)
+
+    def test_missing_base_names_the_base(self, bvh_example):
+        arrays = MotionArrays.from_bvh(bvh_example, "6d")
+        with pytest.raises(ValueError, match=r"needs \['joint_pos'\]"):
+            pack_to_ctv(arrays, streams=("joint_vel",))
+
+    def test_node_derived_cannot_join_a_joint_space_stream(self, bvh_example):
+        arrays = MotionArrays.from_bvh(
+            bvh_example, "6d", include_positions=True,
+            position_space="node", position_centering="skeleton")
+        with pytest.raises(ValueError, match="cannot combine 'node_vel'"):
+            pack_to_ctv(arrays, streams=("node_vel", "joint_rot"))
+
+    def test_describe_features_needs_num_nodes_for_derived_node_blocks(self):
+        """The one guard whose absence yields a wrong layout rather than
+        an error: a zero-width block instead of a raise."""
+        with pytest.raises(ValueError, match="num_nodes"):
+            describe_features(24, streams=("node_vel",))
+        layout = describe_features(24, streams=("node_vel",), num_nodes=31)
+        assert layout.total_dim == 31 * 3
+
+    @pytest.mark.parametrize("name", ["joint_vel", "node_acc"])
+    def test_derived_streams_are_not_augmentable(self, name):
+        """Accepted by the packers, rejected by the container and by the
+        step declarations — and the message says why."""
+        with pytest.raises(ValueError, match="cannot be augmented"):
+            handles_streams("root_pos", name)
+        with pytest.raises(TypeError):
+            MotionArrays(root_pos=np.zeros((4, 3)), **{name: np.zeros((4, 2, 3))})
+
+    # -- degenerate lengths ------------------------------------------
+
+    def test_empty_and_short_clips_do_not_raise(self):
+        """_derive is total: no frame has k predecessors in a clip of
+        fewer than k frames, and all-zeros says exactly that."""
+        empty = MotionArrays(root_pos=np.zeros((0, 3)),
+                             joint_pos=np.zeros((0, 5, 3)),
+                             position_centering="skeleton")
+        assert pack_to_ctv(empty, center_root=False,
+                           streams=("joint_acc",)).shape == (3, 0, 5)
+
+        one_frame = MotionArrays(root_pos=np.zeros((1, 3)),
+                                 joint_pos=np.ones((1, 5, 3)),
+                                 position_centering="skeleton")
+        packed = pack_to_ctv(one_frame, center_root=False,
+                             streams=("joint_acc",))
+        np.testing.assert_allclose(packed, 0.0, atol=0)
+
+    def test_speed_perturbation_scales_the_derived_velocity(self, arrays):
+        """The claim the whole design rests on, asserted: a derivative
+        taken after geometric augmentation reflects it, with no rescale
+        rule anywhere in the code."""
+        faster = speed_perturbation_arrays(arrays, factor=2.0,
+                                           representation="6d")
+        slow = pack_to_ctv(arrays, center_root=False, streams=("joint_vel",))
+        fast = pack_to_ctv(faster, center_root=False, streams=("joint_vel",))
+        ratio = np.abs(fast[:, 1:]).mean() / np.abs(slow[:, 1:]).mean()
+        assert 1.6 < ratio < 2.4
+
+
+# =========================================================================
+# Downstream report follow-ups
+# =========================================================================
+
+class TestSummaryReportsItsDecisions:
+    """``preprocess_directory``'s return value is a report on the run.
+
+    It carries the decisions and the audit, never the arrays.  The gap
+    a downstream CLI hit: it described a positions dataset's *topology*
+    (via ``skeleton_info["position_space"]``) while omitting which frame
+    the values were in.
+    """
+
+    @pytest.fixture
+    def clip_dir(self, tmp_path, bvh_dir):
+        d = tmp_path / "clips"
+        d.mkdir()
+        (d / "one.bvh").write_text((bvh_dir / "bvh_test1.bvh").read_text())
+        return d
+
+    def test_position_decisions_are_reported(self, clip_dir, tmp_path):
+        summary = preprocess_directory(
+            clip_dir, tmp_path / "ds.npz", representation="6d",
+            include_positions=True, position_centering="skeleton",
+            center_root=False)
+        assert summary["position_centering"] == "skeleton"
+        assert summary["center_root"] is False
+        # Both halves of the configuration, not just the topology one.
+        assert summary["skeleton_info"]["position_space"] == "joint"
+
+    def test_no_positions_reports_no_centering(self, clip_dir, tmp_path):
+        summary = preprocess_directory(
+            clip_dir, tmp_path / "ds.npz", representation="6d")
+        assert summary["position_centering"] is None
+        assert summary["center_root"] is True
+
+    def test_the_arrays_stay_out_of_the_summary(self, clip_dir, tmp_path):
+        """load_preprocessed is the one place data is read from; a
+        summary that also carried it would be a second source to drift."""
+        summary = preprocess_directory(
+            clip_dir, tmp_path / "ds.npz", representation="6d",
+            include_positions=True, position_centering="skeleton")
+        for key in ("mean", "std", "position_stats", "clips"):
+            assert key not in summary
+
+
+class TestGraphDescriptor:
+    """``describe_graph_features`` predicts what the packer produces.
+
+    Every assertion here compares against a **real pack**, never against
+    hand-computed numbers. A descriptor tested against restated
+    arithmetic would be the same duplication it exists to remove, moved
+    into the test suite.
+    """
+
+    STREAM_SETS = [
+        ("root_pos", "joint_rot"),
+        ("joint_pos",),
+        ("joint_vel",),
+        ("root_pos",),
+        ("root_pos", "joint_pos"),
+        ("joint_pos", "joint_rot"),
+        ("joint_pos", "joint_vel", "joint_acc"),
+        ("root_pos", "joint_rot", "joint_pos", "joint_vel"),
+    ]
+
+    @pytest.fixture
+    def arrays(self, bvh_example):
+        return MotionArrays.from_bvh(
+            bvh_example, "6d", include_positions=True,
+            position_centering="skeleton")
+
+    @pytest.mark.parametrize("streams", STREAM_SETS)
+    def test_predicts_the_packed_shape(self, arrays, bvh_example, streams):
+        packed = pack_to_ctv(arrays, center_root=False, streams=streams)
+        desc = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=streams)
+        assert desc.shape(bvh_example.frame_count) == packed.shape
+        assert (desc.num_channels, desc.num_vertices) == (
+            packed.shape[0], packed.shape[2])
+
+    @pytest.mark.parametrize("streams", STREAM_SETS)
+    def test_tvc_is_the_same_geometry_transposed(self, arrays, bvh_example,
+                                                 streams):
+        packed = pack_to_tvc(arrays, center_root=False, streams=streams)
+        desc = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=streams)
+        assert desc.shape(bvh_example.frame_count, "tvc") == packed.shape
+
+    def test_node_space(self, bvh_example):
+        arrays = MotionArrays.from_bvh(
+            bvh_example, "6d", include_positions=True, position_space="node",
+            position_centering="skeleton")
+        streams = ("node_pos", "node_vel")
+        packed = pack_to_ctv(arrays, center_root=False, streams=streams)
+        desc = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=streams,
+            num_nodes=len(bvh_example.nodes))
+        assert desc.shape(bvh_example.frame_count) == packed.shape
+
+    @pytest.mark.parametrize("representation", ["quat", "6d", "rotmat",
+                                                "axisangle", "euler"])
+    def test_every_representation_width(self, bvh_example, representation):
+        """Including ``rotmat``, which no extraction produces — it only
+        arrives through a conversion, and is the widest at 9 channels."""
+        source = MotionArrays.from_bvh(bvh_example, "quat")
+        joint_rot = convert_rotations(
+            np.asarray(source.joint_rot), "quat", representation,
+            euler_orders=bvh_example.euler_orders)
+        arrays = MotionArrays(root_pos=source.root_pos, joint_rot=joint_rot)
+        packed = pack_to_ctv(arrays, center_root=False)
+        desc = describe_graph_features(bvh_example.joint_count,
+                                       representation)
+        assert desc.shape(bvh_example.frame_count) == packed.shape
+
+    def test_channel_ranges_slice_the_right_block(self, arrays, bvh_example):
+        streams = ("root_pos", "joint_rot", "joint_vel")
+        packed = pack_to_tvc(arrays, center_root=False, streams=streams)
+        desc = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=streams)
+        vel = packed[:, desc.first_vertex:, desc.slice("joint_velocities")]
+        expected = np.diff(np.asarray(arrays.joint_pos), axis=0,
+                           prepend=np.asarray(arrays.joint_pos)[:1])
+        expected[0] = 0.0
+        np.testing.assert_allclose(vel, expected, atol=1e-12)
+
+    def test_root_is_a_vertex_not_a_channel_block(self, arrays, bvh_example):
+        """The rule most easily lost when predicting shapes by hand."""
+        desc = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=("root_pos", "joint_pos"))
+        assert "root_pos" not in desc
+        assert desc.packs_root and desc.first_vertex == 1
+        assert desc.num_vertices == bvh_example.joint_count + 1
+        # ...and C is floored by the root's 3 rather than summed with it.
+        assert desc.num_channels == 3
+
+    def test_first_vertex_is_the_edge_list_offset(self, arrays, bvh_example):
+        rooted = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=("root_pos", "joint_pos"))
+        bare = describe_graph_features(
+            bvh_example.joint_count, "6d", streams=("joint_pos",))
+        assert (rooted.first_vertex, bare.first_vertex) == (1, 0)
+
+    def test_refusals_match_the_packers(self, bvh_example):
+        J = bvh_example.joint_count
+        with pytest.raises(ValueError, match="unknown stream name"):
+            describe_graph_features(J, streams=("joint_velocity",))
+        with pytest.raises(ValueError, match="repeated stream"):
+            describe_graph_features(J, streams=("joint_pos", "joint_pos"))
+        with pytest.raises(ValueError, match="cannot combine 'node_pos'"):
+            describe_graph_features(J, streams=("node_pos", "joint_rot"),
+                                    num_nodes=31)
+        with pytest.raises(ValueError, match="num_nodes"):
+            describe_graph_features(J, streams=("node_vel",))
+        with pytest.raises(ValueError, match="Unknown representation"):
+            describe_graph_features(J, "sixd", streams=("joint_rot",))
+
+    def test_flat_and_graph_descriptors_disagree_by_design(self, bvh_example):
+        """Same streams, different questions: D is not C, and the flat
+        layout has no vertex axis to report."""
+        J = bvh_example.joint_count
+        streams = ("joint_pos", "joint_vel")
+        flat = describe_features(J, "6d", streams=streams)
+        graph = describe_graph_features(J, "6d", streams=streams)
+        assert flat.total_dim == J * 6
+        assert graph.num_channels == 6 and graph.num_vertices == J
+        assert flat.total_dim == graph.num_channels * graph.num_vertices
+
+    def test_shape_rejects_the_flat_layout(self, bvh_example):
+        desc = describe_graph_features(bvh_example.joint_count)
+        with pytest.raises(ValueError, match="describe_features"):
+            desc.shape(64, layout="flat")
+
+
+class TestConstructorArgumentErrors:
+
+    def test_a_path_points_at_from_preprocessed(self):
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+        with pytest.raises(TypeError, match="from_preprocessed"):
+            MotionDataset("train.npz")
+
+    def test_the_loaded_dict_points_at_from_preprocessed(self, tmp_path,
+                                                         bvh_dir):
+        pytest.importorskip("torch")
+        from pybvh_ml.torch import MotionDataset
+        loaded = _preprocessed(tmp_path, bvh_dir)
+        with pytest.raises(TypeError, match="from_preprocessed"):
+            MotionDataset(loaded)
+
+
+class TestKeypointOnlyConvention:
+    """The documented hazard of a fabricated ``root_pos``.
+
+    ``root_pos`` is mandatory, so a keypoint-only source supplies
+    ``zeros((F, 3))``.  These assert what the docstring promises goes
+    wrong if that array then reaches a tensor — the doc is only worth
+    writing if the behaviour it warns about is pinned.
+    """
+
+    @pytest.fixture
+    def keypoints(self, bvh_example):
+        positions = MotionArrays.from_bvh(
+            bvh_example, None, include_positions=True,
+            position_centering="skeleton").joint_pos
+        return MotionArrays(
+            root_pos=np.zeros((bvh_example.frame_count, 3)),
+            joint_pos=positions, position_centering="skeleton")
+
+    def test_packing_the_fabricated_root_adds_a_zero_vertex(self, keypoints):
+        packed = pack_to_ctv(keypoints, center_root=False,
+                             streams=("root_pos", "joint_pos"))
+        np.testing.assert_allclose(packed[:, :, 0], 0.0, atol=0)
+        # ...and every real joint is one place out of step with `edges`.
+        np.testing.assert_allclose(
+            packed[:, :, 1:].transpose(1, 2, 0), keypoints.joint_pos)
+
+    def test_the_recommended_packing_never_sees_it(self, keypoints,
+                                                   bvh_example):
+        packed = pack_to_ctv(keypoints, center_root=False,
+                             streams=("joint_pos",))
+        assert packed.shape == (3, bvh_example.frame_count,
+                                bvh_example.joint_count)
+        np.testing.assert_allclose(packed.transpose(1, 2, 0),
+                                   keypoints.joint_pos)
+
+    def test_center_root_is_a_silent_no_op(self, keypoints):
+        """It subtracts a zero first frame, so it looks like it worked."""
+        np.testing.assert_array_equal(
+            pack_to_ctv(keypoints, center_root=True, streams=("joint_pos",)),
+            pack_to_ctv(keypoints, center_root=False, streams=("joint_pos",)))
+
+
+def _preprocessed(tmp_path, bvh_dir):
+    """A one-clip position-carrying dataset, loaded."""
+    d = tmp_path / "clips"
+    d.mkdir()
+    (d / "one.bvh").write_text((bvh_dir / "bvh_test1.bvh").read_text())
+    out = tmp_path / "ds.npz"
+    preprocess_directory(d, out, representation="6d", include_positions=True,
+                         position_centering="skeleton", center_root=False)
+    return load_preprocessed(out)

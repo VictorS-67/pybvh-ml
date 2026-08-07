@@ -11,10 +11,12 @@ import torch
 from torch.utils.data import Dataset
 
 from pybvh import read_bvh_file
-from pybvh_ml.arrays import STREAM_NAMES, MotionArrays, center_root_streams
+from pybvh_ml.arrays import MotionArrays, center_root_streams
 from pybvh_ml.convert import convert_arrays
 from pybvh_ml.packing import (
-    DEFAULT_STREAMS, pack_to_ctv, pack_to_flat, pack_to_tvc)
+    DEFAULT_STREAMS, DERIVED_STREAMS, STREAM_VOCABULARY, _base_of,
+    _materialize_streams, _pack_ctv_materialized, _pack_flat_materialized,
+    _pack_tvc_materialized)
 from pybvh_ml.sequences import standardize_length, uniform_temporal_sample
 from pybvh_ml.pipeline import AugmentationPipeline
 
@@ -266,10 +268,14 @@ class EpochState:
 # Shared layout / temporal machinery
 # =========================================================================
 
+# The *private* consuming entries, deliberately: the Dataset tail has
+# already materialized its streams by the time it packs, and the public
+# packers materialize again — which would difference an already
+# differenced stream and turn a velocity into an acceleration.
 _LAYOUT_PACKERS = {
-    "flat": pack_to_flat,
-    "ctv": pack_to_ctv,
-    "tvc": pack_to_tvc,
+    "flat": _pack_flat_materialized,
+    "ctv": _pack_ctv_materialized,
+    "tvc": _pack_tvc_materialized,
 }
 
 _TEMPORAL_MODES = ("pad", "crop", "resample", "resample_deterministic")
@@ -316,12 +322,12 @@ def _validate_layout_and_temporal(
 
 
 def _apply_temporal(
-    arrays: MotionArrays,
+    materialized,
     target_length: int | None,
     temporal: str,
     rng: np.random.Generator | None,
-) -> tuple[MotionArrays, int]:
-    """Standardize a clip to *target_length* frames.
+):
+    """Standardize a materialized stream set to *target_length* frames.
 
     Runs on the ``(F, 3)`` / ``(F, V, C)`` arrays rather than on the
     packed tensor: ``(C, T, V)`` puts time on axis 1, so standardizing
@@ -329,24 +335,23 @@ def _apply_temporal(
     the flat layout the two orders are equivalent — packing is a
     per-frame concatenation, and zero padding commutes with it.
 
-    Returns ``(arrays, length)``, where *length* is the number of valid
-    (non-padding) frames in the result.  One index vector or one
-    standardization is applied to every present stream, so they cannot
-    drift out of step.
+    Returns ``(materialized, length)``, where *length* is the number of
+    valid (non-padding) frames in the result.  One index vector or one
+    standardization is applied to every stream, so they cannot drift out
+    of step — and because the derived streams were computed *before*
+    this runs, they are subsampled here rather than re-differenced
+    across whatever frames survive.
     """
-    F = arrays.frame_count
+    F = materialized.frame_count
     if target_length is None:
-        return arrays, F
-
-    streams = {name: getattr(arrays, name) for name in STREAM_NAMES}
+        return materialized, F
 
     if temporal in ("pad", "crop"):
         return (
-            arrays.replace(**{
-                name: (None if value is None else
-                       standardize_length(value, target_length,
-                                          method=temporal))
-                for name, value in streams.items()}),
+            materialized.replace_arrays({
+                name: standardize_length(value, target_length,
+                                         method=temporal)
+                for name, value in materialized.arrays.items()}),
             # Both modes discard frames when the clip is too long
             # ("pad" from the end, "crop" from both ends) and zero-pad
             # when it is too short — so report only the valid frames
@@ -370,8 +375,9 @@ def _apply_temporal(
     # Resampling indexes into the clip, so every returned frame is real
     # data: no padding, and the valid length is always the full budget.
     return (
-        arrays.replace(**{name: (None if value is None else value[indices])
-                          for name, value in streams.items()}),
+        materialized.replace_arrays(
+            {name: value[indices]
+             for name, value in materialized.arrays.items()}),
         target_length,
     )
 
@@ -385,15 +391,25 @@ def _finalize(
     streams: tuple[str, ...],
     rng: np.random.Generator | None,
 ) -> tuple[torch.Tensor, int]:
-    """Temporal standardization then packing — the tail of ``__getitem__``.
+    """Materialize, standardize, pack — the tail of ``__getitem__``.
+
+    The order is load-bearing.  Derived streams (``joint_vel`` and
+    friends) are differences of *consecutive* frames, so they are
+    materialized **before** temporal standardization: differencing after
+    a pad would spike at the boundary, and after
+    ``uniform_temporal_sample`` would multiply every value by a random
+    gap.  Standardization then subsamples the derived stream alongside
+    its base, which is the TSN/PYSKL semantics.
 
     ``center_root=False`` throughout: both Dataset classes have already
     made that choice on the raw arrays, and packing must not silently
     re-center.
     """
-    arrays, length = _apply_temporal(arrays, target_length, temporal, rng)
-    packed = _LAYOUT_PACKERS[layout](
-        arrays, center_root=False, streams=streams)
+    materialized = _materialize_streams(
+        arrays, streams, False, f"pack_to_{layout}")
+    materialized, length = _apply_temporal(
+        materialized, target_length, temporal, rng)
+    packed = _LAYOUT_PACKERS[layout](materialized)
     return torch.tensor(packed, dtype=torch.float32), length
 
 
@@ -407,15 +423,78 @@ def _require_streams(
     Checked against the first clip at construction rather than at the
     first ``__getitem__``, so a dataset built without
     ``include_positions=True`` says so before a training run starts.
+    A derived stream is checked through its base — ``joint_vel`` needs
+    ``joint_pos`` on the clip, not a ``joint_vel`` that never exists
+    there.
     """
-    missing = [s for s in streams if getattr(arrays, s, None) is None]
+    _require_known_streams(streams, cls_name)
+    missing = [s for s in streams
+               if getattr(arrays, _base_of(s), None) is None]
     if missing:
+        needed = sorted({_base_of(s) for s in missing})
         raise ValueError(
             f"{cls_name} was asked for streams={tuple(streams)} but the "
-            f"clips carry no {missing}. Preprocess with "
+            f"clips carry no {needed}. Preprocess with "
             f"include_positions=True (and position_space='joint' or "
             f"'node'), or build the dataset with "
             f"include_positions=True for OnTheFlyDataset.")
+
+
+def _require_clip_dicts(clips, cls_name: str) -> None:
+    """Reject the two things people pass instead of a list of clip dicts.
+
+    ``MotionDataset("train.npz")`` used to iterate the *string* and die
+    several frames down on ``clip["root_pos"]`` with ``TypeError: string
+    indices must be integers`` — a message that names neither the
+    argument nor the constructor that does take a path.
+    """
+    if isinstance(clips, (str, Path)):
+        raise TypeError(
+            f"{cls_name} takes a list of clip dicts, not a path ({clips!r}). "
+            f"Load the file first: "
+            f"{cls_name}.from_preprocessed(load_preprocessed({clips!r})), "
+            f"which also wires the stored representation, skeleton metadata "
+            f"and position_centering for you.")
+    if isinstance(clips, dict):
+        raise TypeError(
+            f"{cls_name} takes a list of clip dicts, not the "
+            f"load_preprocessed() result itself. Pass it to "
+            f"{cls_name}.from_preprocessed(loaded), or hand over "
+            f"loaded['clips'] if you mean to wire the metadata yourself.")
+
+
+def _require_known_streams(streams: tuple[str, ...], cls_name: str) -> None:
+    """Reject a stream name outside the vocabulary, at construction.
+
+    Without this a typo reaches ``_materialize_streams`` on the first
+    ``__getitem__`` and is reported as a *missing* stream, which sends
+    the reader looking for a preprocessing flag rather than a typo.
+    """
+    unknown = [s for s in streams if s not in STREAM_VOCABULARY]
+    if unknown:
+        raise ValueError(
+            f"{cls_name} got unknown stream name(s) {unknown}; choose from "
+            f"{list(STREAM_VOCABULARY)}")
+
+
+def _require_centering_for_derived(
+    streams: tuple[str, ...],
+    position_centering: str | None,
+    cls_name: str,
+) -> None:
+    """Refuse a derived stream with an undeclared centering, at construction.
+
+    A difference of ``"world"`` positions is world velocity; of ``"skeleton"`` positions, velocity relative to the root — the frame decides what the derivative *means*, so ``None`` is refused rather than guessed.  The packer refuses this too, but on the first ``__getitem__``; a misconfigured dataset should say so before a training run starts, like every other stream problem caught at construction.
+    """
+    derived = [s for s in streams if s in DERIVED_STREAMS]
+    if derived and position_centering is None:
+        raise ValueError(
+            f"{cls_name} was asked for derived stream(s) {derived} but "
+            f"position_centering is None. The centering decides what the "
+            f"derivative means — world velocity, or velocity relative to "
+            f"the root — so it is not guessed. Pass position_centering=... "
+            f"(MotionDataset.from_preprocessed threads the stored value "
+            f"automatically).")
 
 
 class MotionDataset(Dataset):
@@ -495,6 +574,15 @@ class MotionDataset(Dataset):
         ``data`` tensor with explicit streams rather than a second
         tensor, so the batch contract does not depend on preprocessing
         flags.
+
+        The derived streams (``"joint_vel"``, ``"joint_acc"`` and the
+        node-space pair) are computed **before** ``temporal`` is
+        applied, so a difference is always taken across consecutive
+        frames of the augmented clip and then subsampled along with its
+        base — never differenced across padded or resampled frames.
+        That ordering is available only here; the same three lines
+        written in a ``collate_fn`` run on this method's *output* and
+        cannot reproduce it.
     position_centering : {"world", "skeleton", "first"} or None
         Frame the clips' position arrays are in, recorded on every
         :class:`~pybvh_ml.MotionArrays` this dataset mints.  Storage
@@ -503,6 +591,10 @@ class MotionDataset(Dataset):
         packing) only ever see the container.
         :meth:`from_preprocessed` fills it from the loaded dataset,
         which is where it should come from.
+        Required — not ``None`` — when ``streams`` includes a derived
+        stream: the frame decides whether ``joint_vel`` is world velocity
+        or velocity relative to the root, so an undeclared one is refused
+        at construction rather than guessed on the first sample.
     source_repr, target_repr : str or None
         Convert each clip's ``joint_data`` from ``source_repr`` to
         ``target_repr`` before augmentation, so a dataset stored in one
@@ -582,6 +674,7 @@ class MotionDataset(Dataset):
                 "don't carry that. Pass source_repr=..., or build the "
                 "dataset with MotionDataset.from_preprocessed(loaded), "
                 "which reads it from the dataset metadata.")
+        _require_clip_dicts(clips, "MotionDataset")
         self.clips = clips
         self.labels = labels
         self.names = names
@@ -600,6 +693,8 @@ class MotionDataset(Dataset):
         if clips:
             _require_streams(self._clip_arrays(0), self.streams,
                              "MotionDataset")
+        _require_centering_for_derived(
+            self.streams, position_centering, "MotionDataset")
 
     @classmethod
     def from_preprocessed(cls, loaded: dict, **kwargs) -> "MotionDataset":
@@ -907,19 +1002,24 @@ class OnTheFlyDataset(Dataset):
         # Which streams every clip will carry is fully determined by the
         # extraction settings, so this is checked without parsing a file:
         # constructing a dataset must not cost a BVH parse.
+        _require_known_streams(self.streams, "OnTheFlyDataset")
         available = {"root_pos"}
         if representation is not None:
             available.add("joint_rot")
         if include_positions:
             available.add(
                 "joint_pos" if position_space == "joint" else "node_pos")
-        unavailable = [s for s in self.streams if s not in available]
+        unavailable = [s for s in self.streams
+                       if _base_of(s) not in available]
         if unavailable:
+            needed = sorted({_base_of(s) for s in unavailable})
             raise ValueError(
                 f"OnTheFlyDataset was asked for streams={self.streams} but "
                 f"its extraction settings produce {sorted(available)}. Pass "
                 f"include_positions=True (with position_space='joint' or "
-                f"'node'), or a representation, to extract {unavailable}.")
+                f"'node'), or a representation, to extract {needed}.")
+        _require_centering_for_derived(
+            self.streams, position_centering, "OnTheFlyDataset")
 
     def set_epoch(self, epoch: int) -> None:
         """Set the current epoch for reproducible per-epoch augmentation."""

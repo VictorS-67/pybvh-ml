@@ -30,7 +30,9 @@ from .sequences import (
 )
 from .metadata import (
     FeatureDescriptor,
+    GraphDescriptor,
     describe_features,
+    describe_graph_features,
 )
 from .augmentation import (
     rotate_vertical,
@@ -87,6 +89,8 @@ __all__ = [
     # metadata
     "FeatureDescriptor",
     "describe_features",
+    "describe_graph_features",
+    "GraphDescriptor",
     # augmentation
     "rotate_vertical",
     "mirror",

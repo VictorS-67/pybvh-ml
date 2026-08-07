@@ -48,6 +48,7 @@ from .arrays import (
     require_joint_rot,
     require_position_centering,
 )
+from .packing import DERIVED_STREAMS
 
 
 _POSITION_STREAMS = ("joint_pos", "node_pos")
@@ -119,7 +120,11 @@ def handles_streams(*streams: str) -> Callable[[Callable], Callable]:
     Parameters
     ----------
     *streams : str
-        Names from :data:`~pybvh_ml.arrays.STREAM_NAMES`.
+        Names from :data:`~pybvh_ml.arrays.STREAM_NAMES`.  The packers'
+        derived names (``"joint_vel"`` and friends) are **not** valid
+        here: they are computed after all augmentation has run, so no
+        step can transform them.  Declare the position stream they come
+        from and the derivative follows.
 
     Returns
     -------
@@ -133,9 +138,18 @@ def handles_streams(*streams: str) -> Callable[[Callable], Callable]:
     """
     unknown = [s for s in streams if s not in STREAM_NAMES]
     if unknown:
+        derived = [s for s in unknown if s in DERIVED_STREAMS]
+        detail = ""
+        if derived:
+            bases = sorted({DERIVED_STREAMS[s][0] for s in derived})
+            detail = (
+                f" {derived} are derived streams: they are computed at "
+                f"packing time from {bases}, after all augmentation, and so "
+                f"cannot be augmented. Declare {bases} instead — the "
+                f"derivative follows from whatever your step does to them.")
         raise ValueError(
             f"handles_streams got unknown stream name(s) {unknown}; "
-            f"choose from {list(STREAM_NAMES)}")
+            f"choose from {list(STREAM_NAMES)}.{detail}")
     declared = frozenset(streams)
 
     def decorate(fn: Callable) -> Callable:

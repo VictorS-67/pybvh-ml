@@ -1168,7 +1168,20 @@ def preprocess_directory(
     -------
     dict
         Summary with keys: ``num_clips``, ``representation``,
-        ``filenames``, ``skeleton_info``, ``uniformity``.
+        ``filenames``, ``skeleton_info``, ``center_root``,
+        ``position_centering``, ``uniformity``.
+
+        **This is a report on the run, not the dataset.**  It carries
+        the decisions that shaped the file plus the heterogeneity
+        audit, and deliberately none of the arrays — ``mean`` / ``std``
+        / ``position_stats`` and the clips themselves come from
+        :func:`load_preprocessed`, which is the one place they should
+        be read from.  ``center_root`` and ``position_centering``
+        are here because they are decisions rather than data: without
+        them the summary described the *topology* of a positions
+        dataset (``skeleton_info["position_space"]``) while silently
+        omitting which frame its values were in.
+
         ``uniformity`` is a dict of the form::
 
             {
@@ -1389,6 +1402,8 @@ def preprocess_directory(
         "representation": representation,
         "filenames": stems,
         "skeleton_info": skel_info,
+        "center_root": center_root,
+        "position_centering": position_centering if include_positions else None,
         "uniformity": uniformity,
     }
 
