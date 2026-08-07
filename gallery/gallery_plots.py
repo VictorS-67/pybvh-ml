@@ -12,7 +12,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-from IPython.display import Image
 from pybvh.bvhplot import compute_unified_limits, get_skeleton_lines, render
 
 # One accent per role, reused across figures so the gallery reads as one set.
@@ -213,21 +212,26 @@ def fig_partitions(bvh, partitions):
 # ----------------------------------------------------------------
 
 def clip_gif(bvh, path="feature_gallery_hero.gif", fps=20):
-    """The hero clip itself, rendered to an inline real-time GIF.
+    """The hero clip, rendered to a real-time GIF; returns the written path.
 
     Resampled to the GIF rate first so playback is true real time (see
     ``speed_comparison_gif``); 20 fps sits on the GIF format's
     centisecond frame-delay grid.
+
+    Returns the path rather than an ``IPython.display.Image``: GitHub's
+    notebook renderer displays image/png outputs but silently drops
+    image/gif ones, so the notebook shows the committed GIF from a
+    markdown cell instead (which also keeps the base64 out of the .ipynb).
     """
     clip = bvh.resample(fps)
     out = render(clip, path, fps=fps, backend="matplotlib", camera="front",
                  resolution=(480, 360))
-    return Image(str(out))
+    return str(out)
 
 
 def speed_comparison_gif(bvhs, labels, path="feature_gallery_speed.gif",
                          fps=20):
-    """Side-by-side real-time playback of speed-perturbed clips.
+    """Side-by-side real-time playback of speed-perturbed clips; returns the written path (see ``clip_gif`` for why not an ``Image``).
 
     Each clip is resampled to the GIF rate first — ``render()`` writes
     every frame at the requested playback rate, never resampling — so
@@ -239,7 +243,7 @@ def speed_comparison_gif(bvhs, labels, path="feature_gallery_speed.gif",
     clips = [b.resample(fps) for b in bvhs]
     out = render(clips, path, labels=labels, fps=fps, sync="pad",
                  backend="matplotlib", camera="front", resolution=(960, 360))
-    return Image(str(out))
+    return str(out)
 
 
 def fig_dropout(track_label, original, dropped, kept_mask, drop_rate):

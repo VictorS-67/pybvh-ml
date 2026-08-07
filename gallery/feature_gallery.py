@@ -19,6 +19,8 @@
 # Every pybvh-ml-specific capability, one picture and one call each — the concepts a data-plumbing library is usually forced to explain in prose: tensor layouts, centering hazards, skeleton graphs, reproducible augmentation, sequence sampling, and batch masking.
 #
 # Skeleton renders use pybvh's `bvhplot`; for the plain per-function augmentation before/afters (mirror, rotation, noise on a single skeleton), see [pybvh's own gallery](https://victors-67.github.io/pybvh/gallery/) — this page draws only what pybvh can't.
+#
+# *If your viewer fails to render any figure or clip, [the notebook on nbviewer](https://nbviewer.org/github/VictorS-67/pybvh-ml/blob/main/gallery/feature_gallery.ipynb) renders everything.*
 
 # %%
 # Pin the inline backend rather than relying on it being the kernel default:
@@ -57,10 +59,13 @@ print(f"hero clip: {bvh.joint_count} joints, {bvh.frame_count} frames, "
       f"world_up {bvh.world_up}")
 
 # %% [markdown]
-# **The hero clip** — every figure below draws from this one fixture: 24 joints, 75 frames at 30 fps, `+z` up. Rendered with `bvhplot.render` to an inline real-time GIF (resampled to the GIF's 20 fps) so the motion shows wherever the notebook is viewed; the burst of movement past frame ~50 is what many later figures key on.
+# **The hero clip** — every figure below draws from this one fixture: 24 joints, 75 frames at 30 fps, `+z` up. Rendered with `bvhplot.render` to a real-time GIF committed beside this notebook (resampled to the GIF's 20 fps) and displayed by the markdown cell below — GitHub's notebook renderer silently drops `image/gif` cell outputs, so an embedded clip would be invisible on github.com. The burst of movement past frame ~50 is what many later figures key on.
 
 # %%
-gp.clip_gif(bvh)
+hero_gif = gp.clip_gif(bvh)
+
+# %% [markdown]
+# ![the hero clip, rendered by bvhplot.render](https://raw.githubusercontent.com/VictorS-67/pybvh-ml/main/gallery/feature_gallery_hero.gif)
 
 # %% [markdown]
 # ## 1 · Tensor layouts & packing
@@ -134,13 +139,16 @@ slow = speed_perturbation_arrays(quat_arrays,
                                  factor=0.75, representation="quat")
 fast = speed_perturbation_arrays(quat_arrays,
                                  factor=1.25, representation="quat")
-gp.speed_comparison_gif(
+speed_gif = gp.speed_comparison_gif(
     [bvh,
      bvh.from_quat(slow.root_pos, slow.joint_rot),
      bvh.from_quat(fast.root_pos, fast.joint_rot)],
     labels=[f"original ({bvh.frame_count}f)",
             f"factor=0.75 — slower ({slow.frame_count}f)",
             f"factor=1.25 — faster ({fast.frame_count}f)"])
+
+# %% [markdown]
+# ![original, slower and faster clips playing side by side in real time](https://raw.githubusercontent.com/VictorS-67/pybvh-ml/main/gallery/feature_gallery_speed.gif)
 
 # %% [markdown]
 # **`dropout_arrays`** — drops random frames (Bernoulli per frame, first and last always kept) and SLERP-re-interpolates across the gaps; the frame count is unchanged. On smooth mocap the re-interpolated curve hugs the original — most gaps are 1–2 frames — so the mechanism is drawn explicitly: markers on the frames that survived, a rug of the dropped indices, and an inset zooming on the longest gap, where the interpolation visibly cuts the corner. Dropped frames are found by exact comparison — kept frames pass through bit-identical.

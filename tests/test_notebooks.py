@@ -40,6 +40,8 @@ in it at all.
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -57,8 +59,11 @@ STDERR_MUST_BE_CLEAN = {"gallery/feature_gallery.ipynb"}
 # floor, not an exact count — adding figures is free, losing them all is
 # the bug this module exists for. A new plotting notebook must be listed
 # here; the test fails until it is, which is the point.
+# The gallery's two animated clips are NOT in its count: they are committed
+# .gif files displayed from markdown cells (see the clip-visibility tests),
+# not image outputs.
 MIN_FIGURES = {
-    "gallery/feature_gallery.ipynb": 15,
+    "gallery/feature_gallery.ipynb": 13,
     "tutorials/02_augmentation_visualized.ipynb": 3,
 }
 
@@ -217,3 +222,58 @@ def test_notebook_meets_its_figure_floor(path):
         f"{MIN_FIGURES[rel]} — either figures were lost to a non-inline "
         "backend, or they were intentionally removed and the floor needs "
         "lowering")
+
+
+# --------------------------------------------------------------------------
+# Clip visibility — animated GIFs must be linked files, not cell outputs
+# --------------------------------------------------------------------------
+
+RAW_PREFIX = "https://raw.githubusercontent.com/VictorS-67/pybvh-ml/main/"
+
+
+def _servable_from_github(repo_rel):
+    """The file exists and is not gitignored — ``exists()`` alone would accept a local byproduct that raw.githubusercontent.com will 404 on."""
+    if not (REPO / repo_rel).exists():
+        return False
+    if not (REPO / ".git").exists():
+        return True                     # sdist/tarball: existence is all we have
+    ignored = subprocess.run(
+        ["git", "-C", str(REPO), "check-ignore", "-q", repo_rel],
+        capture_output=True)
+    return ignored.returncode != 0
+
+
+@pytest.mark.parametrize("path", ALL, ids=ALL_IDS)
+def test_no_gif_cell_outputs(path):
+    """GitHub's notebook renderer displays ``image/png`` outputs but silently drops ``image/gif`` ones — the reader sees ``<IPython.core.display.Image object>`` where the clip should play, and the figure floor never notices (GIF outputs are not PNG outputs). A clip belongs in a committed ``.gif`` displayed from a markdown cell; see ``test_markdown_images_are_absolute_and_resolve`` for the form that cell must take."""
+    offenders = [i for i, cell in enumerate(_code_cells(path))
+                 for out in cell.get("outputs", [])
+                 if "image/gif" in out.get("data", {})]
+    rel = path.relative_to(REPO)
+    assert not offenders, (
+        f"{rel}: code cells {offenders} embed image/gif outputs, invisible "
+        f"on github.com. Return the path from the gallery_plots helper, "
+        f"commit the GIF, and display it from a markdown cell with an "
+        f"absolute raw.githubusercontent.com URL.")
+
+
+@pytest.mark.parametrize("path", ALL, ids=ALL_IDS)
+def test_markdown_images_are_absolute_and_resolve(path):
+    """GitHub's notebook renderer does not resolve *relative* image paths in markdown cells (the reader sees only the alt text), so every markdown image must use an absolute ``raw.githubusercontent.com`` URL — possible because this repo is public. Resolving each URL against the working tree (and against .gitignore, since raw.githubusercontent.com serves only committed files) catches a renamed, ignored, or never-committed file locally instead of as a broken-image icon on github.com."""
+    nb = json.loads(path.read_text())
+    rel = path.relative_to(REPO)
+    problems = []
+    for i, cell in enumerate(nb["cells"]):
+        if cell["cell_type"] != "markdown":
+            continue
+        for src in re.findall(r"!\[[^\]]*\]\((\S+?)\)", _source(cell)):
+            if not src.startswith(RAW_PREFIX):
+                problems.append(
+                    f"cell {i}: {src!r} is not an absolute {RAW_PREFIX} URL "
+                    f"(GitHub shows only the alt text for relative paths)")
+            elif not _servable_from_github(src[len(RAW_PREFIX):]):
+                problems.append(
+                    f"cell {i}: {src!r} does not resolve to a committed, "
+                    f"non-gitignored file (GitHub would show a broken-image "
+                    f"icon)")
+    assert not problems, f"{rel}: " + "; ".join(problems)
