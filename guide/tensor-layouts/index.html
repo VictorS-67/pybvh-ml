@@ -1,0 +1,1845 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="ML bridge layer for pybvh — tensor packing, augmentation, preprocessing, and PyTorch datasets for motion capture data">
+      
+      
+      
+        <link rel="canonical" href="https://victors-67.github.io/pybvh-ml/guide/tensor-layouts/">
+      
+      
+        <link rel="prev" href="../../gallery/">
+      
+      
+        <link rel="next" href="../preprocessing/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Tensor Layouts & Packing - pybvh-ml</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#tensor-layouts-packing" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="pybvh-ml" class="md-header__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pybvh-ml
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Tensor Layouts & Packing
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../gallery/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Gallery
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../tutorials/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Tutorials
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="pybvh-ml" class="md-nav__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pybvh-ml
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gallery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Layouts & Packing
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Layouts & Packing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-three-layouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three layouts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#packing-and-unpacking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Packing and unpacking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-what-gets-packed-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing what gets packed: streams=
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#velocity-and-acceleration-joint_vel-joint_acc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Velocity and acceleration: joint_vel, joint_acc
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Velocity and acceleration: joint_vel, joint_acc">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-ordering-guarantee-and-why-it-cant-be-replicated-downstream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ordering guarantee, and why it can't be replicated downstream
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#center_root-read-this-once-save-a-debugging-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        center_root — read this once, save a debugging session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#knowing-what-the-columns-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowing what the columns mean
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Knowing what the columns mean">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-graph-layouts-describe_graph_features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The graph layouts: describe_graph_features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequence-length-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequence length utilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing Pipelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../augmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pytorch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skeleton-metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Graph Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/arrays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Motion Arrays (the container)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/packing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Packing (tensor layouts)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/augmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing & Normalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/sequences/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sequences (windows & sampling)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/skeleton/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/convert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Representation Conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Feature Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/torch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch (datasets & collate)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-three-layouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The three layouts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#packing-and-unpacking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Packing and unpacking
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-what-gets-packed-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing what gets packed: streams=
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#velocity-and-acceleration-joint_vel-joint_acc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Velocity and acceleration: joint_vel, joint_acc
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Velocity and acceleration: joint_vel, joint_acc">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-ordering-guarantee-and-why-it-cant-be-replicated-downstream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The ordering guarantee, and why it can't be replicated downstream
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#center_root-read-this-once-save-a-debugging-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        center_root — read this once, save a debugging session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#knowing-what-the-columns-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Knowing what the columns mean
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Knowing what the columns mean">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-graph-layouts-describe_graph_features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The graph layouts: describe_graph_features
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sequence-length-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sequence length utilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="tensor-layouts-packing">Tensor Layouts &amp; Packing<a class="headerlink" href="#tensor-layouts-packing" title="Permanent link">&para;</a></h1>
+<p>pybvh gives you structured arrays: <code>root_pos</code> of shape <code>(F, 3)</code> and per-joint rotations of shape <code>(F, J, C)</code>. pybvh-ml carries the pair as a <a href="../../api/arrays/"><code>MotionArrays</code></a>, and models want tensors in a specific layout. The packers convert between the two, in both directions.</p>
+<h2 id="the-three-layouts">The three layouts<a class="headerlink" href="#the-three-layouts" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Layout</th>
+<th>Shape</th>
+<th>Typical consumer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CTV</td>
+<td><code>(C, T, V)</code></td>
+<td>GCNs (ST-GCN family)</td>
+</tr>
+<tr>
+<td>TVC</td>
+<td><code>(T, V, C)</code></td>
+<td>Transformers with per-joint tokens</td>
+</tr>
+<tr>
+<td>Flat</td>
+<td><code>(T, D)</code></td>
+<td>MLPs, sequence models over pose vectors</td>
+</tr>
+</tbody>
+</table>
+<p>Conventions, shared by every packer, for the default <code>streams=("root_pos", "joint_rot")</code>:</p>
+<ul>
+<li><strong>C</strong> = channels — <code>max(3, joint channels)</code>: 3 for Euler/axis-angle, 4 for quat, 6 for 6D, 9 for rotmat</li>
+<li><strong>T</strong> = time / frames</li>
+<li><strong>V</strong> = vertices / joints — the <strong>root is vertex 0</strong>, joints are <code>1..J</code></li>
+<li><strong>D</strong> = flat feature dimension — <code>3 + J * C_joint</code></li>
+</ul>
+<p>The root vertex carries 3 position channels; when <code>C &gt; 3</code> (quat, 6D, or rotmat joint data), the root vertex's remaining <code>C - 3</code> channels are zero padding — the position values themselves are unchanged.</p>
+<p><img alt="One clip in all three layouts: CTV and TVC single-frame slices with the root vertex's zero-padded channels marked, and the full flat clip with its columns mapped by describe_features" src="../../gallery/img/layouts.png" /></p>
+<p><em>One real clip, all three layouts — the root zero-padding and the flat column map, drawn. (<a href="../../gallery/">Gallery</a> for every figure.)</em></p>
+<h2 id="packing-and-unpacking">Packing and unpacking<a class="headerlink" href="#packing-and-unpacking" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    <span class="n">MotionArrays</span><span class="p">,</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">pack_to_ctv</span><span class="p">,</span> <span class="n">pack_to_tvc</span><span class="p">,</span> <span class="n">pack_to_flat</span><span class="p">,</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">unpack_from_ctv</span><span class="p">,</span> <span class="n">unpack_from_tvc</span><span class="p">,</span> <span class="n">unpack_from_flat</span><span class="p">,</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pybvh</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">bvh</span> <span class="o">=</span> <span class="n">pybvh</span><span class="o">.</span><span class="n">read_bvh_file</span><span class="p">(</span><span class="s2">&quot;walk.bvh&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">root_pos</span><span class="p">,</span> <span class="n">rot6d</span> <span class="o">=</span> <span class="n">bvh</span><span class="o">.</span><span class="n">to_6d</span><span class="p">()</span>          <span class="c1"># (F, 3), (F, J, 6)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="p">(</span><span class="n">root_pos</span><span class="o">=</span><span class="n">root_pos</span><span class="p">,</span> <span class="n">joint_rot</span><span class="o">=</span><span class="n">rot6d</span><span class="p">)</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="n">ctv</span> <span class="o">=</span> <span class="n">pack_to_ctv</span><span class="p">(</span><span class="n">arrays</span><span class="p">)</span>     <span class="c1"># (6, F, J+1)</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="n">tvc</span> <span class="o">=</span> <span class="n">pack_to_tvc</span><span class="p">(</span><span class="n">arrays</span><span class="p">)</span>     <span class="c1"># (F, J+1, 6)</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="n">flat</span> <span class="o">=</span> <span class="n">pack_to_flat</span><span class="p">(</span><span class="n">arrays</span><span class="p">)</span>   <span class="c1"># (F, 3 + J*6)</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="n">root_back</span><span class="p">,</span> <span class="n">rot_back</span> <span class="o">=</span> <span class="n">unpack_from_ctv</span><span class="p">(</span><span class="n">ctv</span><span class="p">)</span>
+</code></pre></div>
+<p>Every <code>pack_to_*</code> has a matching <code>unpack_from_*</code> that inverts it, returning a <code>MotionArrays</code> (up to the <code>center_root</code> shift — see below). <code>unpack_from_flat</code> needs to know the channel split: pass <code>joint_channels=</code> matching the packed representation (e.g. <code>joint_channels=6</code> for 6D), or it raises a <code>ValueError</code> when <code>D - root_channels</code> isn't divisible by it.</p>
+<h2 id="choosing-what-gets-packed-streams">Choosing what gets packed: <code>streams=</code><a class="headerlink" href="#choosing-what-gets-packed-streams" title="Permanent link">&para;</a></h2>
+<p><code>streams=</code> names what is packed and in what order — channel order in the graph layouts, column order in flat. It defaults to <code>("root_pos", "joint_rot")</code>, which is byte-identical to what every earlier version produced.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="o">.</span><span class="n">from_bvh</span><span class="p">(</span><span class="n">bvh</span><span class="p">,</span> <span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">include_positions</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">pack_to_ctv</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;joint_pos&quot;</span><span class="p">,))</span>              <span class="c1"># (3, T, J) — ST-GCN</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">pack_to_ctv</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;joint_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_rot&quot;</span><span class="p">))</span>  <span class="c1"># (3+6, T, J)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th><code>streams</code></th>
+<th>CTV shape</th>
+<th>note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>("root_pos", "joint_rot")</code></td>
+<td><code>(max(3, C_rot), T, 1+J)</code></td>
+<td>the default</td>
+</tr>
+<tr>
+<td><code>("joint_pos",)</code></td>
+<td><code>(3, T, J)</code></td>
+<td>canonical ST-GCN / CTR-GCN input</td>
+</tr>
+<tr>
+<td><code>("node_pos",)</code></td>
+<td><code>(3, T, N)</code></td>
+<td>full visual skeleton, end effectors included</td>
+</tr>
+<tr>
+<td><code>("joint_pos", "joint_rot")</code></td>
+<td><code>(3 + C_rot, T, J)</code></td>
+<td>multi-stream on <code>C</code></td>
+</tr>
+<tr>
+<td><code>("root_pos", "joint_pos")</code></td>
+<td><code>(3, T, 1+J)</code></td>
+<td>vertex 0 duplicates joint 0 under <code>"world"</code> centering</td>
+</tr>
+<tr>
+<td><code>("joint_vel",)</code></td>
+<td><code>(3, T, J)</code></td>
+<td>2s-AGCN motion stream</td>
+</tr>
+<tr>
+<td><code>("joint_pos", "joint_vel", "joint_acc")</code></td>
+<td><code>(9, T, J)</code></td>
+<td>position / velocity / acceleration</td>
+</tr>
+</tbody>
+</table>
+<p>Two rules:</p>
+<ul>
+<li><strong><code>"root_pos"</code> in the list adds the root as vertex 0</strong> (<code>V = 1 + J</code>); omit it and <code>V = J</code>. This is what removes the off-by-one between packed vertices and <code>skeleton_info["edges"]</code> — see <a href="../skeleton-metadata/#which-key-indexes-which-packing">Skeleton Graph Metadata</a>.</li>
+<li><strong><code>node_pos</code> cannot share a vertex axis with a joint-space stream.</strong> Node space includes end sites, so it has <code>N</code> vertices where joint space has <code>J</code>; the packer raises naming the mismatch rather than broadcasting anything.</li>
+</ul>
+<p>The <strong>unpackers keep their pre-0.6.0 signature</strong> and invert only the default streams — everything past the root's channels comes back as <code>joint_rot</code>. A streams-aware <code>unpack_from_*</code> is purely additive whenever it lands; the asymmetry is a deliberate deferral. Until then, slice the channel axis yourself using the widths above.</p>
+<h2 id="velocity-and-acceleration-joint_vel-joint_acc">Velocity and acceleration: <code>joint_vel</code>, <code>joint_acc</code><a class="headerlink" href="#velocity-and-acceleration-joint_vel-joint_acc" title="Permanent link">&para;</a></h2>
+<p><code>joint_vel</code> / <code>joint_acc</code> (and <code>node_vel</code> / <code>node_acc</code>) are <strong>derived</strong> streams: temporal differences of the matching position stream, computed at packing time rather than carried on <code>MotionArrays</code>. Requesting one needs its base present, not packed — <code>streams=("joint_vel",)</code> alone is legal.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">MotionDataset</span><span class="o">.</span><span class="n">from_preprocessed</span><span class="p">(</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">data</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="s2">&quot;ctv&quot;</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;joint_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_vel&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_acc&quot;</span><span class="p">),</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">augmentation</span><span class="o">=</span><span class="n">AugmentationPipeline</span><span class="o">.</span><span class="n">standard</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;skeleton_info&quot;</span><span class="p">]),</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">temporal</span><span class="o">=</span><span class="s2">&quot;crop&quot;</span><span class="p">,</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">64</span><span class="p">)</span>          <span class="c1"># (9, T, J)</span>
+</code></pre></div>
+<p>Four conventions, each chosen over a named alternative:</p>
+<ul>
+<li><strong>Unit: raw per-frame difference</strong>, <code>p[t] - p[t-1]</code>, no <code>dt</code> — what 2s-AGCN, CTR-GCN and PYSKL use, and what needs no frame rate (<code>MotionArrays</code> carries none). For physical units multiply by the clip's fps yourself.</li>
+<li><strong>Boundary: an order-<code>k</code> stream zeroes its first <code>k</code> frames.</strong> Prepending instead would leave <code>joint_acc[1]</code> holding <code>joint_vel[1]</code> — a velocity in an acceleration channel. The alternative is central differences, smoother and unbiased but non-causal, hence a label leak for an autoregressive model.</li>
+<li><strong>Meaning follows <code>position_centering</code>.</strong> Differencing <code>"world"</code> positions gives world velocity including the root trajectory; differencing <code>"skeleton"</code> positions gives velocity relative to the root — HumanML3D's <code>local_velocity</code>. Same shape, different quantity, so an undeclared <code>position_centering</code> is <strong>refused</strong> rather than guessed.</li>
+<li><strong><code>center_root</code> cannot change them.</strong> It subtracts the first frame's root — a shift constant in time, which cancels in every difference.</li>
+</ul>
+<h3 id="the-ordering-guarantee-and-why-it-cant-be-replicated-downstream">The ordering guarantee, and why it can't be replicated downstream<a class="headerlink" href="#the-ordering-guarantee-and-why-it-cant-be-replicated-downstream" title="Permanent link">&para;</a></h3>
+<p>The Dataset classes derive <strong>after augmentation and before temporal standardization</strong>. That is the only placement where all of the following hold, and it is not reachable from a <code>collate_fn</code>, which necessarily runs on <code>__getitem__</code>'s output:</p>
+<ul>
+<li><code>temporal="pad"</code> — the derived stream is padded with zeros like its base. Differencing <em>after</em> padding puts a phantom spike at the boundary, sitting exactly where the attention mask is supposed to hide it. Its size is <code>|p[length-1]|</code>, so it scales with how far the last frame sits from the centering origin rather than with anything about the motion: 3.9× the clip's largest real velocity on a 75-frame test rig, 6.7× on an 85-frame clip from a real corpus. There is no bound on it.</li>
+<li><code>temporal="resample"</code> — <code>uniform_temporal_sample</code> picks one random frame per segment, so consecutive sampled indices are 1–9 frames apart. Differencing after sampling multiplies each value by that random gap (~35% error even after normalizing the mean scale). Deriving first and subsampling gives the true per-frame velocity <em>at the sampled instants</em> — the TSN/PYSKL semantics, <code>GenSkeFeat</code> before <code>UniformSample</code>.</li>
+<li>Short clips under <code>resample</code> wrap via <code>% F</code>; wrapped indices then repeat real measurements instead of straddling the clip-end→clip-start seam.</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Under <code>resample</code>, <code>vel</code> is deliberately not <code>diff(pos)</code></p>
+<p>Because velocity is subsampled rather than recomputed, <code>torch.diff</code> of the packed positions does <strong>not</strong> reproduce the packed velocity — it is inflated by the mean sampling gap, and by roughly its square one order up. That is the correct behaviour, not a bug. Under <code>pad</code> and <code>crop</code> the two agree exactly on frames <code>k..length-1</code>; they differ on the first <code>k</code> frames of a window that starts past the clip start (where the derived stream holds real measurements and the naive recipe holds zeros) and at a pad boundary (where the derived stream holds zeros and the recipe spikes). At every divergence the derived stream is the better value.</p>
+</div>
+<p>Deriving on the full clip before cropping does more arithmetic than deriving only the frames you keep — one <code>np.diff</code> per stream, deliberate and negligible.</p>
+<h2 id="center_root-read-this-once-save-a-debugging-session"><code>center_root</code> — read this once, save a debugging session<a class="headerlink" href="#center_root-read-this-once-save-a-debugging-session" title="Permanent link">&para;</a></h2>
+<p>All three packers accept <code>center_root</code> and it <strong>defaults to <code>True</code></strong>: the first frame's root position is subtracted from every frame, so trajectories start at the origin.</p>
+<p>Two things to know:</p>
+<ol>
+<li><strong>This is pybvh-ml's convention, not pybvh's.</strong> pybvh-ml's <code>center_root</code> subtracts the full 3D first-frame root position. pybvh's <code>centered="first"</code> is ground-plane-only (the up coordinate is untouched there).</li>
+<li><strong>Don't center twice — but know when twice is harmless.</strong> <code>preprocess_directory</code> also centers by default and records the choice in the dataset metadata (<code>load_preprocessed(...)["center_root"]</code>). Re-centering a whole already-centered clip is idempotent (its first frame is already at the origin). The real hazard is <strong>windowed sub-clips</strong>: center the whole clip, then cut windows — if you instead pack each window with <code>center_root=True</code>, every window is re-based to its own first frame and the global trajectory is destroyed.</li>
+</ol>
+<p><img alt="Top view of a root trajectory: centering the clip once keeps windows on the global path; packing each window with center_root=True re-bases every window to its own origin" src="../../gallery/img/center-root-hazard.png" /></p>
+<p><em>The hazard, drawn: the same windows on the preserved global path (left) vs each re-based to its own origin (right).</em></p>
+<p>When packing arrays that came out of <code>load_preprocessed</code>, pass <code>center_root=False</code> and let the stored metadata tell you whether the data was centered at preprocessing time.</p>
+<p><strong>With positions in the container, <code>center_root</code> reaches them too.</strong> Under <code>position_centering="world"</code> or <code>"first"</code> the identical first-frame shift is applied to every position vertex; under <code>"skeleton"</code> they are already root-relative and are left alone; with <code>position_centering=None</code> the packer raises rather than guess. Centering only the root would move vertex 0 away from a body that stayed put — the same inconsistency <code>add_root_position_noise</code> guards against, produced at pack time instead.</p>
+<h2 id="knowing-what-the-columns-mean">Knowing what the columns mean<a class="headerlink" href="#knowing-what-the-columns-mean" title="Permanent link">&para;</a></h2>
+<p>For the flat layout, <code>describe_features</code> maps block names to column ranges:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">describe_features</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">desc</span> <span class="o">=</span> <span class="n">describe_features</span><span class="p">(</span><span class="n">num_joints</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">include_root_pos</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">desc</span><span class="p">[</span><span class="s2">&quot;root_pos&quot;</span><span class="p">]</span>                  <span class="c1"># (0, 3)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">desc</span><span class="p">[</span><span class="s2">&quot;joint_rotations&quot;</span><span class="p">]</span>           <span class="c1"># (3, 147)</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">desc</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="s2">&quot;joint_rotations&quot;</span><span class="p">)</span>     <span class="c1"># slice(3, 147)</span>
+</code></pre></div>
+<p>It takes the same <code>streams=</code> as the packer, and blocks are named <code>root_pos</code>, <code>joint_rotations</code>, <code>joint_positions</code>, <code>node_positions</code>, <code>joint_velocities</code>, <code>joint_accelerations</code>, <code>node_velocities</code>, <code>node_accelerations</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">desc</span> <span class="o">=</span> <span class="n">describe_features</span><span class="p">(</span><span class="mi">24</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;joint_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_rot&quot;</span><span class="p">))</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">desc</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="s2">&quot;joint_positions&quot;</span><span class="p">)</span>     <span class="c1"># slice(0, 72)</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">desc</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="s2">&quot;joint_rotations&quot;</span><span class="p">)</span>     <span class="c1"># slice(72, 216)</span>
+</code></pre></div>
+<p><code>num_nodes=</code> is required for any node-space block — nodes are joints plus end sites, so <code>N</code> cannot be derived from <code>num_joints</code>. That is checked by <em>index space</em>, so <code>node_vel</code> needs it as much as <code>node_pos</code>.</p>
+<p>For the richer layout that also covers velocities and foot contacts (as written by <code>pybvh.Bvh.to_feature_array</code>), use <code>pybvh.Bvh.feature_array_layout</code> — it returns a <code>{block_name: slice}</code> dict for the full feature array.</p>
+<h3 id="the-graph-layouts-describe_graph_features">The graph layouts: <code>describe_graph_features</code><a class="headerlink" href="#the-graph-layouts-describe_graph_features" title="Permanent link">&para;</a></h3>
+<p><code>describe_features</code> describes the flat layout, and only that. For <code>(C, T, V)</code> / <code>(T, V, C)</code> the question is different — what are <code>C</code> and <code>V</code>? — so it has its own function:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">describe_graph_features</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">desc</span> <span class="o">=</span> <span class="n">describe_graph_features</span><span class="p">(</span><span class="mi">24</span><span class="p">,</span> <span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;joint_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_vel&quot;</span><span class="p">))</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">desc</span><span class="o">.</span><span class="n">num_channels</span><span class="p">,</span> <span class="n">desc</span><span class="o">.</span><span class="n">num_vertices</span>   <span class="c1"># (6, 24)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">desc</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="mi">64</span><span class="p">)</span>                         <span class="c1"># (6, 64, 24)  — what pack_to_ctv returns</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">desc</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="s2">&quot;tvc&quot;</span><span class="p">)</span>                  <span class="c1"># (64, 24, 6)</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">desc</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="s2">&quot;joint_velocities&quot;</span><span class="p">)</span>         <span class="c1"># slice(3, 6) along C</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="n">desc</span><span class="o">.</span><span class="n">first_vertex</span>                      <span class="c1"># 0 — the offset to add to skeleton_info[&quot;edges&quot;]</span>
+</code></pre></div>
+<p>Use it so a config check doesn't have to restate the packer's rules, which is where they drift. Three it encodes:</p>
+<ul>
+<li><strong><code>"root_pos"</code> adds a vertex, never a channel block.</strong> <code>desc.packs_root</code> says whether vertex 0 is the root; <code>"root_pos"</code> is deliberately not a key in <code>channel_ranges</code>, and <code>first_vertex</code> is the offset your edge list needs.</li>
+<li><strong><code>C</code> is the per-vertex widths <em>floored</em> by the root's 3, not summed with it.</strong> So <code>streams=("root_pos", "joint_pos")</code> is <code>C = 3</code>, not 6, and <code>streams=("root_pos",)</code> alone is still <code>C = 3</code>.</li>
+<li><strong>Derived streams are always 3 channels</strong>; only <code>joint_rot</code> varies with <code>representation</code>.</li>
+</ul>
+<p>It refuses exactly what the packer refuses — unknown or repeated names, a node-space stream beside a joint-space one, a node-space stream without <code>num_nodes</code> — from the same code, so the two cannot disagree.</p>
+<h2 id="sequence-length-utilities">Sequence length utilities<a class="headerlink" href="#sequence-length-utilities" title="Permanent link">&para;</a></h2>
+<p>Models want fixed-length inputs; clips aren't. Three tools, from dumb to smart:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">sliding_window</span><span class="p">,</span> <span class="n">standardize_length</span><span class="p">,</span> <span class="n">sample_temporal</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Cut overlapping windows: (num_windows, 64, ...)</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">windows</span> <span class="o">=</span> <span class="n">sliding_window</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">window_size</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># Pad or crop to an exact length along axis 0</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="n">padded</span> <span class="o">=</span> <span class="n">standardize_length</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;pad&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="n">cropped</span> <span class="o">=</span> <span class="n">standardize_length</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s2">&quot;crop&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># PySKL-style uniform segment sampling (skeleton-based recognition)</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="n">clip</span> <span class="o">=</span> <span class="n">sample_temporal</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">clip_length</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="n">clips</span> <span class="o">=</span> <span class="n">sample_temporal</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">clip_length</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">num_samples</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+</code></pre></div>
+<p><code>sample_temporal</code> divides the sequence into <code>clip_length</code> equal segments and picks one frame per segment — random offsets in <code>"train"</code> mode (temporal augmentation), deterministic offsets in <code>"test"</code> mode (reproducible evaluation, and multiple <code>num_samples</code> are still distinct draws). The index-level primitive is <code>uniform_temporal_sample</code> if you want the indices without applying them.</p>
+<p><img alt="Segment-shaded timeline with the frame indices picked by three train-mode draws and the deterministic test-mode draw" src="../../gallery/img/temporal-sample.png" /></p>
+<p><em>One frame per segment: three train draws jitter within their segments; test mode is fixed.</em></p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../api/packing/">Packing API</a> — full signatures</li>
+<li><a href="../../api/sequences/">Sequences API</a> — windowing and sampling reference</li>
+<li><a href="../../api/metadata/">Feature Metadata API</a> — <code>FeatureDescriptor</code></li>
+<li><a href="../pytorch/">PyTorch Integration</a> — where <code>target_length</code> and collate-time padding take over</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../gallery/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Gallery">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Gallery
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../preprocessing/" class="md-footer__link md-footer__link--next" aria-label="Next: Preprocessing Pipelines">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Preprocessing Pipelines
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

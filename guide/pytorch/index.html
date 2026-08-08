@@ -1,0 +1,1808 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="ML bridge layer for pybvh — tensor packing, augmentation, preprocessing, and PyTorch datasets for motion capture data">
+      
+      
+      
+        <link rel="canonical" href="https://victors-67.github.io/pybvh-ml/guide/pytorch/">
+      
+      
+        <link rel="prev" href="../augmentation/">
+      
+      
+        <link rel="next" href="../skeleton-metadata/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>PyTorch Integration - pybvh-ml</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#pytorch-integration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="pybvh-ml" class="md-header__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pybvh-ml
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              PyTorch Integration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../gallery/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Gallery
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../tensor-layouts/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../tutorials/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Tutorials
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="pybvh-ml" class="md-nav__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pybvh-ml
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gallery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tensor-layouts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Layouts & Packing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing Pipelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../augmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch Integration
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#end-to-end" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        End to end
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-dataset-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two Dataset classes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-__getitem__-returns-and-what-collate-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What __getitem__ returns, and what collate does
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What __getitem__ returns, and what collate does">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shaping-the-clip-temporal-and-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shaping the clip: temporal and layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing the streams
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproducible-per-epoch-augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproducible per-epoch augmentation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reproducible per-epoch augmentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#asking-what-happened-to-one-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asking what happened to one sample
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#using-the-seeding-scheme-in-your-own-dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the seeding scheme in your own Dataset
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-pybvh-ml-never-touches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What pybvh-ml never touches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skeleton-metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Graph Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/arrays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Motion Arrays (the container)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/packing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Packing (tensor layouts)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/augmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing & Normalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/sequences/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sequences (windows & sampling)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/skeleton/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/convert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Representation Conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Feature Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/torch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch (datasets & collate)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#end-to-end" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        End to end
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-two-dataset-classes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The two Dataset classes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-__getitem__-returns-and-what-collate-does" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What __getitem__ returns, and what collate does
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="What __getitem__ returns, and what collate does">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shaping-the-clip-temporal-and-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shaping the clip: temporal and layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-the-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing the streams
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproducible-per-epoch-augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproducible per-epoch augmentation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reproducible per-epoch augmentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#asking-what-happened-to-one-sample" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asking what happened to one sample
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#using-the-seeding-scheme-in-your-own-dataset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the seeding scheme in your own Dataset
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-pybvh-ml-never-touches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What pybvh-ml never touches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="pytorch-integration">PyTorch Integration<a class="headerlink" href="#pytorch-integration" title="Permanent link">&para;</a></h1>
+<p>Optional — install with <code>pip install "pybvh-ml[torch]"</code>. The <code>pybvh_ml.torch</code> submodule provides two Dataset classes and a collate function; everything else in the library stays NumPy-only, so a broken or absent torch never blocks the core.</p>
+<h2 id="end-to-end">End to end<a class="headerlink" href="#end-to-end" title="Permanent link">&para;</a></h2>
+<p>Preprocess → <code>MotionDataset</code> → <code>DataLoader</code> → training batch:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">preprocess_directory</span><span class="p">,</span> <span class="n">load_preprocessed</span><span class="p">,</span> <span class="n">AugmentationPipeline</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml.torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">MotionDataset</span><span class="p">,</span> <span class="n">collate_motion_batch</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># 1. One-time preprocess (label_fn: map filename stem → integer class).</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="n">preprocess_directory</span><span class="p">(</span><span class="s2">&quot;walks/&quot;</span><span class="p">,</span> <span class="s2">&quot;train.npz&quot;</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                     <span class="n">label_fn</span><span class="o">=</span><span class="k">lambda</span> <span class="n">stem</span><span class="p">:</span> <span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># 2. Build dataset + augmentation pipeline.</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">data</span> <span class="o">=</span> <span class="n">load_preprocessed</span><span class="p">(</span><span class="s2">&quot;train.npz&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">skel</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s2">&quot;skeleton_info&quot;</span><span class="p">]</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">pipeline</span> <span class="o">=</span> <span class="n">AugmentationPipeline</span><span class="o">.</span><span class="n">standard</span><span class="p">(</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">skel</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">up_axis</span><span class="o">=</span><span class="n">skel</span><span class="p">[</span><span class="s2">&quot;world_up&quot;</span><span class="p">])</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="n">dataset</span> <span class="o">=</span> <span class="n">MotionDataset</span><span class="p">(</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="n">data</span><span class="p">[</span><span class="s2">&quot;clips&quot;</span><span class="p">],</span> <span class="n">labels</span><span class="o">=</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">],</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    <span class="n">target_length</span><span class="o">=</span><span class="mi">128</span><span class="p">,</span> <span class="n">augmentation</span><span class="o">=</span><span class="n">pipeline</span><span class="p">,</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>  <span class="c1"># reproducible — see the set_epoch contract below</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="p">)</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="c1"># 3. Variable-length batching with padding and masks.</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="n">loader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">collate_fn</span><span class="o">=</span><span class="n">collate_motion_batch</span><span class="p">)</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="c1"># 4. Training loop.</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_epochs</span><span class="p">):</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a>    <span class="n">dataset</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>    <span class="c1"># fresh aug per epoch, reproducible across runs</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a>    <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">loader</span><span class="p">:</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a>        <span class="n">data_tensor</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;data&quot;</span><span class="p">]</span>       <span class="c1"># (B, T_max, D)</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a>        <span class="n">mask</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;mask&quot;</span><span class="p">]</span>              <span class="c1"># (B, T_max) bool</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>        <span class="n">lengths</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;lengths&quot;</span><span class="p">]</span>        <span class="c1"># (B,)</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a>        <span class="n">labels</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">]</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a>        <span class="c1"># model(data_tensor, mask) ...</span>
+</code></pre></div>
+<h2 id="the-two-dataset-classes">The two Dataset classes<a class="headerlink" href="#the-two-dataset-classes" title="Permanent link">&para;</a></h2>
+<p><strong><code>MotionDataset</code></strong> wraps in-memory clip dicts — typically <code>load_preprocessed(...)["clips"]</code>, but any list of <code>{"root_pos", "joint_rot", ...}</code> dicts works (pass <code>center_root=True</code> for raw, uncentered hand-built clips). When the clips <em>do</em> come from a preprocessed file, <code>MotionDataset.from_preprocessed(loaded)</code> is the better entry point: it wires the labels, the stored <code>filenames</code> (as per-clip <code>names</code>), the stored <code>representation</code> and <code>skeleton_info["euler_orders"]</code> from the file, so nothing has to be restated at the call site.</p>
+<p><strong><code>OnTheFlyDataset</code></strong> skips the preprocessed file entirely: give it a list of BVH paths (<code>str</code> or <code>Path</code>) and it loads, converts, and augments per item — useful when you don't want the preprocessing artifact on disk. <code>world_up=</code> and <code>lr_mapping=</code> are forwarded to every <code>pybvh.read_bvh_file</code> call, matching <code>preprocess_directory</code>.</p>
+<p>Both support Python negative indexing (<code>ds[-1]</code> matches <code>ds[len(ds)-1]</code> on the same rng stream) and raise <code>IndexError</code> cleanly out of range.</p>
+<h2 id="what-__getitem__-returns-and-what-collate-does">What <code>__getitem__</code> returns, and what collate does<a class="headerlink" href="#what-__getitem__-returns-and-what-collate-does" title="Permanent link">&para;</a></h2>
+<p>Each item is a dict with <code>"data"</code> — the (augmented, length-standardized) clip packed in the chosen <code>layout</code> — plus <code>"length"</code>, and optionally <code>"label"</code> and <code>"name"</code>.</p>
+<p><strong><code>name</code> is the clip's identity</strong>, and you need it for anything that isn't a dataset-level mean: writing one output row per clip, routing a clip to the fold whose model never saw its performer, keying saved activations by file. <code>MotionDataset</code> reports it when built with <code>names=</code> (or via <code>from_preprocessed</code>, which reads the stored <code>filenames</code>); <code>OnTheFlyDataset</code> always reports it, since it has the paths. Both use the <strong>filename stem</strong>, so a clip carries the same name whether it came from a preprocessed file or straight from BVH. Omitted entirely when no names are available, rather than substituted with indices — so a downstream can tell "no identity provided" from a real name.</p>
+<p><strong><code>length</code> means valid frames in the returned tensor.</strong> When <code>target_length</code> pads a shorter clip, <code>length</code> is the original frame count (the padded tail is not valid); when it <em>crops</em> a longer clip, <code>length</code> is <code>target_length</code>. If you need the original pre-crop length, recover it from your clip arrays before the dataset.</p>
+<h3 id="shaping-the-clip-temporal-and-layout">Shaping the clip: <code>temporal</code> and <code>layout</code><a class="headerlink" href="#shaping-the-clip-temporal-and-layout" title="Permanent link">&para;</a></h3>
+<p><code>target_length</code> says <em>how many</em> frames; <code>temporal</code> says how to get there, and the choice is not cosmetic:</p>
+<table>
+<thead>
+<tr>
+<th><code>temporal</code></th>
+<th>Keeps</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"pad"</code> (default)</td>
+<td>a window: truncate from the end, zero-pad if short</td>
+<td>a fixed-duration window is the unit of prediction</td>
+</tr>
+<tr>
+<td><code>"crop"</code></td>
+<td>a window, taken from the centre</td>
+<td>same, but the middle of the clip is the informative part</td>
+</tr>
+<tr>
+<td><code>"resample"</code></td>
+<td>the whole <em>arc</em>, at a fixed frame budget, with random per-segment offsets</td>
+<td>training, when the shape of the entire clip carries the signal</td>
+</tr>
+<tr>
+<td><code>"resample_deterministic"</code></td>
+<td>the same arc, offsets pinned</td>
+<td>evaluating the above — same frames every read</td>
+</tr>
+</tbody>
+</table>
+<p>Crop and pad keep a fixed <em>window</em>; the resample modes keep the whole <em>arc</em> of a clip at a fixed budget, sampling indices spread across its full duration (<a href="../../api/sequences/"><code>uniform_temporal_sample</code></a>). For a clip whose meaning is its build-up → peak → decay, cropping throws away most of the signal. Both resample modes report <code>length == target_length</code> — every returned frame is real data, so there is nothing to mask.</p>
+<p><code>layout</code> picks the tensor shape: <code>"flat"</code> <code>(T, D)</code> (default), or the graph layouts <code>"ctv"</code> <code>(C, T, V)</code> and <code>"tvc"</code> <code>(T, V, C)</code> that GCN and skeleton-transformer models consume. <code>MotionDataset</code> also converts representations on the way out — <code>source_repr</code> / <code>target_repr</code> (plus <code>euler_orders</code> if either end is Euler) — so a dataset stored as Euler can train as 6D without a second preprocessing pass:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">MotionDataset</span><span class="o">.</span><span class="n">from_preprocessed</span><span class="p">(</span>   <span class="c1"># source_repr comes from the file</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="n">loaded</span><span class="p">,</span> <span class="n">target_repr</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="s2">&quot;ctv&quot;</span><span class="p">,</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">temporal</span><span class="o">=</span><span class="s2">&quot;resample&quot;</span><span class="p">,</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="choosing-the-streams">Choosing the streams<a class="headerlink" href="#choosing-the-streams" title="Permanent link">&para;</a></h3>
+<p><code>streams=</code> picks what goes into the <code>data</code> tensor, with the same vocabulary and shape rules as <a href="../tensor-layouts/#choosing-what-gets-packed-streams"><code>pack_to_ctv</code></a>. It defaults to <code>("root_pos", "joint_rot")</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">MotionDataset</span><span class="o">.</span><span class="n">from_preprocessed</span><span class="p">(</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">loaded</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="s2">&quot;ctv&quot;</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;joint_pos&quot;</span><span class="p">,),</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">temporal</span><span class="o">=</span><span class="s2">&quot;resample&quot;</span><span class="p">,</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">64</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">ds</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;data&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span>     <span class="c1"># (3, 64, J) — straight into ST-GCN</span>
+</code></pre></div>
+<p>Still <strong>one</strong> <code>data</code> tensor with explicit streams, not a second tensor beside it, so the batch contract does not change with a preprocessing flag. <code>from_preprocessed</code> also threads the stored <code>position_centering</code> onto every <code>MotionArrays</code> it mints — the steps that depend on it only ever see the container — and raises when a requested stream is absent from the clips, naming <code>include_positions=True</code>.</p>
+<p><code>OnTheFlyDataset</code> needs its own extraction path, since it reads BVH files rather than preprocessed clips. It takes the same three settings directly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">OnTheFlyDataset</span><span class="p">(</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">paths</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>          <span class="c1"># positions only</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">include_positions</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">position_space</span><span class="o">=</span><span class="s2">&quot;node&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">position_centering</span><span class="o">=</span><span class="s2">&quot;skeleton&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">layout</span><span class="o">=</span><span class="s2">&quot;ctv&quot;</span><span class="p">,</span> <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;node_pos&quot;</span><span class="p">,),</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">64</span><span class="p">)</span>
+</code></pre></div>
+<p>One FK pass per clip regardless of how many representations are requested — pybvh caches world-frame FK on the <code>Bvh</code> and invalidates it on motion writes.</p>
+<p><code>collate_motion_batch</code> stacks variable-length items into <code>{"data", "mask", "lengths", "labels", "names"}</code> with zero-padding to the batch maximum and a bool validity mask. <code>names</code> is a plain list of <code>B</code> strings in batch order — strings have no tensor form, and <code>default_collate</code> does the same, so a batch means the same thing under either collate. Either every item in a batch carries a <code>label</code> / <code>name</code> or none does — mixed presence raises a <code>ValueError</code> naming the offending index rather than silently dropping the field.</p>
+<div class="admonition warning">
+<p class="admonition-title">With <code>layout="flat"</code>, always pass <code>collate_fn=collate_motion_batch</code> — PyTorch's default is not equivalent</p>
+<p>A <code>DataLoader</code> without <code>collate_fn</code> uses <code>torch.utils.data.default_collate</code>, which behaves differently depending on your clip lengths. With <strong>variable-length</strong> clips it raises <code>RuntimeError: stack expects each tensor to be equal size</code> — it only stacks tensors that already share a shape, and padding them is exactly the work this collate does. That failure is loud and therefore harmless. The trap is <strong>fixed-length</strong> clips (<code>target_length</code> set): there <code>default_collate</code> succeeds and the <code>data</code> tensor is identical, but the keys stay singular (<code>length</code> / <code>label</code>, not <code>lengths</code> / <code>labels</code>) and <strong>there is no <code>mask</code></strong>. Clips shorter than <code>target_length</code> are still zero-padded inside that tensor, so without the mask those padded frames reach your model looking exactly like real motion, and nothing raises.</p>
+<p>The graph layouts invert this. <code>collate_motion_batch</code> pads a time-major axis 0, which <code>(C, T, V)</code> does not have — so it raises rather than masking along the channel axis. <code>"ctv"</code> / <code>"tvc"</code> are fixed-size by construction (they pair with <code>target_length</code>, and a resample mode leaves nothing to mask), so <code>default_collate</code> is the right choice there.</p>
+</div>
+<p><img alt="Four variable-length clips collated: the padded batch tensor with its zero tail, and the boolean validity mask marking real frames per row" src="../../gallery/img/collate-mask.png" /></p>
+<p><em>A four-clip batch: zero-padded data on top, the validity mask below. (<a href="../../gallery/">Gallery</a> for every figure.)</em></p>
+<h2 id="reproducible-per-epoch-augmentation">Reproducible per-epoch augmentation<a class="headerlink" href="#reproducible-per-epoch-augmentation" title="Permanent link">&para;</a></h2>
+<p>When <code>seed</code> is set, the tuple <code>(seed, epoch, idx)</code> feeds a <code>numpy.random.SeedSequence</code>, so:</p>
+<ul>
+<li>two runs with the same seed produce the same augmentation trajectory,</li>
+<li>each epoch still sees a different draw,</li>
+<li>and the result is <strong>bit-identical regardless of <code>num_workers</code> or shuffle order</strong> — the rng depends on the sample index, not on which worker processes it.</li>
+</ul>
+<p>Call <code>dataset.set_epoch(epoch)</code> at the top of each epoch — the same contract as <code>torch.utils.data.distributed.DistributedSampler</code>. Forgetting it doesn't break anything: the dataset warns once and uses epoch 0 (every epoch replays the same augmentation draw).</p>
+<p>With <code>seed=None</code>, every call uses fresh OS entropy — simplest, no reproducibility.</p>
+<div class="admonition warning">
+<p class="admonition-title">Under a training framework, set the epoch <em>before</em> the DataLoader starts its workers</p>
+<p>Many trainers prefetch the first batches as soon as the loader is built, which is often <strong>before</strong> the hook you would naturally put <code>set_epoch</code> in — PyTorch Lightning's <code>on_train_start</code> is one such hook. Workers forked in that window carry the never-set state into their first batches, and each one emits its own "set_epoch() was never called" warning (the warn-once budget is per process, so <code>num_workers=6</code> means six warnings).</p>
+<p>Nothing is silently wrong when that happens: the unset state reads as epoch 0, which is what the hook sets a moment later, and the shared counter means workers observe every subsequent <code>set_epoch</code>. But a warning that fires on every run is a warning nobody reads, which is exactly how a real occurrence goes unnoticed. Claim the epoch in the earliest hook that runs <em>before</em> dataloaders are constructed — for Lightning, a <code>Callback.setup</code>.</p>
+<p><code>dataset.epoch_is_set</code> tells the two states apart, so an earlier hook can claim epoch 0 only if nothing else has (<code>dataset.epoch</code> reports the epoch itself, <code>0</code> when unset):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trainer</span><span class="p">,</span> <span class="n">pl_module</span><span class="p">,</span> <span class="n">stage</span><span class="p">):</span>     <span class="c1"># runs before dataloaders</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="k">if</span> <span class="n">stage</span> <span class="o">==</span> <span class="s2">&quot;fit&quot;</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">dataset</span><span class="o">.</span><span class="n">epoch_is_set</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>        <span class="n">dataset</span><span class="o">.</span><span class="n">set_epoch</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div>
+<p>Both read the shared counter, so the answer is the same in every worker. A custom Dataset holding its own <code>EpochState</code> asks it directly — <code>state.is_set</code>. What does <em>not</em> work is a plain <code>self._epoch_was_set = True</code> flag beside the shared counter: it lives in whichever process wrote it and reads <code>False</code> in every forked worker.</p>
+</div>
+<p><img alt="Per-frame deviation curves for three epochs from two independently constructed datasets sharing a seed: each epoch's two curves coincide exactly, and the three epochs differ" src="../../gallery/img/epoch-determinism.png" /></p>
+<p><em>The contract, drawn: run B (dashed) lies exactly on run A (solid) for every epoch; each epoch is a fresh draw.</em></p>
+<h3 id="asking-what-happened-to-one-sample">Asking what happened to one sample<a class="headerlink" href="#asking-what-happened-to-one-sample" title="Permanent link">&para;</a></h3>
+<p>Seeded draws are replayable, so the dataset can answer after the fact: <em>sample 5 in epoch 3 looked wrong — what did the augmentation do to it?</em></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">explain_augmentation</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>              <span class="c1"># the current epoch</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">explain_augmentation</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="n">epoch</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>     <span class="c1"># or an earlier one</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># [{&#39;name&#39;: &#39;rotate_vertical&#39;,           &#39;applied&#39;: True,  &#39;params&#39;: {&#39;angle&#39;: 0.034}},</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1">#  {&#39;name&#39;: &#39;mirror&#39;,                    &#39;applied&#39;: False, &#39;params&#39;: {}},</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1">#  {&#39;name&#39;: &#39;add_joint_rotation_noise&#39;,  &#39;applied&#39;: True,  &#39;params&#39;: {}},</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1">#  {&#39;name&#39;: &#39;speed_perturbation_arrays&#39;, &#39;applied&#39;: True,  &#39;params&#39;: {&#39;factor&#39;: 1.020}}]</span>
+</code></pre></div>
+<p>Nothing is recorded during training and nothing rides along in your batches: the method re-runs that one sample's augmentation on the same <code>(seed, epoch, idx)</code> generator the loader used, which reproduces the loader's tensor bit for bit — so the records describe the draw that really ran. Records use the pipeline's <a href="../augmentation/#seeing-what-a-call-actually-drew"><code>return_params</code> format</a>.</p>
+<p><strong>On an unseeded dataset it raises</strong>, rather than answering. Without a seed there is no draw to recover, and a freshly drawn answer would be indistinguishable from a real one while describing an augmentation that never touched your data. For the same reason the replay is only truthful while its inputs are unchanged — same pipeline, same clip arrays (for <code>OnTheFlyDataset</code>, the same file on disk).</p>
+<h3 id="using-the-seeding-scheme-in-your-own-dataset">Using the seeding scheme in your own Dataset<a class="headerlink" href="#using-the-seeding-scheme-in-your-own-dataset" title="Permanent link">&para;</a></h3>
+<p>The two pieces above are public, so a Dataset that isn't a <code>MotionDataset</code> subclass — one composing <code>convert_arrays</code> → <code>pack_to_ctv</code> → <code>uniform_temporal_sample</code> itself, say — can honor the same contract without reimplementing it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml.torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">EpochState</span><span class="p">,</span> <span class="n">rng_for</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">class</span><span class="w"> </span><span class="nc">Feeder</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">Dataset</span><span class="p">):</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">clips</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">clips</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">seed</span> <span class="o">=</span> <span class="n">clips</span><span class="p">,</span> <span class="n">seed</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">epoch_state</span> <span class="o">=</span> <span class="n">EpochState</span><span class="p">()</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">):</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">epoch_state</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">epoch</span><span class="p">)</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>        <span class="n">rng</span> <span class="o">=</span> <span class="n">rng_for</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">epoch_state</span><span class="o">.</span><span class="n">current</span><span class="p">,</span> <span class="n">idx</span><span class="p">)</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>        <span class="o">...</span>
+</code></pre></div>
+<p><code>rng_for</code> gives the order- and worker-independent stream; <code>EpochState</code> is the shared-memory counter that makes <code>set_epoch</code> reach workers. <code>EpochState.current</code> reads 0 until first set.</p>
+<div class="admonition note">
+<p class="admonition-title">Why <code>set_epoch</code> works with worker processes (and what it costs)</p>
+<p>DataLoader workers hold a <em>copy</em> of the dataset, created once — with <code>persistent_workers=True</code>, that copy lives for the whole training run, so a plain-attribute epoch would silently freeze at its startup value in every worker. The epoch therefore lives in shared memory (a <code>multiprocessing.Value</code>), which worker processes inherit at creation — fork and spawn both. One consequence, stated on both classes: dataset instances can't be <code>deepcopy</code>-ed or <code>torch.save</code>-ed directly, because shared state only travels to other processes via DataLoader worker inheritance. Save your model, not your dataset.</p>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">With <code>multiprocessing_context="spawn"</code>, the whole dataset must be picklable</p>
+<p>A spawn-started worker doesn't inherit memory — the DataLoader pickles the dataset to it. That reaches your augmentation pipeline, so the <code>lambda rng: ...</code> kwargs used throughout this documentation (<code>"angle": lambda rng: rng.uniform(-np.pi, np.pi)</code>) fail with <code>Can't pickle local object</code>. Move those callables to module level (a <code>def</code> at the top of your training script) when you use a spawn loader; the fork default is unaffected.</p>
+</div>
+<h2 id="what-pybvh-ml-never-touches">What pybvh-ml never touches<a class="headerlink" href="#what-pybvh-ml-never-touches" title="Permanent link">&para;</a></h2>
+<p><strong>Precision, determinism, threading and seeding policy stays yours.</strong> Importing <code>pybvh_ml</code> or <code>pybvh_ml.torch</code> — and calling anything in them — never sets <code>torch.set_float32_matmul_precision</code>, <code>use_deterministic_algorithms</code>, <code>set_default_dtype</code>, <code>set_num_threads</code>, <code>manual_seed</code> or any <code>torch.backends</code> flag, and never touches <code>np.seterr</code>, <code>np.random.seed</code>, <code>os.environ</code>, warning filters or logging configuration. A data library that set those would change your model's numbers with nothing at any call site to point at it, and the effect would survive every layer you put between your training script and us.</p>
+<p>Concretely: if you want TF32 on, deterministic algorithms, or a global torch seed, set them in your training script — they will still be exactly what you set after pybvh-ml is imported. Randomness in pybvh-ml is always something you hand in (<code>seed=</code> on the datasets, <code>rng=</code> on the augmentation functions), never something it installs. This is a stated design principle of the project, not an accident of the current implementation, and a test enforces it — so it holds for future versions too.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../api/torch/">PyTorch API</a> — full signatures for both classes and the collate function</li>
+<li><a href="../augmentation/">Runtime Augmentation</a> — building the pipeline the datasets call</li>
+<li><a href="../../tutorials/">Tutorial 1: End-to-end pipeline</a> — this page as a runnable notebook, ending in a trained classifier</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../augmentation/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Runtime Augmentation">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Runtime Augmentation
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../skeleton-metadata/" class="md-footer__link md-footer__link--next" aria-label="Next: Skeleton Graph Metadata">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Skeleton Graph Metadata
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

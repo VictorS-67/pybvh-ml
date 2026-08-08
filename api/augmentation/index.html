@@ -1,0 +1,3302 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="ML bridge layer for pybvh — tensor packing, augmentation, preprocessing, and PyTorch datasets for motion capture data">
+      
+      
+      
+        <link rel="canonical" href="https://victors-67.github.io/pybvh-ml/api/augmentation/">
+      
+      
+        <link rel="prev" href="../packing/">
+      
+      
+        <link rel="next" href="../pipeline/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Augmentation - pybvh-ml</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#augmentation" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="pybvh-ml" class="md-header__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pybvh-ml
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Augmentation
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../gallery/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Gallery
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../guide/tensor-layouts/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../tutorials/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Tutorials
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="pybvh-ml" class="md-nav__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pybvh-ml
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gallery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/tensor-layouts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Layouts & Packing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing Pipelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/augmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/pytorch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/skeleton-metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Graph Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../arrays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Motion Arrays (the container)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../packing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Packing (tensor layouts)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        augmentation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="augmentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.handles_streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        handles_streams
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.stream_support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stream_support
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.rotate_vertical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rotate_vertical
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.mirror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mirror
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_joint_rotation_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_joint_rotation_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_root_position_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_root_position_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_joint_position_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_joint_position_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_node_position_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_node_position_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.speed_perturbation_arrays" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        speed_perturbation_arrays
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.dropout_arrays" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dropout_arrays
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing & Normalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sequences/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sequences (windows & sampling)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skeleton/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../convert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Representation Conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Feature Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../torch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch (datasets & collate)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        augmentation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="augmentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.handles_streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        handles_streams
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.stream_support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stream_support
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.rotate_vertical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rotate_vertical
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.mirror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        mirror
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_joint_rotation_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_joint_rotation_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_root_position_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_root_position_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_joint_position_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_joint_position_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.add_node_position_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        add_node_position_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.speed_perturbation_arrays" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        speed_perturbation_arrays
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pybvh_ml.augmentation.dropout_arrays" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dropout_arrays
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="augmentation">Augmentation<a class="headerlink" href="#augmentation" title="Permanent link">&para;</a></h1>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="pybvh_ml.augmentation" class="doc doc-heading">
+            <code>augmentation</code>
+
+
+<a href="#pybvh_ml.augmentation" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Array-level augmentation for ML pipelines.</p>
+<p>Operates on pre-extracted NumPy arrays without Bvh objects.
+All functions accept any rotation representation supported by pybvh:
+<code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>, <code>"rotmat"</code>, or <code>"euler"</code>.
+Euler arrays additionally require an <code>euler_orders</code> kwarg.</p>
+<p>Every function takes a :class:<code>~pybvh_ml.MotionArrays</code> as its single
+positional argument and returns a new one; every other parameter is
+keyword-only.  The container is a distinct type, so passing it
+positionally cannot be confused with anything else — whereas the loose
+<code>(root_pos, joint_data)</code> pair it replaces was two shape-compatible
+ndarrays a swapped call would have silently corrupted.  Call with
+<code>rotate_vertical(arrays, angle=..., up_axis=..., representation=...)</code>.</p>
+<p>Angles are in <strong>radians</strong> by default, matching pybvh's convention.  The
+functions that take one accept <code>degrees=True</code> to interpret it in
+degrees instead, mirroring pybvh's own opt-in flag.</p>
+<p><strong>Streams.</strong> A sample may carry rotations, positions, or both, and the
+governing rule is that <em>a step must handle every stream the sample
+carries, or refuse it</em> — a pipeline never carries a stream a step left
+behind.  Each function declares what it handles with
+:func:<code>handles_streams</code>, and the declaration is checked before the step
+runs.  All four geometric steps (:func:<code>rotate_vertical</code>,
+:func:<code>mirror</code>, :func:<code>speed_perturbation_arrays</code>,
+:func:<code>dropout_arrays</code>) and both noise functions handle every stream;
+only the two keypoint-jitter functions decline anything.
+<code>representation</code> is consequently <code>str | None</code> throughout, required
+only when the sample carries <code>joint_rot</code>.</p>
+<p><strong>Output dtype.</strong> Every function here computes in <code>float64</code> — pybvh's dtype, and the only one its conversions are exact in — and returns each stream in the dtype it was given, per stream, so a <code>float32</code> clip comes back <code>float32</code> without the arithmetic having been done in single precision. :class:<code>~pybvh_ml.AugmentationPipeline</code> does the same across a whole run, which is what keeps a result's dtype independent of which probabilistic steps fired for that sample. Widening is lossless, so the <code>float32</code> result is exactly the <code>float64</code> result narrowed. The per-stream rule earns its keep with positions: <code>float32</code> keypoints beside <code>float64</code> rotations is the ordinary ST-GCN case.</p>
+<p><strong>Output storage.</strong> A function's result may share storage with its input for a stream it does not touch — :func:<code>add_root_position_noise</code> returns the input's <code>joint_rot</code> by reference under skeleton-centered positions, and the keypoint-jitter functions return the stream they were not pointed at. This is safe rather than sloppy: :class:<code>~pybvh_ml.MotionArrays</code> fields are read-only views, so no caller (this package included) can write through the shared buffer, and the alternative — copying every untouched stream — would allocate a full clip per step for nothing. The stronger guarantee, freshly allocated arrays regardless of what ran, belongs to :class:<code>~pybvh_ml.AugmentationPipeline</code>, which is the surface a data loader calls; reach for it (or <code>np.array(...)</code>) if you need storage you own.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.handles_streams" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">handles_streams</span><span class="p">(</span><span class="o">*</span><span class="n">streams</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Callable</span><span class="p">],</span> <span class="n">Callable</span><span class="p">]</span></code>
+
+<a href="#pybvh_ml.augmentation.handles_streams" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Declare which :class:<code>~pybvh_ml.MotionArrays</code> streams a step handles.</p>
+<p>The coherence rule this enforces: <strong>a step must handle every stream
+the sample carries, or refuse it.</strong>  A pipeline never carries a
+stream a step left behind, so a rotation-only step meeting a sample
+with positions raises rather than returning positions that no longer
+match the rotations beside them.</p>
+<p><strong>"Handles" means the stream is left correct</strong>, by either of two
+routes:</p>
+<ul>
+<li><strong>transformed</strong> from its own input — what all four geometric steps
+  do (:func:<code>rotate_vertical</code>, :func:<code>mirror</code>,
+  :func:<code>speed_perturbation_arrays</code>, :func:<code>dropout_arrays</code>); or</li>
+<li><strong>re-derived</strong> from another stream — what
+  :func:<code>add_joint_rotation_noise</code> does, replacing the position
+  streams with forward kinematics of the noised rotations rather
+  than transforming the incoming ones.</li>
+</ul>
+<p>It does <strong>not</strong> mean the positions stay the exact forward kinematics
+of the rotations beside them, except immediately after a
+re-derivation.  Two divergences are intrinsic to the math, and every
+pipeline in the field has them:</p>
+<ul>
+<li><strong>Mirror.</strong> Positions reflect exactly in world space; rotations
+  reflect in parent-local space.  The two agree when the rest pose is
+  laterally symmetric and diverge on rigs with asymmetric offsets,
+  with the error accumulating down the chain.  Each stream stays
+  individually correct; the pair stops being FK partners.</li>
+<li><strong>Speed perturbation and dropout.</strong> Positions are linearly
+  interpolated, rotations slerped — chord versus arc.  They agree at
+  the knots and drift between them.</li>
+</ul>
+<p>And a re-derivation <strong>discards whatever stream-specific history the
+positions carried</strong>: on a rig with asymmetric rest offsets,
+<code>[mirror, add_joint_rotation_noise]</code> ends with FK of
+locally-mirrored rotations, throwing away the world-exact reflection
+the position stream held, while <code>[add_joint_rotation_noise,
+mirror]</code> keeps it.  Both are defensible and neither is a bug, but a
+user who does not know reads the difference as one.</p>
+<p>Undeclared steps default to <code>{"root_pos", "joint_rot"}</code>.  Decorate
+a custom step once it genuinely transforms the position streams too::</p>
+<div class="highlight"><pre><span></span><code>@handles_streams(&quot;root_pos&quot;, &quot;joint_rot&quot;, &quot;joint_pos&quot;)
+def my_step(arrays, *, scale):
+    return arrays.replace(joint_pos=arrays.joint_pos * scale)
+</code></pre></div>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>*streams</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Names from :data:<code>~pybvh_ml.arrays.STREAM_NAMES</code>.  The packers'
+derived names (<code>"joint_vel"</code> and friends) are <strong>not</strong> valid
+here: they are computed after all augmentation has run, so no
+step can transform them.  Declare the position stream they come
+from and the derivative follows.</p>
+              </div>
+            </td>
+            <td>
+                  <code>()</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="callable">callable</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The decorator, which records the declaration on the function and
+returns it unchanged.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="see-also" open>
+  <summary>See Also</summary>
+  <p>stream_support : Read a step's declaration back.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.stream_support" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">stream_support</span><span class="p">(</span><span class="n">fn</span><span class="p">:</span> <span class="n">Callable</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">frozenset</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span></code>
+
+<a href="#pybvh_ml.augmentation.stream_support" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>The streams <em>fn</em> declares it handles.</p>
+<p><code>{"root_pos", "joint_rot"}</code> for a step that declares nothing — see
+:func:<code>handles_streams</code> for what "handles" means and why that is the
+right default.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>fn</code>
+            </td>
+            <td>
+                  <code><span title="callable">callable</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>An augmentation step.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code>frozenset of str</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.rotate_vertical" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">rotate_vertical</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">angle</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">up_axis</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">representation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">degrees</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">euler_orders</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.rotate_vertical" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Rotate joint arrays around the vertical axis.</p>
+<p>In rotation space only the root joint (index 0) and root position are
+modified; non-root joints are in parent-local space and stay
+unchanged.  Position streams are <strong>all</strong> rotated, since they are
+world coordinates rather than parent-local ones — this is the one
+place where the rotation and position analogs differ structurally.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Any combination of streams.  <code>representation</code> is required only
+when <code>joint_rot</code> is present.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>angle</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Rotation angle in radians, or degrees when <code>degrees=True</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>degrees</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Interpret <code>angle</code> in degrees.  Default False (radians), the
+convention throughout pybvh and pybvh-ml; the flag exists so a
+caller whose configs are written in degrees can pass them
+straight through instead of converting at every call site.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>up_axis</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Signed axis string: <code>'+x'</code>, <code>'-x'</code>, <code>'+y'</code>, <code>'-y'</code>,
+<code>'+z'</code>, or <code>'-z'</code>.  The sign flips the rotation direction,
+so <code>'+y'</code> and <code>'-y'</code> produce opposite yaws for the same
+<code>angle</code>.  Typically <code>bvh.world_up</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>representation</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One of <code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>,
+<code>"rotmat"</code>, <code>"euler"</code>.  Required when <code>arrays</code> carries
+<code>joint_rot</code>; ignored for a positions-only sample.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>euler_orders</code>
+            </td>
+            <td>
+                  <code>list of str</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Per-joint Euler order strings (e.g. <code>["ZYX", "ZYX", ...]</code>).
+Required when <code>representation="euler"</code>, ignored otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p>The rotation is about the <strong>world origin</strong>, not about the
+character: <code>root_pos</code> is rotated as a set of points, so a clip
+whose root sits away from the origin sweeps along an arc rather
+than turning on the spot.  The alternative convention is a pivot at
+the character — typically the first frame's root projected to the
+ground plane — which is turn-in-place.</p>
+<p>The two coincide exactly when the clip's first-frame root is at the
+origin, which is what <code>center_root=True</code> produces, so the
+packing and Dataset paths (where centering is the default) already
+get turn-in-place from this function.  On uncentered arrays, center
+before rotating and add the offset back if that is what you want.</p>
+<p>The same origin caveat applies to the position streams, and it is
+where a <code>position_centering="skeleton"</code> clip differs: those
+positions are root-relative, so the rotation is always about the
+character and always turn-in-place, whatever the root trajectory
+does.  The function needs no knowledge of the centering to be
+correct — a rotation about the origin is linear, so it commutes with
+the constant shift that distinguishes the three frames.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.mirror" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">mirror</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">lr_joint_pairs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">lr_node_pairs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">lateral_axis</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">representation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">euler_orders</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.mirror" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Mirror joint arrays left-right.</p>
+<p>Swaps left and right vertex data, negates the lateral component of
+root translation and of every position vertex, and reflects each
+rotation across the sagittal plane.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Any combination of streams.  <code>representation</code> is required only
+when <code>joint_rot</code> is present.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>lr_joint_pairs</code>
+            </td>
+            <td>
+                  <code>list of (int, int)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>[(left_idx, right_idx), ...]</code> in joint-array space, typically
+:func:<code>pybvh_ml.get_lr_pairs</code>.  <strong>The reflection is applied to every
+joint; this list only controls which ones additionally swap slots.</strong>
+That is the right behavior for midline joints (hips, spine, neck,
+head), which have no partner and must reflect in place.  It is the
+wrong behavior for a lateral joint whose partner is missing from the
+list: it reflects in place instead of moving to its partner's slot,
+producing a pose where that limb mirrors while the rest of the body
+does not — silently, with no shape or value error.  Completeness of
+this list is the caller's responsibility; an empty list reflects
+every joint in place without any swap, which is correct only for a
+skeleton that is entirely midline.</p>
+<p>Required when the sample carries a joint-space stream
+(<code>joint_rot</code> or <code>joint_pos</code>); <code>None</code> is refused there
+rather than treated as "no pairs", since the two produce
+different motion and only one of them is ever intended.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>lr_node_pairs</code>
+            </td>
+            <td>
+                  <code>list of (int, int)</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The same list in <strong>node</strong> index space — joints <em>and</em> their end
+sites — typically <code>skeleton_info["node_lr_pairs"]</code> (from
+:attr:<code>pybvh.Bvh.node_lr_pairs</code>).  Required when the sample
+carries <code>node_pos</code>, and not interchangeable with
+<code>lr_joint_pairs</code>: node indices diverge from joint indices as
+soon as any end site precedes a paired joint in file order, so
+the wrong list silently swaps the wrong vertices.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>lateral_axis</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Signed axis string: <code>'+x'</code>, <code>'-x'</code>, <code>'+y'</code>, <code>'-y'</code>,
+<code>'+z'</code>, or <code>'-z'</code>.  The sign is accepted for API symmetry
+with :func:<code>rotate_vertical</code> but does not affect the result
+(mirror is sign-invariant).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>representation</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One of <code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>,
+<code>"rotmat"</code>, <code>"euler"</code>.  Required when <code>arrays</code> carries
+<code>joint_rot</code>; ignored for a positions-only sample.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>euler_orders</code>
+            </td>
+            <td>
+                  <code>list of str</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Required when <code>representation="euler"</code>, ignored otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p>Mirroring is done in <strong>parent-local rotation space</strong> — reflect each
+rotation, swap the L/R slots — matching :func:<code>pybvh.transforms.mirror</code>,
+so mirroring arrays and mirroring the source :class:<code>~pybvh.Bvh</code> give the
+same motion.  The alternative is mirroring in world space: run FK, reflect
+the resulting joint positions, and re-solve for local rotations.  The two
+agree exactly when the rest pose is laterally symmetric (every left
+joint's offset is the mirror of its right partner's, and midline offsets
+have no lateral component), which holds for most retargeted rigs.  They
+diverge on rigs with asymmetric offsets: the local-space result is still a
+valid pose, but not the exact reflection of the input, with the error
+accumulating down the chain from the first asymmetric bone.  Neither
+pybvh nor pybvh-ml implements the world-space variant.</p>
+<p><strong>The position streams take the other route</strong>, because they have no
+choice: a position is a world coordinate, so reflecting it <em>is</em> the
+world-space mirror — negate the lateral component, swap the paired
+vertices.  Each stream therefore stays individually correct while the
+pair stops being exact FK partners on an asymmetric rig.  Recompute
+the positions from the mirrored rotations (or run
+:func:<code>add_joint_rotation_noise</code>, which re-derives them) if you need
+them to agree.</p>
+<p><code>lateral_axis</code> must also be given explicitly here, whereas
+:meth:<code>pybvh.Bvh.mirror</code> auto-detects it by averaging left-minus-right
+rest-pose offsets — again, an array-level function has no rest pose to
+measure.  The default <code>lateral_axis='+x'</code> on
+:meth:<code>~pybvh_ml.AugmentationPipeline.standard</code> is a convention, not a
+measurement: it is correct for the usual Y-up / Z-forward rig and wrong
+for a rig whose lateral axis is Z.  When in doubt, mirror one clip on the
+:class:<code>~pybvh.Bvh</code> (which measures the axis) and compare against the
+array path before trusting the assumed axis across a dataset.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.add_joint_rotation_noise" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">add_joint_rotation_noise</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">sigma</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">representation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">degrees</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">euler_orders</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">fk_topology</span><span class="p">:</span> <span class="nb">object</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">world_up</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.add_joint_rotation_noise" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Add Gaussian rotation noise to every joint.</p>
+<p>For each joint at each frame, generates a small random rotation
+(axis uniformly random on the unit sphere, angle sampled from
+<code>N(0, sigma)</code>) and composes it with the original rotation:
+<code>q_noisy = q_noise * q_original</code>.</p>
+<p>When the sample also carries positions, they are <strong>re-derived by
+forward kinematics</strong> from the noised rotations rather than
+transformed — the one step that handles a stream by re-derivation
+(see :func:<code>handles_streams</code>).  That is what keeps the two streams
+FK partners, and it is only possible in this direction: rotation →
+position is FK, position → rotation would be IK.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Must carry <code>joint_rot</code>.  <code>root_pos</code> passes through
+unchanged — jittering the root trajectory is
+:func:<code>add_root_position_noise</code>, a separate function because its
+sigma is a length rather than an angle.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sigma</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Standard deviation of the rotation noise, in radians (or degrees
+when <code>degrees=True</code>).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>representation</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One of <code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>,
+<code>"rotmat"</code>, <code>"euler"</code>.  Required here, since this step
+cannot run on a sample without rotations at all.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>degrees</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Interpret <code>sigma</code> in degrees.  Default False (radians).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>rng</code>
+            </td>
+            <td>
+                  <code>numpy Generator</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>sigma=0</code> is a no-op in value but <strong>still draws</strong> from the
+generator, so a seeded pipeline's draw sequence does not depend
+on the sigma it was configured with.  (:func:<code>pybvh.transforms.add_rotation_noise</code>
+short-circuits instead; ours cannot without changing the stream
+of every already-seeded pipeline.)</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>euler_orders</code>
+            </td>
+            <td>
+                  <code>list of str</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Required when <code>representation="euler"</code>, ignored otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>fk_topology</code>
+            </td>
+            <td>
+                  <code><span title="pybvh.FkTopology">FkTopology</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The skeleton as plain arrays, for the position refresh.
+<strong>Required when the sample carries a position stream</strong> and
+ignored otherwise.  Rebuild it once per dataset from
+<code>skeleton_info["fk_topology"]</code> with
+:func:<code>~pybvh_ml.build_fk_topology</code>;
+:meth:<code>~pybvh_ml.AugmentationPipeline.standard</code> wires it for you.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>world_up</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Signed world-up axis (<code>bvh.world_up</code>, persisted as
+<code>skeleton_info["world_up"]</code>).  Read only under
+<code>position_centering="first"</code>, which needs to know which
+coordinate ground-plane centering leaves alone.  pybvh 0.8.2
+removed the <code>'+y'</code> default precisely because it silently
+mis-centered non-y-up skeletons, and an <code>FkTopology</code> carries no
+gravity direction, so there is nothing to fall back to.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p><strong>Cost of the refresh.</strong> Roughly 0.9 ms per sample at <code>F=64</code> on a
+31-joint rig (0.64 ms FK plus 0.25 ms 6d→euler), ~1.7 ms at
+<code>F=128</code> — about a tripling of per-sample augmentation cost when it
+fires.  Dataloader workers absorb it, but it is not free, so it runs
+only when a position stream is actually present.</p>
+<p>The noise model is <strong>isotropic in rotation space</strong>: one random axis
+per joint per frame, with the magnitude drawn from <code>N(0, sigma)</code>.
+The alternative — and what :func:<code>pybvh.transforms.add_rotation_noise</code>
+does — is independent Gaussian noise on each Euler channel, which is
+cheaper but anisotropic (its effective magnitude depends on the
+channel order and on how near the pose is to gimbal lock), and is not
+even well defined for a <code>6d</code> or <code>quat</code> array.  This function is
+representation-agnostic, so it takes the isotropic route.  The two
+agree in distribution only in the small-angle limit for a joint whose
+rotation is near identity.</p>
+</details>
+
+<details class="see-also" open>
+  <summary>See Also</summary>
+  <p>add_root_position_noise : The root-translation counterpart.
+add_joint_position_noise : Keypoint jitter, for a sample with no
+    rotations to noise.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.add_root_position_noise" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">add_root_position_noise</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">sigma</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.add_root_position_noise" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Add Gaussian noise to the root translation.</p>
+<p>Split from :func:<code>add_joint_rotation_noise</code> because the two sigmas
+are in different units — radians there, the data's length unit here —
+so a single <code>degrees=</code> flag could only ever have applied to one of
+them.  pybvh made the same split for the same reason in 0.8.1
+(<code>add_noise</code> → <code>add_rotation_noise</code> + <code>add_position_noise</code>).</p>
+<p>To reproduce a combined call, chain them with the <strong>same</strong> generator,
+rotation first::</p>
+<div class="highlight"><pre><span></span><code>arrays = add_joint_rotation_noise(arrays, sigma=s, rng=rng,
+                                  representation=&quot;6d&quot;)
+arrays = add_root_position_noise(arrays, sigma=p, rng=rng)
+</code></pre></div>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>joint_rot</code> passes through untouched, and may be <code>None</code>.
+Position streams move with the root or not, depending on
+<code>position_centering</code> — see the Notes.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sigma</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Standard deviation of the noise added to <code>root_pos</code>, in the
+data's positional units.  There is no <code>degrees=</code> here because
+this is a length, not an angle.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>rng</code>
+            </td>
+            <td>
+                  <code>numpy Generator</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>sigma=0</code> is a no-op and draws nothing, matching
+:func:<code>pybvh.transforms.add_position_noise</code> and preserving what
+the fused <code>add_joint_noise(sigma_pos=0)</code> did.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If the sample carries positions and <code>position_centering</code> is
+<code>None</code>.  This is one of the three surfaces whose correctness
+depends on the frame, and guessing is worse than refusing.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p><strong>The step is centering-aware, which makes it exactly correct in
+every mode</strong> rather than merely allowed:</p>
+<ul>
+<li><code>"world"</code> / <code>"first"</code> — a translation of the root translates
+  every joint by the same amount, so the identical per-frame offset
+  is added to every position vertex.  One broadcast, exact.</li>
+<li><code>"skeleton"</code> — positions are root-relative and genuinely do not
+  move.  Exact by construction.</li>
+</ul>
+<p>Declining position streams outright would have been the conservative
+alternative, and it was rejected because it makes root noise
+unusable on skeleton-centered data, where it is trivially correct.
+The failure it prevents is quiet: under <code>"world"</code> centering,
+jittering <code>root_pos</code> while leaving the positions alone leaves the
+two streams mutually inconsistent — and under the canonical ST-GCN
+pack <code>streams=("joint_pos",)</code>, where <code>root_pos</code> is not packed at
+all, it degrades further into an augmentation the model never sees.</p>
+</details>
+
+<details class="see-also" open>
+  <summary>See Also</summary>
+  <p>add_joint_rotation_noise : The joint-rotation counterpart.
+add_joint_position_noise : Per-vertex keypoint jitter, which is a
+    different augmentation — independent noise per joint rather than
+    one offset shared by the whole body.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.add_joint_position_noise" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">add_joint_position_noise</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">sigma</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.add_joint_position_noise" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Add independent Gaussian jitter to every joint position.</p>
+<p>The keypoint jitter of the skeleton-action-recognition world: each
+vertex at each frame moves by its own draw, which is what models a
+pose estimator's per-joint error.  Distinct from
+:func:<code>add_root_position_noise</code>, where one offset per frame moves the
+whole body rigidly.</p>
+<p>Declines <code>joint_rot</code>-carrying samples, and the refusal is the
+governing asymmetry of this whole surface: positions are derived
+from rotations, so rotation → position is computable (forward
+kinematics) while position → rotation is not (inverse kinematics).
+A jittered position stream cannot be pushed back into the rotations
+beside it, so a sample carrying both is refused rather than left
+incoherent — jitter the rotations with
+:func:<code>add_joint_rotation_noise</code> instead, which re-derives the
+positions.</p>
+<p>That refusal also closes the one composition that would be
+destructive: keypoint jitter can never be silently wiped by a later
+FK refresh, because the two steps can never share a pipeline.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Must carry <code>joint_pos</code> and must not carry <code>joint_rot</code> or
+<code>node_pos</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sigma</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Standard deviation of the per-vertex noise, in the data's
+positional units.  <code>0</code> is a no-op and draws nothing, matching
+:func:<code>add_root_position_noise</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>rng</code>
+            </td>
+            <td>
+                  <code>numpy Generator</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p><code>position_centering</code> is not read: independent per-vertex noise is
+correct in every frame, since the frames differ by a shift that
+commutes with adding noise.</p>
+</details>
+
+<details class="see-also" open>
+  <summary>See Also</summary>
+  <p>add_node_position_noise : The node-space counterpart.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.add_node_position_noise" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">add_node_position_noise</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">sigma</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.add_node_position_noise" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Add independent Gaussian jitter to every node position.</p>
+<p>The node-space counterpart of :func:<code>add_joint_position_noise</code> —
+same math, applied to the stream that includes end sites
+(fingertips, toe tips, head top).  See that function for why the two
+are separate names rather than one <code>streams=</code> kwarg, and for why
+both decline <code>joint_rot</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Must carry <code>node_pos</code> and must not carry <code>joint_rot</code> or
+<code>joint_pos</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sigma</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Standard deviation of the per-vertex noise, in the data's
+positional units.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>rng</code>
+            </td>
+            <td>
+                  <code>numpy Generator</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="see-also" open>
+  <summary>See Also</summary>
+  <p>add_joint_position_noise : The joint-space counterpart.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.speed_perturbation_arrays" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">speed_perturbation_arrays</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">representation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">euler_orders</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.speed_perturbation_arrays" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Speed perturbation via time resampling.</p>
+<p>Uses SLERP for rotation interpolation (via quaternion space) and
+linear interpolation for root position and every position vertex.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Any combination of streams; every present one is resampled onto
+the same time stencil, so they cannot come out of step.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>factor</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Speed factor.  <code>&gt; 1</code> = faster (fewer frames),
+<code>&lt; 1</code> = slower (more frames).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>representation</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One of <code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>,
+<code>"rotmat"</code>, <code>"euler"</code>.  Required when <code>arrays</code> carries
+<code>joint_rot</code>; ignored for a positions-only sample.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>euler_orders</code>
+            </td>
+            <td>
+                  <code>list of str</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Required when <code>representation="euler"</code>, ignored otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Arrays of <code>F'</code> frames.
+For <code>F &gt;= 2</code>, <code>F' = max(2, round(F / factor))</code> (Python
+banker's rounding — <code>round(2.5) == 2</code>).  Inputs with fewer
+than 2 frames have nothing to interpolate between and are
+returned as unchanged copies.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p>Rotations are interpolated with <code>pybvh.rotations.quat_slerp</code>
+under its <code>shortest=True</code> default: the interpolant takes the
+short arc between adjacent frames, so a turn is never read as its</p>
+<blockquote>
+<p>180° complement.  The alternative, <code>shortest=False</code>, preserves a
+genuine wind-up or spin that exceeds half a turn; it is not exposed
+here because a per-frame stencil cannot tell one from the other.</p>
+</blockquote>
+<p>A consequence for <code>representation="quat"</code> specifically: output
+quaternions may come back as <code>-q</code> relative to the corresponding
+input, since <code>q</code> and <code>-q</code> are the same rotation and the short
+arc picks whichever hemisphere is nearer.  Every other
+representation is unaffected (the sign is not observable in them).
+Compare rotations, not raw components, when diffing output against
+input — or run the input through <code>pybvh.rotations.quat_unwrap</code>
+first, which makes a sequence hemisphere-continuous.</p>
+<p><strong>Positions are interpolated linearly, rotations slerped</strong> — chord
+versus arc.  The two agree at the knots and drift between them, so
+resampled positions are not the exact forward kinematics of the
+resampled rotations beside them.  This is intrinsic (there is no
+interpolant that is simultaneously the geodesic in rotation space
+and linear in position space), it is what every pipeline in the
+field does, and <code>standardize_length(method="resample_linear")</code>
+documents the same split from the other direction.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="pybvh_ml.augmentation.dropout_arrays" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">dropout_arrays</span><span class="p">(</span><span class="n">arrays</span><span class="p">:</span> <span class="n">MotionArrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">drop_rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">representation</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">rng</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">Generator</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">euler_orders</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MotionArrays</span></code>
+
+<a href="#pybvh_ml.augmentation.dropout_arrays" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Frame dropout with SLERP interpolation.</p>
+<p>Randomly drops frames and fills the gaps with SLERP-interpolated
+rotations (via quaternion space) and linearly interpolated root and
+vertex positions.  First and last frames are always kept.  Shape is
+unchanged — you get the same <code>F</code> frames, some replaced by
+interpolated values.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>arrays</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Any combination of streams; one keep-mask governs all of them.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>drop_rate</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Fraction of frames to drop, in <code>[0, 1)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>representation</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>One of <code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>,
+<code>"rotmat"</code>, <code>"euler"</code>.  Required when <code>arrays</code> carries
+<code>joint_rot</code>; ignored for a positions-only sample.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>rng</code>
+            </td>
+            <td>
+                  <code>numpy Generator</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>euler_orders</code>
+            </td>
+            <td>
+                  <code>list of str</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Required when <code>representation="euler"</code>, ignored otherwise.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="MotionArrays(*, root_pos: npt.ArrayLike, joint_rot: npt.ArrayLike | None = None, joint_pos: npt.ArrayLike | None = None, node_pos: npt.ArrayLike | None = None, position_centering: str | None = None) (pybvh_ml.arrays.MotionArrays)" href="../arrays/#pybvh_ml.arrays.MotionArrays">MotionArrays</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Notes</summary>
+  <p>Frames 0 and <code>F-1</code> are always kept, so every dropped frame has
+real neighbours on both sides to interpolate between.  Kept frames
+pass through bit-identically; only the dropped ones are rebuilt.</p>
+<p>Dropped frames are rebuilt with <code>pybvh.rotations.quat_slerp</code>
+under its <code>shortest=True</code> default, so for
+<code>representation="quat"</code> a rebuilt frame may come back as <code>-q</code>
+relative to the original — the same rotation in the nearer
+hemisphere.  See :func:<code>speed_perturbation_arrays</code> for the full
+note; <code>pybvh.rotations.quat_unwrap</code> makes a sequence
+hemisphere-continuous if you need to compare components directly.</p>
+<p>Rebuilt position frames are interpolated <strong>linearly</strong> between the
+kept neighbours while rotations are slerped — see
+:func:<code>speed_perturbation_arrays</code> for that divergence.</p>
+</details>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../packing/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Packing (tensor layouts)">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Packing (tensor layouts)
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../pipeline/" class="md-footer__link md-footer__link--next" aria-label="Next: Augmentation Pipeline">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Augmentation Pipeline
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

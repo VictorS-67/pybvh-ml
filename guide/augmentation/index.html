@@ -1,0 +1,1943 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="ML bridge layer for pybvh — tensor packing, augmentation, preprocessing, and PyTorch datasets for motion capture data">
+      
+      
+      
+        <link rel="canonical" href="https://victors-67.github.io/pybvh-ml/guide/augmentation/">
+      
+      
+        <link rel="prev" href="../preprocessing/">
+      
+      
+        <link rel="next" href="../pytorch/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Runtime Augmentation - pybvh-ml</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#runtime-augmentation" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="pybvh-ml" class="md-header__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            pybvh-ml
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Runtime Augmentation
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="teal"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../gallery/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Gallery
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../tensor-layouts/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../api/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../tutorials/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Tutorials
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="pybvh-ml" class="md-nav__button md-logo" aria-label="pybvh-ml" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    pybvh-ml
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/VictorS-67/pybvh-ml" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    VictorS-67/pybvh-ml
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gallery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gallery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tensor-layouts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Layouts & Packing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing Pipelines
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Augmentation
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#motionarrays-the-thing-every-function-takes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MotionArrays, the thing every function takes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#position-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Position streams
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streams-a-step-handles-every-one-or-refuses-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streams: a step handles every one, or refuses it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-eight-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The eight functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The eight functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#positions-and-rotations-together-the-fk-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Positions and rotations together: the FK refresh
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composing-a-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composing a pipeline
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Composing a pipeline">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-pipeline-avoids-conversion-churn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the pipeline avoids conversion churn
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seeing-what-a-call-actually-drew" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Seeing what a call actually drew
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproducibility
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#converting-between-representations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converting between representations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-humanml3d-style-frame-vector-and-what-060-does-not-ship" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A HumanML3D-style frame vector, and what 0.6.0 does not ship
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pytorch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skeleton-metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Graph Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/arrays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Motion Arrays (the container)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/packing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Packing (tensor layouts)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/augmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Augmentation Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing & Normalization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/sequences/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sequences (windows & sampling)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/skeleton/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skeleton Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/convert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Representation Conversion
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/metadata/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Feature Metadata
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/torch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch (datasets & collate)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tutorials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorials
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#motionarrays-the-thing-every-function-takes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MotionArrays, the thing every function takes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#position-streams" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Position streams
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#streams-a-step-handles-every-one-or-refuses-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streams: a step handles every one, or refuses it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-eight-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The eight functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The eight functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#positions-and-rotations-together-the-fk-refresh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Positions and rotations together: the FK refresh
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composing-a-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composing a pipeline
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Composing a pipeline">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-the-pipeline-avoids-conversion-churn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How the pipeline avoids conversion churn
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seeing-what-a-call-actually-drew" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Seeing what a call actually drew
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reproducibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reproducibility
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#converting-between-representations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Converting between representations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-humanml3d-style-frame-vector-and-what-060-does-not-ship" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        A HumanML3D-style frame vector, and what 0.6.0 does not ship
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#see-also" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        See also
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="runtime-augmentation">Runtime Augmentation<a class="headerlink" href="#runtime-augmentation" title="Permanent link">&para;</a></h1>
+<p>The "every epoch" step: fast, array-level augmentation designed for on-the-fly use inside data loaders. All functions operate directly on pre-extracted NumPy arrays — no <code>Bvh</code> object reconstruction — and every rotation representation (<code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>, <code>"rotmat"</code>, <code>"euler"</code>) is handled by the same unified functions.</p>
+<p>Three conventions, everywhere:</p>
+<ul>
+<li><strong>Keyword-only arguments</strong> — call sites stay readable inside pipeline configs.</li>
+<li><strong>Angles are in radians</strong>, matching pybvh 0.8's radians-first API. Coming from degrees? <code>np.radians(90)</code>.</li>
+<li><strong>Invalid inputs raise <code>ValueError</code></strong> — mismatched <code>root_pos</code> / <code>joint_rot</code> frame counts (checked once, when the <code>MotionArrays</code> is built), negative sigmas, out-of-range drop rates, empty joint arrays, zero-norm quaternions. No silent no-ops.</li>
+</ul>
+<h2 id="motionarrays-the-thing-every-function-takes"><code>MotionArrays</code>, the thing every function takes<a class="headerlink" href="#motionarrays-the-thing-every-function-takes" title="Permanent link">&para;</a></h2>
+<p>One clip's motion travels through the library as a single
+<a href="../../api/arrays/"><code>MotionArrays</code></a>: <code>root_pos</code>, plus any of <code>joint_rot</code>,
+<code>joint_pos</code> and <code>node_pos</code>.  Every augmentation takes one and returns a
+new one, so a pipeline is a chain of <code>MotionArrays -&gt; MotionArrays</code> and
+the position streams 0.6.0 added cost no call-site changes.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">MotionArrays</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="o">.</span><span class="n">from_bvh</span><span class="p">(</span><span class="n">bvh</span><span class="p">,</span> <span class="s2">&quot;quat&quot;</span><span class="p">)</span>     <span class="c1"># or build it yourself:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="p">(</span><span class="n">root_pos</span><span class="o">=</span><span class="n">root_pos</span><span class="p">,</span> <span class="n">joint_rot</span><span class="o">=</span><span class="n">quats</span><span class="p">)</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Rotations and positions together, or positions alone:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="o">.</span><span class="n">from_bvh</span><span class="p">(</span><span class="n">bvh</span><span class="p">,</span> <span class="s2">&quot;quat&quot;</span><span class="p">,</span> <span class="n">include_positions</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">keypoints</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="o">.</span><span class="n">from_bvh</span><span class="p">(</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">bvh</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">include_positions</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="n">position_centering</span><span class="o">=</span><span class="s2">&quot;skeleton&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>It is frozen: derive a new one with <code>arrays.replace(joint_rot=...)</code> rather than assigning to a field. That is what lets every function in the package rely on the frame counts having been checked once. The fields are read-only <em>views</em> of the arrays you passed in — writing through them raises, so a container built over a Dataset's cached clips cannot rewrite the cache, but it does not copy either, so mutating your own array still changes what the container reads. Take <code>np.array(arrays.joint_rot)</code> when you need a writable working array.</p>
+<p>dtype is preserved rather than promoted: <code>float32</code> in, <code>float32</code> out, so holding a cached clip in a container doesn't double its memory. Non-floating input (an integer array) is promoted to <code>float64</code>. Each stream follows its own input, so <code>float32</code> positions next to <code>float64</code> rotations is legal.</p>
+<p><strong>Augmentation preserves the dtype without computing in it.</strong> Every function and the pipeline run the math in <code>float64</code> — pybvh's dtype, and the only one its conversions are exact in — then return each stream as it arrived. Widening is lossless, so the <code>float32</code> result is exactly the <code>float64</code> result narrowed. Two things depend on doing it this way rather than simply letting the input dtype flow through: a probabilistic pipeline's output dtype must not depend on which steps happened to fire for that sample, and <code>cache_quats=True</code> / <code>False</code> have to stay bit-identical (the staged <code>6d</code> fast path writes into a copy of its input, so a <code>float32</code> clip would otherwise have that step computed in single precision on one path and double on the other).</p>
+<p>Where preservation stops: the packers and <code>standardize_length(method="resample_linear")</code> produce <code>float64</code> regardless, so the array a model receives is <code>float64</code> either way — the PyTorch datasets then emit <code>torch.float32</code>. This is about what a clip costs to hold and pass through augmentation, not an end-to-end single-precision path.</p>
+<h2 id="position-streams">Position streams<a class="headerlink" href="#position-streams" title="Permanent link">&para;</a></h2>
+<p><code>joint_pos</code> is <code>(F, J, 3)</code>, index-aligned with <code>joint_rot</code>; <code>node_pos</code> is <code>(F, N, 3)</code> and includes end sites — fingertips, toe tips, the head top — so it pairs with the node-space edge list. <strong>Pick one</strong>: <code>node_pos</code> already contains <code>joint_pos</code> (<code>node_pos[:, joint_idx &gt;= 0]</code> is exactly it), and only <code>joint_pos</code> can share a vertex axis with <code>joint_rot</code>.</p>
+<p>Positions carry a <strong>frame convention</strong>, <code>position_centering</code>, and it travels with the arrays rather than only with the dataset because at least one step's correctness depends on it:</p>
+<table>
+<thead>
+<tr>
+<th>value</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>"world"</code></td>
+<td>same frame as <code>root_pos</code> — a joint position already contains the root trajectory</td>
+</tr>
+<tr>
+<td><code>"skeleton"</code></td>
+<td>root at the origin every frame; the trajectory is carried by <code>root_pos</code> alone. What most NTU-style pipelines feed a model</td>
+</tr>
+<tr>
+<td><code>"first"</code></td>
+<td>pybvh's ground-plane centering — the first frame's root subtracted in the two axes perpendicular to world up</td>
+</tr>
+<tr>
+<td><code>None</code></td>
+<td>unknown</td>
+</tr>
+</tbody>
+</table>
+<p>The three coincide only for a clip whose root never moves. <code>None</code> is legal and <strong>fails at use, not at construction</strong>: most of the surface — mirror, speed perturbation, dropout, keypoint jitter, <code>rotate_vertical</code>, <code>pack_to_*(center_root=False)</code> — is a rigid or temporal operation applied identically to both streams and does not care. The three that do care — <code>add_root_position_noise</code>, the FK refresh inside <code>add_joint_rotation_noise</code>, and <code>pack_to_*(center_root=True)</code> — raise naming the field. A guessed <code>"world"</code> from someone who does not actually know is worse than an honest <code>None</code>; anything <em>this library</em> writes records it.</p>
+<p>Why it has to be on the container and not just in dataset metadata: under <code>"world"</code> centering, jittering <code>root_pos</code> while leaving the positions alone leaves the two streams mutually inconsistent — and under the canonical ST-GCN pack <code>streams=("joint_pos",)</code>, where <code>root_pos</code> is not packed at all, it degrades into an augmentation the model never sees and nothing raises.</p>
+<h2 id="streams-a-step-handles-every-one-or-refuses-it">Streams: a step handles every one, or refuses it<a class="headerlink" href="#streams-a-step-handles-every-one-or-refuses-it" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p><strong>A step must handle every stream the sample carries, or refuse it.</strong> A pipeline never carries a stream a step left behind.</p>
+</blockquote>
+<p>Every function declares what it handles, and the declaration is checked <strong>once at <code>AugmentationPipeline.__call__</code> entry, before any step runs</strong> — a <code>p=0.1</code> step with the wrong stream support would otherwise raise on one sample in ten.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">stream_support</span><span class="p">,</span> <span class="n">handles_streams</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">stream_support</span><span class="p">(</span><span class="n">mirror</span><span class="p">)</span>                    <span class="c1"># every stream</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">stream_support</span><span class="p">(</span><span class="n">add_joint_position_noise</span><span class="p">)</span>  <span class="c1"># {&quot;root_pos&quot;, &quot;joint_pos&quot;}</span>
+</code></pre></div>
+<p>All four geometric steps and both noise functions handle everything. Only the two keypoint-jitter functions decline anything, and they decline <code>joint_rot</code> for the governing reason: <strong>positions are derived from rotations</strong>, so rotation → position is computable (forward kinematics) while position → rotation is not (inverse kinematics). A jittered position stream cannot be pushed back into the rotations beside it.</p>
+<p><strong>"Handles" means the stream is left correct</strong>, by one of two routes — <em>transformed</em> from its own input (all four geometric steps), or <em>re-derived</em> from another stream (<code>add_joint_rotation_noise</code>, which replaces the positions with FK of the noised rotations). It does <strong>not</strong> mean positions stay the exact FK of the rotations beside them, except immediately after a re-derivation. Two divergences are intrinsic and every pipeline in the field has them:</p>
+<ul>
+<li><strong>Mirror.</strong> Positions reflect exactly in world space; rotations reflect in parent-local space. They agree on a laterally symmetric rest pose and diverge on asymmetric rigs, with the error accumulating down the chain. Each stream stays individually correct; the pair stops being FK partners.</li>
+<li><strong>Speed perturbation and dropout.</strong> Positions are linearly interpolated, rotations slerped — chord versus arc. They agree at the knots and drift between them.</li>
+</ul>
+<p>A custom step that declares nothing is assumed to handle <code>{"root_pos", "joint_rot"}</code> — exactly the capability of every step written against 0.5, so no existing pipeline changes behaviour, and the first positions-carrying sample raises a message naming the decorator:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@handles_streams</span><span class="p">(</span><span class="s2">&quot;root_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_rot&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_pos&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">scale_positions</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">factor</span><span class="p">):</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="k">return</span> <span class="n">arrays</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="n">joint_pos</span><span class="o">=</span><span class="n">arrays</span><span class="o">.</span><span class="n">joint_pos</span> <span class="o">*</span> <span class="n">factor</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="the-eight-functions">The eight functions<a class="headerlink" href="#the-eight-functions" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">MotionArrays</span><span class="p">,</span> <span class="n">rotate_vertical</span><span class="p">,</span> <span class="n">mirror</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">speed_perturbation_arrays</span><span class="p">,</span> <span class="n">dropout_arrays</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">add_joint_rotation_noise</span><span class="p">,</span> <span class="n">add_root_position_noise</span><span class="p">,</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">get_lr_pairs</span><span class="p">,</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">)</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="p">(</span><span class="n">root_pos</span><span class="o">=</span><span class="n">root_pos</span><span class="p">,</span> <span class="n">joint_rot</span><span class="o">=</span><span class="n">quats</span><span class="p">)</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="c1"># Vertical rotation — up_axis is a signed axis string matching bvh.world_up.</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="c1"># The sign flips the rotation direction, so &#39;+y&#39; and &#39;-y&#39; yaw oppositely.</span>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">rotate_vertical</span><span class="p">(</span>
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>    <span class="n">arrays</span><span class="p">,</span> <span class="n">angle</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">up_axis</span><span class="o">=</span><span class="s2">&quot;+y&quot;</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a><span class="c1"># Left-right mirroring — lateral_axis uses the same signed-string form</span>
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a><span class="c1"># but is sign-invariant (&#39;+x&#39; and &#39;-x&#39; are equivalent).</span>
+<a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a><span class="n">lr_pairs</span> <span class="o">=</span> <span class="n">get_lr_pairs</span><span class="p">(</span><span class="n">bvh</span><span class="p">)</span>
+<a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">mirror</span><span class="p">(</span>
+<a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>    <span class="n">arrays</span><span class="p">,</span> <span class="n">lr_joint_pairs</span><span class="o">=</span><span class="n">lr_pairs</span><span class="p">,</span> <span class="n">lateral_axis</span><span class="o">=</span><span class="s2">&quot;+x&quot;</span><span class="p">,</span>
+<a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>    <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-23" name="__codelineno-3-23" href="#__codelineno-3-23"></a>
+<a id="__codelineno-3-24" name="__codelineno-3-24" href="#__codelineno-3-24"></a><span class="c1"># Speed perturbation (SLERP interpolation between frames).</span>
+<a id="__codelineno-3-25" name="__codelineno-3-25" href="#__codelineno-3-25"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">speed_perturbation_arrays</span><span class="p">(</span>
+<a id="__codelineno-3-26" name="__codelineno-3-26" href="#__codelineno-3-26"></a>    <span class="n">arrays</span><span class="p">,</span> <span class="n">factor</span><span class="o">=</span><span class="mf">1.2</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">)</span>
+<a id="__codelineno-3-27" name="__codelineno-3-27" href="#__codelineno-3-27"></a>
+<a id="__codelineno-3-28" name="__codelineno-3-28" href="#__codelineno-3-28"></a><span class="c1"># Frame dropout (drop and re-interpolate random frames).</span>
+<a id="__codelineno-3-29" name="__codelineno-3-29" href="#__codelineno-3-29"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">dropout_arrays</span><span class="p">(</span>
+<a id="__codelineno-3-30" name="__codelineno-3-30" href="#__codelineno-3-30"></a>    <span class="n">arrays</span><span class="p">,</span> <span class="n">drop_rate</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+<a id="__codelineno-3-31" name="__codelineno-3-31" href="#__codelineno-3-31"></a>
+<a id="__codelineno-3-32" name="__codelineno-3-32" href="#__codelineno-3-32"></a><span class="c1"># Joint rotation noise (applied in quaternion space internally).</span>
+<a id="__codelineno-3-33" name="__codelineno-3-33" href="#__codelineno-3-33"></a><span class="c1"># `degrees=True` would let you write sigma=1.0 instead.</span>
+<a id="__codelineno-3-34" name="__codelineno-3-34" href="#__codelineno-3-34"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">add_joint_rotation_noise</span><span class="p">(</span>
+<a id="__codelineno-3-35" name="__codelineno-3-35" href="#__codelineno-3-35"></a>    <span class="n">arrays</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+<a id="__codelineno-3-36" name="__codelineno-3-36" href="#__codelineno-3-36"></a>
+<a id="__codelineno-3-37" name="__codelineno-3-37" href="#__codelineno-3-37"></a><span class="c1"># Root translation noise — a separate function because its sigma is a</span>
+<a id="__codelineno-3-38" name="__codelineno-3-38" href="#__codelineno-3-38"></a><span class="c1"># length, not an angle, so no single `degrees=` flag could serve both.</span>
+<a id="__codelineno-3-39" name="__codelineno-3-39" href="#__codelineno-3-39"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">add_root_position_noise</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+<a id="__codelineno-3-40" name="__codelineno-3-40" href="#__codelineno-3-40"></a>
+<a id="__codelineno-3-41" name="__codelineno-3-41" href="#__codelineno-3-41"></a><span class="n">root_pos</span><span class="p">,</span> <span class="n">quats</span> <span class="o">=</span> <span class="n">arrays</span><span class="o">.</span><span class="n">root_pos</span><span class="p">,</span> <span class="n">arrays</span><span class="o">.</span><span class="n">joint_rot</span>
+</code></pre></div>
+<p>Plus the two keypoint-jitter functions, for samples that carry positions and no rotations:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">add_joint_position_noise</span><span class="p">,</span> <span class="n">add_node_position_noise</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">keypoints</span> <span class="o">=</span> <span class="n">add_joint_position_noise</span><span class="p">(</span><span class="n">keypoints</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mf">0.02</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+</code></pre></div>
+<p>They are two names rather than one <code>streams=</code> kwarg so the index space is visible at the call site — the whole point of pybvh's <code>joint_</code> / <code>node_</code> vocabulary. Note the difference from <code>add_root_position_noise</code>: keypoint jitter moves every vertex by its own draw (a pose estimator's per-joint error), while root noise moves the whole body rigidly by one offset per frame.</p>
+<p>Representation-specific notes:</p>
+<ul>
+<li><strong><code>"euler"</code></strong> additionally requires <code>euler_orders=bvh.euler_orders</code> — per-joint orders are respected, including mixed-order L/R pairs under <code>mirror</code>.</li>
+<li><strong><code>"rotmat"</code></strong> is carried flat as <code>(F, J, 9)</code> — the layout <a href="../../api/convert/"><code>convert_rotations</code></a> documents and produces; the 3×3 reshape happens internally.</li>
+<li><strong><code>"quat"</code> is the fast path</strong>: every function works in quaternion space internally, so non-quat representations pay one conversion in and one out per call. The <a href="#composing-a-pipeline">pipeline</a> eliminates the intermediate round trips.</li>
+<li><strong><code>representation=</code> is optional</strong> as of 0.6.0, and required only when the sample carries <code>joint_rot</code>. A positions-only clip has no rotation array for the token to describe.</li>
+</ul>
+<h3 id="positions-and-rotations-together-the-fk-refresh">Positions and rotations together: the FK refresh<a class="headerlink" href="#positions-and-rotations-together-the-fk-refresh" title="Permanent link">&para;</a></h3>
+<p><code>add_joint_rotation_noise</code> is the one step that handles a stream by <em>re-deriving</em> it. When the sample carries positions it recomputes them from the noised rotations, so the two streams come out of it as genuine FK partners:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_fk_topology</span><span class="p">,</span> <span class="n">get_skeleton_info</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">info</span> <span class="o">=</span> <span class="n">get_skeleton_info</span><span class="p">(</span><span class="n">bvh</span><span class="p">)</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">topology</span> <span class="o">=</span> <span class="n">build_fk_topology</span><span class="p">(</span><span class="n">info</span><span class="p">)</span>          <span class="c1"># once per dataset</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">add_joint_rotation_noise</span><span class="p">(</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="n">arrays</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="mf">1.0</span><span class="p">),</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="n">fk_topology</span><span class="o">=</span><span class="n">topology</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+</code></pre></div>
+<ul>
+<li><strong><code>fk_topology=</code> is required</strong> when the sample carries positions, and ignored otherwise. <code>AugmentationPipeline.standard</code> wires it from <code>skeleton_info</code> for you.</li>
+<li><strong><code>world_up=</code> is required under <code>position_centering="first"</code></strong> — ground-plane centering has to know which coordinate it leaves alone, and an <code>FkTopology</code> carries no gravity direction. Pass <code>skeleton_info["world_up"]</code>.</li>
+<li><strong>It costs about 0.9 ms per sample at <code>F=64</code></strong> on a 31-joint rig (0.64 ms FK plus 0.25 ms 6d→euler), roughly tripling per-sample augmentation cost when it fires. Dataloader workers absorb it, and it only fires when a rotation-space step actually meets a position stream.</li>
+</ul>
+<p>The consequence worth knowing is an ordering one: <strong>a re-derivation discards whatever history the position stream carried.</strong> On a rig with asymmetric rest offsets, <code>[mirror, add_joint_rotation_noise]</code> ends with FK of locally-mirrored rotations — throwing away the world-exact reflection the positions held — while <code>[add_joint_rotation_noise, mirror]</code> keeps it. Both are defensible and neither is a bug, but they do not produce the same positions.</p>
+<p>The one composition that <em>would</em> be destructive is impossible by construction: keypoint jitter can never be silently wiped by a later FK refresh, because <code>add_joint_position_noise</code> declines rotation-carrying samples and <code>add_joint_rotation_noise</code> requires them, so the two can never share a pipeline.</p>
+<h2 id="composing-a-pipeline">Composing a pipeline<a class="headerlink" href="#composing-a-pipeline" title="Permanent link">&para;</a></h2>
+<p><code>AugmentationPipeline</code> chains steps with per-step probabilities. Kwargs can be callables taking <code>rng</code>, drawn fresh per sample:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">AugmentationPipeline</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml.augmentation</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="n">rotate_vertical</span><span class="p">,</span> <span class="n">mirror</span><span class="p">,</span> <span class="n">add_joint_rotation_noise</span><span class="p">)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="n">pipeline</span> <span class="o">=</span> <span class="n">AugmentationPipeline</span><span class="p">([</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="p">(</span><span class="n">rotate_vertical</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="p">{</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>        <span class="s2">&quot;angle&quot;</span><span class="p">:</span> <span class="k">lambda</span> <span class="n">rng</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">),</span>  <span class="c1"># random each sample</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>        <span class="s2">&quot;up_axis&quot;</span><span class="p">:</span> <span class="s2">&quot;+y&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>    <span class="p">}),</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>    <span class="p">(</span><span class="n">mirror</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="p">{</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>        <span class="s2">&quot;lr_joint_pairs&quot;</span><span class="p">:</span> <span class="n">lr_pairs</span><span class="p">,</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>        <span class="s2">&quot;lateral_axis&quot;</span><span class="p">:</span> <span class="s2">&quot;+x&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    <span class="p">}),</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>    <span class="p">(</span><span class="n">add_joint_rotation_noise</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;sigma&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">radians</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)}),</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="p">],</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">)</span>   <span class="c1"># pipeline-level default; a step may still override</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">pipeline</span><span class="p">(</span><span class="n">MotionArrays</span><span class="p">(</span><span class="n">root_pos</span><span class="o">=</span><span class="n">root_pos</span><span class="p">,</span> <span class="n">joint_rot</span><span class="o">=</span><span class="n">quats</span><span class="p">),</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+</code></pre></div>
+<p>A pipeline is homogeneous in practice, so declare <code>representation</code> once at the pipeline level rather than repeating it on every step — repeating it is the copy-paste surface where one step in five ends up disagreeing with the rest. A step that declares its own keeps it, and the default only reaches functions that <em>name</em> the parameter (a <code>**kwargs</code> catch-all doesn't count), so a custom step taking neither is called with exactly its own kwargs. <code>euler_orders</code> takes a pipeline-level default the same way.</p>
+<p>Built-in steps have to agree on the result: each one's output is the next one's input, so two of them declaring different representation tokens with nothing in between to convert raises at construction rather than quietly producing different arrays under <code>cache_quats=True</code> and <code>False</code>. A custom step between them lifts the restriction — it may legitimately be doing the conversion.</p>
+<p>Steps are <code>AugmentationStep</code> named tuples, so introspecting a configured pipeline reads:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">pipeline</span><span class="o">.</span><span class="n">augmentations</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">prob</span>            <span class="c1"># 0.5</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">pipeline</span><span class="o">.</span><span class="n">augmentations</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">kwargs</span><span class="p">[</span><span class="s2">&quot;lateral_axis&quot;</span><span class="p">]</span>   <span class="c1"># &quot;+x&quot;</span>
+</code></pre></div>
+<p>A <code>NamedTuple</code> is a <code>tuple</code>, so positional access (<code>pipeline.augmentations[1][2]</code>) and unpacking still work.</p>
+<p>For the common case, skip the boilerplate: the <code>standard</code> factory wires rotate + mirror + noise + speed from a <code>skeleton_info</code> dict — which a <a href="../preprocessing/#what-the-file-stores">preprocessed dataset</a> already carries:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">AugmentationPipeline</span><span class="p">,</span> <span class="n">get_skeleton_info</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">pipeline</span> <span class="o">=</span> <span class="n">AugmentationPipeline</span><span class="o">.</span><span class="n">standard</span><span class="p">(</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="n">get_skeleton_info</span><span class="p">(</span><span class="n">bvh</span><span class="p">),</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="n">up_axis</span><span class="o">=</span><span class="s2">&quot;+y&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="c1"># rotate_angle_range=(-np.pi, np.pi), mirror_prob=0.5, noise_sigma=np.radians(1.0),</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="c1"># speed_factor_range=(0.8, 1.2)  — defaults shown; pass None to disable a step</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">)</span>
+</code></pre></div>
+<p>For a <strong>positions-only</strong> dataset, pass <code>representation=None</code> and a keypoint sigma:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">pipeline</span> <span class="o">=</span> <span class="n">AugmentationPipeline</span><span class="o">.</span><span class="n">standard</span><span class="p">(</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>    <span class="n">data</span><span class="p">[</span><span class="s2">&quot;skeleton_info&quot;</span><span class="p">],</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="n">representation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>               <span class="c1"># skips the rotation-noise step</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>    <span class="n">position_noise_sigma</span><span class="o">=</span><span class="mf">0.02</span><span class="p">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>    <span class="c1"># position_space=&quot;joint&quot;,          # else read from skeleton_info</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="p">)</span>
+</code></pre></div>
+<p>Two resolutions happen at construction, because the pipeline is built before any sample is seen:</p>
+<ul>
+<li><strong><code>representation=None</code> skips the rotation-noise step.</strong> <code>standard()</code> wires <code>add_joint_rotation_noise</code> by default, and that step is meaningless on a clip with no rotations, so a positions-only pipeline would otherwise refuse every sample. Skipping is the established pattern here — mirror is already silently skipped when no L/R pairs were detected. (A <em>direct</em> <code>add_joint_rotation_noise</code> call on such a sample still raises: a factory declining to configure a meaningless step and a function refusing a meaningless call are different questions.)</li>
+<li><strong>The keypoint-jitter index space is resolved here too.</strong> Joint-space and node-space jitter are different functions with different stream declarations, so <code>position_space=</code> (or <code>skeleton_info["position_space"]</code>, which preprocessing records) decides which one is wired. Wiring one unconditionally would make the pipeline refuse every sample of a dataset stored in the other space.</li>
+</ul>
+<h3 id="how-the-pipeline-avoids-conversion-churn">How the pipeline avoids conversion churn<a class="headerlink" href="#how-the-pipeline-avoids-conversion-churn" title="Permanent link">&para;</a></h3>
+<p>With <code>cache_quats=True</code> (the default), the pipeline converts your <code>joint_rot</code> to quaternions once, runs quaternion-internal steps back to back without leaving quat space, and converts back to your declared representation at the end. This is why the pipeline needs to <em>know</em> the representation: <strong>something must declare it</strong> — <code>AugmentationPipeline(..., representation=...)</code> or at least one step's kwargs (or pass <code>cache_quats=False</code> to run every step exactly as written). It raises otherwise, rather than guessing and corrupting non-quat inputs.</p>
+<p>Two guarantees, identical on both paths:</p>
+<ul>
+<li><strong>Custom steps see your declared representation.</strong> A step function the pipeline doesn't recognize receives <code>arrays.joint_rot</code> in the pipeline's current declared representation — never in whatever internal state a previous built-in step left behind. <code>cache_quats=True</code> and <code>cache_quats=False</code> are bit-identical.</li>
+<li><strong>Outputs never alias inputs.</strong> Even when no step fires, <code>pipeline(...)</code> returns freshly allocated arrays, so nothing it hands back shares storage with a Dataset's cached clips. (The returned container's fields are read-only like any other, so a cache is safe from both directions.) This is the <em>pipeline's</em> guarantee: a single augmentation function may return a stream it never touched by reference — <code>add_root_position_noise</code> passes <code>joint_rot</code> through, and the keypoint-jitter functions pass through the stream they were not pointed at — which read-only fields make safe, since nothing can write through the shared view.</li>
+</ul>
+<h3 id="seeing-what-a-call-actually-drew">Seeing what a call actually drew<a class="headerlink" href="#seeing-what-a-call-actually-drew" title="Permanent link">&para;</a></h3>
+<p>A pipeline with probabilities and callable kwargs makes a different decision for every sample. <code>return_params=True</code> reports those decisions alongside the arrays — it is the only thing that changes the return arity, turning the <code>MotionArrays</code> into an <code>(arrays, steps)</code> pair:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">arrays</span><span class="p">,</span> <span class="n">steps</span> <span class="o">=</span> <span class="n">pipeline</span><span class="p">(</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>    <span class="n">MotionArrays</span><span class="p">(</span><span class="n">root_pos</span><span class="o">=</span><span class="n">root_pos</span><span class="p">,</span> <span class="n">joint_rot</span><span class="o">=</span><span class="n">joint_rot</span><span class="p">),</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>    <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">,</span> <span class="n">return_params</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="p">[(</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">],</span> <span class="n">s</span><span class="p">[</span><span class="s2">&quot;applied&quot;</span><span class="p">],</span> <span class="n">s</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">])</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">steps</span><span class="p">]</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="c1"># [(&#39;rotate_vertical&#39;,           True,  {&#39;angle&#39;: -1.4464727375963786}),</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="c1">#  (&#39;mirror&#39;,                    True,  {}),</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="c1">#  (&#39;add_joint_rotation_noise&#39;,  True,  {}),</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="c1">#  (&#39;speed_perturbation_arrays&#39;, True,  {&#39;factor&#39;: 1.1399704034814648})]</span>
+</code></pre></div>
+<p>One record per configured step, in pipeline order, so <code>steps[i]</code> describes <code>pipeline.augmentations[i]</code>. <code>applied</code> is the probability draw's outcome — <code>mirror</code> at <code>p=0.5</code> reports <code>False</code> on the samples it skipped. <code>params</code> holds what this call <em>sampled</em>: the kwargs whose spec is a callable, resolved to the values the augmentation received. Static kwargs (<code>sigma</code>, <code>up_axis</code>, <code>lr_joint_pairs</code>) are pipeline configuration you already have — read them from <code>pipeline.augmentations</code> — and <code>rng</code> is machinery, so neither clutters the record.</p>
+<p>The records are plain dicts, JSON-native for every built-in step: log them next to your training metrics to answer "which augmentation produced this loss spike", or replay a specific sample's draw. (A custom step whose callable returns something exotic — an array, say — is reported verbatim, so serialize those with care.) Asking for them never changes the random stream — the same <code>rng</code> yields identical arrays with or without the flag — so it is safe to switch on in a debugging run and off again.</p>
+<h2 id="reproducibility">Reproducibility<a class="headerlink" href="#reproducibility" title="Permanent link">&para;</a></h2>
+<p>Every random step takes the pipeline's <code>rng</code>. Pass a seeded <code>np.random.default_rng(seed)</code> and the whole pipeline is deterministic; pass nothing and it draws OS entropy. Inside the PyTorch datasets, the rng is derived from <code>(seed, epoch, idx)</code> so results are bit-identical regardless of worker count or shuffle order — see <a href="../pytorch/#reproducible-per-epoch-augmentation">PyTorch Integration</a>.</p>
+<h2 id="converting-between-representations">Converting between representations<a class="headerlink" href="#converting-between-representations" title="Permanent link">&para;</a></h2>
+<p>Conversion sits at the same level as augmentation and packing, so it takes and returns a <code>MotionArrays</code> too — <code>root_pos</code> is carried through unchanged, since no rotation representation applies to a translation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">convert_arrays</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">MotionArrays</span><span class="o">.</span><span class="n">from_bvh</span><span class="p">(</span><span class="n">bvh</span><span class="p">,</span> <span class="s2">&quot;euler&quot;</span><span class="p">)</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">arrays</span> <span class="o">=</span> <span class="n">convert_arrays</span><span class="p">(</span><span class="n">arrays</span><span class="p">,</span> <span class="s2">&quot;euler&quot;</span><span class="p">,</span> <span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">euler_orders</span><span class="o">=</span><span class="n">bvh</span><span class="o">.</span><span class="n">euler_orders</span><span class="p">)</span>
+</code></pre></div>
+<p>When there is no root stream to carry — a model's rotation output, a cached quaternion array — use the rotation-level form:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">pybvh_ml</span><span class="w"> </span><span class="kn">import</span> <span class="n">convert_rotations</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">rot6d</span> <span class="o">=</span> <span class="n">convert_rotations</span><span class="p">(</span><span class="n">euler_data</span><span class="p">,</span> <span class="n">from_repr</span><span class="o">=</span><span class="s2">&quot;euler&quot;</span><span class="p">,</span> <span class="n">to_repr</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>                          <span class="n">euler_orders</span><span class="o">=</span><span class="n">bvh</span><span class="o">.</span><span class="n">euler_orders</span><span class="p">)</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="n">rotmat</span> <span class="o">=</span> <span class="n">convert_rotations</span><span class="p">(</span><span class="n">quats</span><span class="p">,</span> <span class="n">from_repr</span><span class="o">=</span><span class="s2">&quot;quat&quot;</span><span class="p">,</span> <span class="n">to_repr</span><span class="o">=</span><span class="s2">&quot;rotmat&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Supported by both: <code>"euler"</code>, <code>"quat"</code>, <code>"6d"</code>, <code>"axisangle"</code>, <code>"rotmat"</code> — any pair. Euler angles are radians, per-joint orders respected.</p>
+<h2 id="a-humanml3d-style-frame-vector-and-what-060-does-not-ship">A HumanML3D-style frame vector, and what 0.6.0 does not ship<a class="headerlink" href="#a-humanml3d-style-frame-vector-and-what-060-does-not-ship" title="Permanent link">&para;</a></h2>
+<p>The rotation and position halves now travel together, from one preprocessing run to one flat vector, augmented coherently:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">preprocess_directory</span><span class="p">(</span><span class="s2">&quot;dataset/&quot;</span><span class="p">,</span> <span class="s2">&quot;train.npz&quot;</span><span class="p">,</span> <span class="n">representation</span><span class="o">=</span><span class="s2">&quot;6d&quot;</span><span class="p">,</span> <span class="n">target_fps</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>                     <span class="n">include_positions</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">position_centering</span><span class="o">=</span><span class="s2">&quot;skeleton&quot;</span><span class="p">)</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="n">data</span> <span class="o">=</span> <span class="n">load_preprocessed</span><span class="p">(</span><span class="s2">&quot;train.npz&quot;</span><span class="p">)</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">MotionDataset</span><span class="o">.</span><span class="n">from_preprocessed</span><span class="p">(</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>    <span class="n">data</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="s2">&quot;flat&quot;</span><span class="p">,</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>    <span class="n">streams</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;root_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_rot&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_pos&quot;</span><span class="p">,</span> <span class="s2">&quot;joint_vel&quot;</span><span class="p">),</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="n">augmentation</span><span class="o">=</span><span class="n">AugmentationPipeline</span><span class="o">.</span><span class="n">standard</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s2">&quot;skeleton_info&quot;</span><span class="p">]),</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>    <span class="n">temporal</span><span class="o">=</span><span class="s2">&quot;crop&quot;</span><span class="p">,</span> <span class="n">target_length</span><span class="o">=</span><span class="mi">64</span><span class="p">)</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="c1"># D = 3 + J*6 + J*3 + J*3, with describe_features(J, &quot;6d&quot;, streams=...) naming the blocks</span>
+</code></pre></div>
+<p><code>position_centering="skeleton"</code> is what makes the position block root-relative, HumanML3D's <code>ric_data</code> convention; the trajectory then lives only in the <code>root_pos</code> columns.</p>
+<p>HumanML3D's full 263-dimensional frame vector (4 root + 63 joint positions + 126 rotations as 6D + 66 velocities + 4 foot contacts) is what motivates carrying rotations and positions together, but it is not fully served by this release: <strong>foot contacts and the 4 root channels stay deferred.</strong> <code>preprocess_directory</code> can store foot contacts, but as a static feature that augmentation does not refresh. The root channels differ in kind — HumanML3D stores root <em>velocities</em> (angular about the up axis, linear in the ground plane) plus root height, in a per-frame body-facing frame; <code>root_pos</code> is the raw trajectory, and the gap is a canonicalization rather than a derivative.</p>
+<p><strong>Velocities are served</strong>, by <a href="../tensor-layouts/#velocity-and-acceleration-joint_vel-joint_acc"><code>joint_vel</code> / <code>joint_acc</code></a> — but as <em>derived</em> streams, not carried ones. A velocity array looks like another <code>(F, J, 3)</code> stream and is not one: under <code>speed_perturbation_arrays</code> a carried velocity would have to be <em>rescaled by the factor</em>, not merely resampled, and every geometric step would need its own rule. Differencing at packing time instead — after all augmentation, before temporal standardization — makes the rescale fall out of the arithmetic, and is what lets the library get the padding and resampling cases right that a hand-rolled <code>torch.diff</code> in a <code>collate_fn</code> cannot.</p>
+<h2 id="see-also">See also<a class="headerlink" href="#see-also" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../api/augmentation/">Augmentation API</a> / <a href="../../api/pipeline/">Pipeline API</a> — full signatures</li>
+<li><a href="../../tutorials/">Tutorial 2: Augmentation visualized</a> — every function shown before/after on a real skeleton</li>
+<li><a href="https://victors-67.github.io/pybvh/guide/augmentation/">pybvh's transforms</a> — the <code>Bvh</code>-level equivalents, when you're not in a data loader</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../preprocessing/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Preprocessing Pipelines">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Preprocessing Pipelines
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../pytorch/" class="md-footer__link md-footer__link--next" aria-label="Next: PyTorch Integration">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                PyTorch Integration
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "navigation.footer", "toc.follow", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
